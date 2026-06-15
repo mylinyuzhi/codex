@@ -168,12 +168,16 @@ fn permission_with_allowed_prompts(values: &[&str], selected: usize) -> AppState
 
 #[tokio::test]
 async fn confirm_with_choice_sends_exit_plan_resolution_detail() {
-    // Selecting "yes-accept-edits" should send approved=true with
-    // a typed resolution detail — the engine reads this off
+    // Selecting "yes-accept-edits-clear-context" should send approved=true
+    // with a typed resolution detail — the engine reads this off
     // ToolUseContext to flag history clear.
     let mut s = permission_with_choices(
-        &["yes-accept-edits-keep-context", "yes-accept-edits", "no"],
-        1, // "yes-accept-edits"
+        &[
+            "yes-accept-edits-keep-context",
+            "yes-accept-edits-clear-context",
+            "no",
+        ],
+        1, // "yes-accept-edits-clear-context"
     );
     let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
     confirm(&mut s, &tx).await;
@@ -202,8 +206,14 @@ async fn confirm_with_choice_sends_exit_plan_resolution_detail() {
 
 #[tokio::test]
 async fn confirm_with_allowed_prompts_sends_session_rules() {
-    let mut s =
-        permission_with_allowed_prompts(&["yes-default-keep-context", "yes-accept-edits", "no"], 0);
+    let mut s = permission_with_allowed_prompts(
+        &[
+            "yes-default-keep-context",
+            "yes-accept-edits-clear-context",
+            "no",
+        ],
+        0,
+    );
     let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
     confirm(&mut s, &tx).await;
 
@@ -240,7 +250,11 @@ async fn confirm_with_no_choice_sends_approved_false() {
     // denial (tool doesn't execute). Typed detail still carries the
     // value so logs/audits see what the user picked.
     let mut s = permission_with_choices(
-        &["yes-accept-edits-keep-context", "yes-accept-edits", "no"],
+        &[
+            "yes-accept-edits-keep-context",
+            "yes-accept-edits-clear-context",
+            "no",
+        ],
         2, // "no"
     );
     let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
@@ -295,7 +309,13 @@ async fn approve_with_choice_takes_same_path_as_confirm() {
     // Pressing 'y' (Approve) when choices are present must commit the
     // currently-focused choice, not the implicit yes — otherwise the
     // tool would see updated_input=None and lose the user's pick.
-    let mut s = permission_with_choices(&["yes-accept-edits-keep-context", "yes-accept-edits"], 1);
+    let mut s = permission_with_choices(
+        &[
+            "yes-accept-edits-keep-context",
+            "yes-accept-edits-clear-context",
+        ],
+        1,
+    );
     let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
     approve(&mut s, &tx).await;
 

@@ -440,8 +440,8 @@ pub(crate) fn build_choice_detail(
     tracing::info!(
         target: "coco_tui::permission",
         selected_choice = p.selected_choice,
-        value = %selected.value,
         ?choice,
+        clears_context = choice.clears_context(),
         "ExitPlanMode resolution detail built",
     );
     Some(coco_types::PermissionResolutionDetail::ExitPlanMode {
