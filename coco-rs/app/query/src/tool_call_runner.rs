@@ -235,7 +235,11 @@ impl<'a> ToolCallRunner<'a> {
                         let mut call_ctx =
                             shared_ctx.clone_for_tool_call(prepared.tool_use_id.clone());
                         call_ctx.abort = runtime.abort.clone();
-                        call_ctx.progress_tx = runtime.progress_tx.clone();
+                        // `progress_tx` is inherited from the base ctx via
+                        // `clone_for_tool_call`. Do NOT overwrite it with
+                        // `runtime.progress_tx` (always `None` — the executor
+                        // carries no progress sink), or foreground Bash loses
+                        // real-time `ToolProgress` streaming to the TUI.
                         call_ctx.approval_feedback =
                             ctx_entry.and_then(|c| c.approval_feedback.clone());
                         call_ctx.permission_resolution_detail =
