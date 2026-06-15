@@ -58,6 +58,14 @@ use coco_types::SkillOverrideState;
 /// methods. Fork routing goes through the same
 /// [`AgentQueryEngineRef`] that `SwarmAgentHandle::spawn_subagent`
 /// uses, keeping one subagent execution path.
+/// Late-bound, per-turn-refreshed Bash handle shared with the command
+/// registry. The cell is set on every main-session engine build
+/// (`SessionRuntime::build_engine`) so in-prompt `` !`cmd` `` markers run
+/// through the real permission-checked Bash tool. `None` (tests /
+/// pre-bootstrap) ⇒ shell markers are left untouched.
+type SkillBashHandleCell =
+    Arc<std::sync::RwLock<Option<Arc<dyn coco_skills::shell_exec::BashToolHandle>>>>;
+
 pub struct QuerySkillRuntime {
     manager: Arc<SkillManager>,
     /// Optional agent query engine for fork-mode skills. `None`
@@ -69,6 +77,10 @@ pub struct QuerySkillRuntime {
     /// prompts. Installed at bootstrap via [`Self::with_session_id`]; `None`
     /// leaves the token unexpanded (older behaviour).
     session_id: Option<String>,
+    /// Shared Bash handle cell for in-prompt shell expansion. `None`
+    /// leaves `` !`cmd` `` markers untouched (matches the prior no-shell
+    /// behaviour of the inline path).
+    bash_handle: Option<SkillBashHandleCell>,
 }
 
 impl QuerySkillRuntime {
@@ -77,7 +89,26 @@ impl QuerySkillRuntime {
             manager,
             agent_engine: None,
             session_id: None,
+            bash_handle: None,
         }
+    }
+
+    /// Install the shared Bash handle cell used to expand in-prompt
+    /// `` !`cmd` `` / ```` ```! ```` markers (permission-checked). Shared with
+    /// the command registry so the model-invoked path and the user-typed
+    /// slash path run identical, permission-checked shell. Absent ⇒ markers
+    /// are left untouched.
+    pub fn with_bash_handle_cell(mut self, cell: SkillBashHandleCell) -> Self {
+        self.bash_handle = Some(cell);
+        self
+    }
+
+    /// Snapshot the currently-installed Bash handle, if any. Clones the
+    /// `Arc` out under the lock so no guard is held across an await.
+    fn snapshot_bash_handle(&self) -> Option<Arc<dyn coco_skills::shell_exec::BashToolHandle>> {
+        self.bash_handle
+            .as_ref()
+            .and_then(|cell| cell.read().ok().and_then(|guard| guard.clone()))
     }
 
     /// Install the agent-query engine used for fork-mode skills.
@@ -192,6 +223,30 @@ impl SkillHandle for QuerySkillRuntime {
                 user_config: None,
             },
         );
+
+        // In-prompt shell expansion (`` !`cmd` `` / ```` ```! ```` blocks),
+        // permission-checked through the parent's Bash handle. Runs for both
+        // inline and fork before the branch below, mirroring TS
+        // `getPromptForCommand` (both paths render shell identically). An
+        // `Err` (denied / failed) aborts the whole invocation. MCP-sourced
+        // skills never run in-prompt shell — remote untrusted code.
+        let expanded_prompt = if matches!(skill.source, coco_skills::SkillSource::Mcp { .. }) {
+            expanded_prompt
+        } else if let Some(bash) = self.snapshot_bash_handle() {
+            let allowed = skill.allowed_tools.clone().unwrap_or_default();
+            coco_skills::shell_exec::execute_shell_in_prompt_with_tool(
+                &expanded_prompt,
+                &*bash,
+                &allowed,
+            )
+            .await
+            .map_err(|reason| SkillInvocationError::Expansion {
+                name: skill.name.clone(),
+                reason,
+            })?
+        } else {
+            expanded_prompt
+        };
 
         // Skill frontmatter `allowed-tools` becomes Command-source
         // auto-allow rules. Inline path threads these through

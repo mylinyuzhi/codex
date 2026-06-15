@@ -2164,6 +2164,12 @@ enum SlashOutcome {
         content: String,
         metadata: Option<String>,
     },
+    /// A user-typed fork-mode skill (`/<name>` with `context: fork`).
+    /// Unlike `RunEngine` (which re-queries the main model with the
+    /// expanded body), this runs the skill as a subagent via the
+    /// installed `SkillHandle` and injects only its result — mirroring
+    /// TS `executeForkedSlashCommand`. `name` is the canonical skill name.
+    RunForkSkill { name: String, args: String },
     /// No command with this name is registered. Caller should fall
     /// through to the existing path (model receives raw text).
     NotFound,
@@ -2738,6 +2744,10 @@ async fn handle_slash_outcome(
         SlashOutcome::RunEngine { content, metadata } => {
             SlashFollowup::RunEngine { content, metadata }
         }
+        SlashOutcome::RunForkSkill { name, args } => {
+            run_fork_skill(runtime, event_tx, &name, &args, active_turn).await;
+            SlashFollowup::Done
+        }
         SlashOutcome::TriggerCompact {
             custom_instructions,
         } => {
@@ -2847,6 +2857,9 @@ async fn drain_queued_slash_commands(
                 )
                 .await;
                 break;
+            }
+            SlashOutcome::RunForkSkill { name, args } => {
+                run_fork_skill(runtime, event_tx, &name, &args, active_turn).await;
             }
             SlashOutcome::TriggerCompact {
                 custom_instructions,
@@ -3181,6 +3194,20 @@ async fn dispatch_slash_command(
     let Some(cmd) = registry_snapshot.get(name) else {
         return SlashOutcome::NotFound;
     };
+    // Fork-mode skills (`context: fork`) run as a subagent via the
+    // installed `SkillHandle`, not by expanding inline into the main loop.
+    // Mirrors TS `processSlashCommand` (`context === 'fork'` →
+    // `executeForkedSlashCommand`); the handler path below only renders
+    // inline expansions. `cmd.base.name` is canonical so the gate's
+    // user-invoked check matches even when the user typed an alias.
+    if let coco_types::CommandType::Prompt(data) = &cmd.command_type
+        && data.context == coco_types::CommandContext::Fork
+    {
+        return SlashOutcome::RunForkSkill {
+            name: cmd.base.name.clone(),
+            args: args.to_string(),
+        };
+    }
     let Some(handler) = cmd.handler.as_ref() else {
         // Registered shell with no handler. For Prompt-type commands the
         // safe default is to fall through to the model so it sees the
@@ -3771,6 +3798,48 @@ async fn run_manual_compact(
     // in-flight engine.
     drain_active_turn(active_turn, ActiveTurnDrain::Wait).await;
     run_manual_compact_inner(runtime, event_tx, custom_instructions).await;
+}
+
+/// Run a user-typed fork-mode skill (`/<name>` with `context: fork`) as a
+/// subagent and inject its result into the transcript. Mirrors TS
+/// `executeForkedSlashCommand`: the subagent runs synchronously, its final
+/// text lands as a `<local-command-stdout>` user message, and there is NO
+/// follow-up main-model query.
+///
+/// Drains the in-flight turn first (the subagent runs LLM calls / mutates
+/// shared state) — same contract as `run_manual_compact`.
+async fn run_fork_skill(
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+    name: &str,
+    args: &str,
+    active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
+) {
+    drain_active_turn(active_turn, ActiveTurnDrain::Wait).await;
+
+    let body = match runtime.invoke_skill_fork(name, args).await {
+        Ok(output) => format!("<local-command-stdout>\n{output}\n</local-command-stdout>"),
+        Err(e) => {
+            warn!(skill = %name, error = %e, "fork-mode skill failed");
+            format!("<local-command-stderr>\nSkill '/{name}' failed: {e}\n</local-command-stderr>")
+        }
+    };
+    // Persist the command marker + result via history_push_and_emit so the
+    // TUI transcript renders them and the next turn's model sees what ran.
+    let mut h = runtime.history.lock().await;
+    let event_tx_opt = Some(event_tx.clone());
+    coco_query::history_sync::history_push_and_emit(
+        &mut h,
+        create_slash_metadata_message(&format_slash_command_metadata(name, args)),
+        &event_tx_opt,
+    )
+    .await;
+    coco_query::history_sync::history_push_and_emit(
+        &mut h,
+        coco_messages::create_user_message(&body),
+        &event_tx_opt,
+    )
+    .await;
 }
 
 async fn run_manual_compact_inner(

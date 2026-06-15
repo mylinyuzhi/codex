@@ -31,6 +31,7 @@ use coco_coordinator::worktree::AgentWorktreeManager;
 use coco_query::agent_adapter::{QueryEngineAdapter, QueryEngineFactory};
 use coco_tool_runtime::AgentHandleRef;
 use coco_tool_runtime::AgentQueryEngineRef;
+use coco_tool_runtime::SkillHandleRef;
 use coco_types::LlmModelSelection;
 use coco_types::ModelRole;
 use tokio::sync::RwLock;
@@ -49,6 +50,12 @@ const STALE_WORKTREE_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 /// avoids growing the build-options surface for an opt-in feature.
 pub struct AgentTeamWiring {
     pub agent_handle: AgentHandleRef,
+    /// Skill-execution handle backed by the same subagent
+    /// `AgentQueryEngineRef` the swarm handle uses. Installed on the
+    /// runtime (`attach_skill_handle`) so `wire_engine` reaches every
+    /// per-turn engine, and on the coordinator handle (for frontmatter
+    /// `skills:` preload).
+    pub skill_handle: SkillHandleRef,
 }
 
 fn resolve_agent_runtime_source(
@@ -263,6 +270,26 @@ pub async fn build_agent_team_wiring(
     let adapter: AgentQueryEngineRef = Arc::new(QueryEngineAdapter::new(factory));
     handle.set_execution_engine(adapter.clone());
 
+    // ── Skill runtime ──
+    //
+    // Build the real `SkillHandle` over the same subagent engine adapter.
+    // Fork-mode skills route their expanded prompt through `adapter`
+    // (one subagent execution path); inline skills expand in-process.
+    // Without this install the engine carries `NoOpSkillHandle` and every
+    // model `SkillTool` call fails with "no skill runtime installed".
+    let skill_handle: SkillHandleRef = Arc::new(
+        coco_query::skill_runtime::QuerySkillRuntime::new(runtime.skill_manager())
+            .with_agent_engine(adapter.clone())
+            .with_session_id(runtime.current_session_id().await)
+            // Share the per-turn Bash handle so in-prompt `` !`cmd` ``
+            // markers in model-invoked / fork-mode skills run through the
+            // same permission-checked route as slash-command handlers.
+            .with_bash_handle_cell(runtime.skill_bash_cell()),
+    );
+    // Coordinator side: lets `preload_frontmatter_skills` resolve agent
+    // `skills: [..]` frontmatter via `read_skill_body`.
+    handle.set_skill_handle(skill_handle.clone());
+
     // ── Gap C fix — install teammate execution engine ──
     //
     // The same QueryEngineAdapter that drives subagent spawns also
@@ -314,6 +341,7 @@ pub async fn build_agent_team_wiring(
 
     Ok(AgentTeamWiring {
         agent_handle: Arc::new(handle),
+        skill_handle,
     })
 }
 
@@ -474,5 +502,6 @@ async fn sync_agent_memory_snapshots(_runtime: &Arc<SessionRuntime>, cwd: &str) 
 pub async fn install_agent_team(runtime: Arc<SessionRuntime>, cwd: String) -> anyhow::Result<()> {
     let wiring = build_agent_team_wiring(runtime.clone(), cwd).await?;
     runtime.attach_agent_handle(wiring.agent_handle).await;
+    runtime.attach_skill_handle(wiring.skill_handle).await;
     Ok(())
 }

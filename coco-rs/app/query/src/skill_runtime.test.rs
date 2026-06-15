@@ -478,3 +478,177 @@ async fn test_fork_skill_with_allowed_tools_does_not_narrow_registry() {
         config.extra_permission_rules
     );
 }
+
+/// Stub `BashToolHandle` for in-prompt shell-expansion tests: returns a
+/// fixed string per marker, or fails (denied / command error) when `fail`.
+struct StubBash {
+    output: String,
+    fail: bool,
+}
+
+#[async_trait]
+impl coco_skills::shell_exec::BashToolHandle for StubBash {
+    async fn execute_with_permissions(
+        &self,
+        _command: &str,
+        _allowed_tools: &[String],
+    ) -> Result<String, String> {
+        if self.fail {
+            Err("permission denied".into())
+        } else {
+            Ok(self.output.clone())
+        }
+    }
+}
+
+fn bash_cell(handle: StubBash) -> SkillBashHandleCell {
+    Arc::new(std::sync::RwLock::new(Some(Arc::new(handle) as _)))
+}
+
+#[tokio::test]
+async fn test_inline_skill_runs_shell_markers_when_bash_handle_present() {
+    // With a Bash handle installed, the model-invoked inline path expands
+    // `` !`cmd` `` markers (parity with the user-typed slash path / TS
+    // getPromptForCommand). The stub replaces the marker with "HELLO".
+    let skill = sample_skill(
+        "diff",
+        "diff: !`echo hi`",
+        SkillContext::Inline,
+        false,
+        false,
+    );
+    let rt = runtime_with(vec![skill]).with_bash_handle_cell(bash_cell(StubBash {
+        output: "HELLO".into(),
+        fail: false,
+    }));
+    let result = rt
+        .invoke_skill(
+            "diff",
+            "",
+            SubagentInheritance::default(),
+            coco_tool_runtime::SkillGateContext::default(),
+        )
+        .await
+        .expect("ok");
+    let text = match result {
+        SkillInvocationResult::Inline { new_messages, .. } => {
+            serde_json::to_string(&new_messages[0]).unwrap()
+        }
+        other => panic!("expected Inline, got {other:?}"),
+    };
+    assert!(
+        text.contains("HELLO"),
+        "shell marker must expand; got: {text}"
+    );
+    assert!(
+        !text.contains("echo hi"),
+        "raw marker must not survive; got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn test_inline_skill_leaves_markers_when_no_bash_handle() {
+    // Without a Bash handle (tests / pre-bootstrap) the marker is left
+    // untouched — no unguarded shell ever runs.
+    let skill = sample_skill(
+        "diff",
+        "diff: !`echo hi`",
+        SkillContext::Inline,
+        false,
+        false,
+    );
+    let rt = runtime_with(vec![skill]);
+    let result = rt
+        .invoke_skill(
+            "diff",
+            "",
+            SubagentInheritance::default(),
+            coco_tool_runtime::SkillGateContext::default(),
+        )
+        .await
+        .expect("ok");
+    let text = match result {
+        SkillInvocationResult::Inline { new_messages, .. } => {
+            serde_json::to_string(&new_messages[0]).unwrap()
+        }
+        other => panic!("expected Inline, got {other:?}"),
+    };
+    assert!(
+        text.contains("echo hi"),
+        "marker must survive verbatim when no handle; got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn test_mcp_skill_skips_shell_expansion() {
+    // MCP-sourced skills are remote/untrusted — their in-prompt shell must
+    // NEVER run, even with a Bash handle installed.
+    let mut skill = sample_skill(
+        "remote",
+        "x: !`echo hi`",
+        SkillContext::Inline,
+        false,
+        false,
+    );
+    skill.source = SkillSource::Mcp {
+        server_name: "srv".into(),
+    };
+    let rt = runtime_with(vec![skill]).with_bash_handle_cell(bash_cell(StubBash {
+        output: "LEAK".into(),
+        fail: false,
+    }));
+    let result = rt
+        .invoke_skill(
+            "remote",
+            "",
+            SubagentInheritance::default(),
+            coco_tool_runtime::SkillGateContext::default(),
+        )
+        .await
+        .expect("ok");
+    let text = match result {
+        SkillInvocationResult::Inline { new_messages, .. } => {
+            serde_json::to_string(&new_messages[0]).unwrap()
+        }
+        other => panic!("expected Inline, got {other:?}"),
+    };
+    assert!(
+        !text.contains("LEAK"),
+        "MCP skill must not run shell; got: {text}"
+    );
+    assert!(text.contains("echo hi"), "marker must survive; got: {text}");
+}
+
+#[tokio::test]
+async fn test_shell_expansion_failure_aborts_invocation() {
+    // A denied / failed marker aborts the whole invocation with an
+    // Expansion error (mirrors TS MalformedCommandError — no partial
+    // substitution reaches the model).
+    let skill = sample_skill(
+        "diff",
+        "diff: !`rm -rf /`",
+        SkillContext::Inline,
+        false,
+        false,
+    );
+    let rt = runtime_with(vec![skill]).with_bash_handle_cell(bash_cell(StubBash {
+        output: String::new(),
+        fail: true,
+    }));
+    let err = rt
+        .invoke_skill(
+            "diff",
+            "",
+            SubagentInheritance::default(),
+            coco_tool_runtime::SkillGateContext::default(),
+        )
+        .await
+        .unwrap_err();
+    match err {
+        SkillInvocationError::Expansion { name, reason } => {
+            assert_eq!(name, "diff");
+            assert!(reason.contains("permission denied"), "got: {reason}");
+        }
+        other => panic!("expected Expansion, got {other:?}"),
+    }
+}

@@ -51,21 +51,19 @@ impl SessionBashToolHandle {
     }
 }
 
-/// Build a [`SessionBashToolHandle`] from a `ToolUseContext` snapshot and
-/// inject it into the live command registry so every skill / shell-expanding
-/// slash-command handler routes its in-prompt shell through the real Bash
-/// tool. Idempotent — safe to call after each `/reload-plugins` swap (the new
-/// registry starts with an empty handle cell).
+/// Build a [`SessionBashToolHandle`] from a `ToolUseContext` snapshot,
+/// returning it as a shared `BashToolHandle`. The caller installs the same
+/// instance into both the command registry (slash / shell-expanding
+/// prompt commands) and the skill runtime's shared cell (model-invoked +
+/// fork-mode skills) so every in-prompt shell path runs through one
+/// permission-checked Bash route.
 ///
 /// `base_ctx` should be a representative per-tool `ToolUseContext` for this
 /// session (resolved tool config, sandbox state, permission context, cwd
 /// cell). The handle clones it per command and folds the caller's
 /// `allowed_tools` into the permission rules.
-pub(crate) fn inject_into_registry(
-    registry: &coco_commands::CommandRegistry,
-    base_ctx: ToolUseContext,
-) {
-    registry.set_bash_tool_handle(Arc::new(SessionBashToolHandle::new(base_ctx)));
+pub(crate) fn build_session_bash_handle(base_ctx: ToolUseContext) -> Arc<dyn BashToolHandle> {
+    Arc::new(SessionBashToolHandle::new(base_ctx))
 }
 
 #[async_trait]
