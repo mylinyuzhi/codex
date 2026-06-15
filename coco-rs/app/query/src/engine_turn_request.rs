@@ -251,6 +251,13 @@ impl QueryEngine {
                     let mut call_ctx = ctx.clone_for_tool_call(prepared.tool_use_id.clone());
                     call_ctx.abort = runtime.abort.clone();
                     call_ctx.progress_tx = runtime.progress_tx.clone();
+                    // Thread per-call approval metadata into the execute ctx so
+                    // the streaming path matches the batch runner. Without this,
+                    // tools that branch on the user's choice (ExitPlanMode's
+                    // clear-context / mode selection) saw `None` under streaming.
+                    call_ctx.permission_resolution_detail =
+                        prepared.permission_resolution_detail.clone();
+                    call_ctx.approval_feedback = prepared.approval_feedback.clone();
                     let execute_result = tokio::select! {
                         r = prepared.tool.execute(effective_input.as_value().clone(), &call_ctx) => r,
                         () = call_ctx.abort.cancelled() => Err(coco_tool_runtime::ToolError::Cancelled),

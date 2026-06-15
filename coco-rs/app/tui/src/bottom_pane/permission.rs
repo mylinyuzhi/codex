@@ -432,11 +432,18 @@ pub(crate) fn nav_permission(
 pub(crate) fn build_choice_detail(
     p: &crate::state::PermissionPromptState,
 ) -> Option<coco_types::PermissionResolutionDetail> {
-    let choice = p.choices.as_ref()?.get(p.selected_choice)?;
+    let selected = p.choices.as_ref()?.get(p.selected_choice)?;
     if p.tool_name != coco_types::ToolName::ExitPlanMode.as_str() {
         return None;
     }
-    let choice = coco_types::ExitPlanChoice::from_wire(&choice.value)?;
+    let choice = coco_types::ExitPlanChoice::from_wire(&selected.value)?;
+    tracing::info!(
+        target: "coco_tui::permission",
+        selected_choice = p.selected_choice,
+        value = %selected.value,
+        ?choice,
+        "ExitPlanMode resolution detail built",
+    );
     Some(coco_types::PermissionResolutionDetail::ExitPlanMode {
         choice,
         edited_plan: None,

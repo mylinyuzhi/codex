@@ -161,6 +161,11 @@ impl<'a> ToolCallRunner<'a> {
                 parsed_input: pending_call.input,
                 is_concurrency_safe: pending_call.is_concurrency_safe,
                 model_index: idx,
+                // The batch runner threads approval metadata into the execute
+                // ctx from `tool_result_contexts` (see `run_one` below), so the
+                // plan itself need not carry it.
+                permission_resolution_detail: None,
+                approval_feedback: None,
             }));
         }
 
