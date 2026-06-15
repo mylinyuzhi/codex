@@ -101,7 +101,6 @@ pub use skills_dialog::SkillOverrideState;
 pub use skills_dialog::SkillRow;
 pub use skills_dialog::SkillsDialogSource;
 pub use skills_dialog::SkillsDialogState;
-pub use surface_payloads::AutoModeOptInState;
 pub use surface_payloads::BridgeState;
 pub use surface_payloads::BypassPermissionsState;
 pub use surface_payloads::CopyPickerCodeBlock;

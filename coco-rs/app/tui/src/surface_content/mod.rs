@@ -37,7 +37,6 @@ pub(crate) enum TextSurfaceContent<'a> {
     InvalidConfig(&'a crate::state::InvalidConfigState),
     IdleReturn(&'a crate::state::IdleReturnState),
     Trust(&'a crate::state::TrustState),
-    AutoModeOptIn(&'a crate::state::AutoModeOptInState),
     BypassPermissions(&'a crate::state::BypassPermissionsState),
     TaskDetail(&'a crate::state::TaskDetailState),
     Feedback(&'a crate::state::FeedbackState),
@@ -95,7 +94,6 @@ pub(crate) fn modal_text_surface(modal: &ModalState) -> Option<TextSurfaceConten
         ModalState::InvalidConfig(ic) => TextSurfaceContent::InvalidConfig(ic),
         ModalState::IdleReturn(ir) => TextSurfaceContent::IdleReturn(ir),
         ModalState::Trust(tr) => TextSurfaceContent::Trust(tr),
-        ModalState::AutoModeOptIn(a) => TextSurfaceContent::AutoModeOptIn(a),
         ModalState::BypassPermissions(bp) => TextSurfaceContent::BypassPermissions(bp),
         ModalState::TaskDetail(td) => TextSurfaceContent::TaskDetail(td),
         ModalState::Feedback(f) => TextSurfaceContent::Feedback(f),
@@ -160,7 +158,6 @@ pub(crate) fn surface_content(
         TextSurfaceContent::InvalidConfig(ic) => confirm::invalid_config_content(ic, styles),
         TextSurfaceContent::IdleReturn(ir) => confirm::idle_return_content(ir, styles),
         TextSurfaceContent::Trust(tr) => confirm::trust_content(tr, styles),
-        TextSurfaceContent::AutoModeOptIn(a) => confirm::auto_mode_opt_in_content(a, styles),
         TextSurfaceContent::BypassPermissions(bp) => {
             confirm::bypass_permissions_content(bp, styles)
         }
@@ -184,38 +181,5 @@ pub(crate) fn surface_content(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::state::PermissionPromptState;
-
-    #[test]
-    fn prompt_text_surface_skips_exit_plan_mode_permission() {
-        let prompt = PanePromptState::Permission(PermissionPromptState {
-            request_id: "req-1".into(),
-            tool_name: coco_types::ToolName::ExitPlanMode.as_str().into(),
-            description: "Exit plan mode?".into(),
-            detail: PermissionDetail::ExitPlanMode {
-                outcome: coco_types::ExitPlanModeOutcome::ImplementationPlan,
-                plan: Some("- step".into()),
-                plan_file_path: Some("/tmp/plan.md".into()),
-                allowed_prompts: vec![],
-            },
-            risk_level: None,
-            show_always_allow: false,
-            classifier_checking: false,
-            classifier_auto_approved: None,
-            choices: None,
-            selected_choice: 0,
-            display_input: coco_types::PermissionDisplayInput::Empty,
-            original_input: None,
-            cwd: None,
-            permission_suggestions: vec![],
-            worker_badge: None,
-            explanation_visible: false,
-            explanation: crate::state::ExplainerFetch::NotFetched,
-            prefix_input: None,
-        });
-
-        assert!(prompt_text_surface(&prompt).is_none());
-    }
-}
+#[path = "mod.test.rs"]
+mod tests;

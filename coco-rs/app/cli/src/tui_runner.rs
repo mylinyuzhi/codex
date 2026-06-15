@@ -130,6 +130,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     let model_id = resources.model_id.clone();
     let permission_mode = resources.startup.mode;
     let bypass_permissions_available = resources.startup.bypass_available;
+    let auto_mode_available = resources.startup.auto_available;
     let startup_notification = resources.startup.notification.clone();
     let tools = resources.tools;
     let system_prompt = resources.system_prompt;
@@ -545,11 +546,12 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // modal knows whether to show code restore options.
     app.state_mut().session.file_history_enabled = runtime.file_history.is_some();
 
-    // Seed the capability gate that controls both Shift+Tab cycle
+    // Seed the capability gates that control the Shift+Tab cycle
     // (`PermissionMode::next_in_cycle`) and the plan-mode exit
     // modal's "Bypass" option. Matches engine_config below so the
     // engine and TUI share one truth. Static for session lifetime.
     app.state_mut().session.bypass_permissions_available = bypass_permissions_available;
+    app.state_mut().session.auto_mode_available = auto_mode_available;
     app.state_mut().session.permission_mode = permission_mode;
     // Seed the model + provider for the status bar. Production TUI
     // doesn't currently install a `SessionBootstrap`, so the engine's

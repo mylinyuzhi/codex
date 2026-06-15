@@ -7,6 +7,24 @@ use coco_types::ToolName;
 
 use super::*;
 
+// ── compute_auto_mode_capability ──
+
+#[test]
+fn test_compute_auto_mode_capability_default_on() {
+    // No settings opt-out → Auto is available by default.
+    assert!(compute_auto_mode_capability(
+        /*settings_disabled*/ false
+    ));
+}
+
+#[test]
+fn test_compute_auto_mode_capability_settings_disable() {
+    // `auto_mode.disabled = true` hides Auto from the cycle.
+    assert!(!compute_auto_mode_capability(
+        /*settings_disabled*/ true
+    ));
+}
+
 // ── permission_mode_title ──
 
 #[test]

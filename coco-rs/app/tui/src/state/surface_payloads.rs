@@ -537,12 +537,6 @@ pub struct TrustState {
     pub description: String,
 }
 
-/// Auto mode opt-in state.
-#[derive(Debug, Clone)]
-pub struct AutoModeOptInState {
-    pub description: String,
-}
-
 /// Bypass permissions confirmation state.
 #[derive(Debug, Clone)]
 pub struct BypassPermissionsState {

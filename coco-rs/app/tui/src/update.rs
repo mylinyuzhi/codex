@@ -134,10 +134,12 @@ pub async fn handle_command(
         }
         TuiCommand::CyclePermissionMode => {
             // Compute the next mode without committing — the cycle helper
-            // applies eagerly, so we'd lose the chance to intercept
-            // high-stakes targets (BypassPermissions / Auto) and force
-            // a confirmation dialog. Shift+Tab landing on bypass surfaces
+            // applies eagerly, so we'd lose the chance to intercept the
+            // high-stakes BypassPermissions target and surface
             // `BypassPermissionsModeDialog` before the mode actually flips.
+            // Auto (like every other mode) switches directly: it's
+            // classifier-gated, not dangerous, so a per-switch confirmation
+            // would just be noise.
             let next = state.session.permission_mode.next_in_cycle(
                 state.session.bypass_permissions_available,
                 state.session.auto_mode_available,
@@ -148,13 +150,6 @@ pub async fn handle_command(
                     state.ui.show_modal(ModalState::BypassPermissions(
                         crate::state::BypassPermissionsState {
                             current_mode: current_label,
-                        },
-                    ));
-                }
-                coco_types::PermissionMode::Auto => {
-                    state.ui.show_modal(ModalState::AutoModeOptIn(
-                        crate::state::AutoModeOptInState {
-                            description: t!("dialog.auto_mode_description").to_string(),
                         },
                     ));
                 }

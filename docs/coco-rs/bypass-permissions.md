@@ -61,7 +61,7 @@ Two activation vectors:
 ### Environment variable
 
 ```sh
-DISABLE_BYPASS_PERMISSIONS=1   # truthy: 1 | true | yes | on (case-insensitive)
+COCO_PERMISSIONS_DISABLE_BYPASS=1   # truthy: 1 | true | yes | on (case-insensitive)
 ```
 
 Scope: process-wide. Intended for CI, shared workstations, or
