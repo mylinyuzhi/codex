@@ -784,6 +784,14 @@ pub struct TaskEntry {
     pub task_id: String,
     pub description: String,
     pub status: TaskEntryStatus,
+    /// Coarse kind, derived from the `task_type` wire name on `TaskStarted`.
+    /// Drives the footer pill label ("1 agent · 2 shells") and dialog
+    /// grouping.
+    pub kind: TaskEntryKind,
+    /// `clock.now_ms()` when the TUI first observed this task. Drives the
+    /// "Runtime" field in the shell-detail view. Clock-sourced (not
+    /// `Instant`) so snapshot tests can pin it via `MockClock`.
+    pub started_at_ms: i64,
 }
 
 /// Task entry lifecycle status.
@@ -793,6 +801,46 @@ pub enum TaskEntryStatus {
     Completed,
     Failed,
     Stopped,
+}
+
+/// Coarse task kind for footer/dialog display, mapped from the `task_type`
+/// wire name (`coco_types::task_type_wire`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskEntryKind {
+    /// `local_bash` — a backgrounded shell command.
+    Shell,
+    /// `local_agent` / `in_process_teammate` / `remote_agent` — a subagent.
+    Agent,
+    /// Anything else (e.g. `dream`).
+    Other,
+}
+
+impl TaskEntry {
+    /// A running shell or agent — the set surfaced by the footer pill and the
+    /// background-tasks dialog. The single source of this predicate.
+    pub(crate) fn is_running_background(&self) -> bool {
+        self.status == TaskEntryStatus::Running
+            && matches!(self.kind, TaskEntryKind::Shell | TaskEntryKind::Agent)
+    }
+}
+
+impl SessionState {
+    /// Running shells and agents in start order — the rows shown in the
+    /// background-tasks dialog and counted by the footer pill. Shared by the
+    /// renderer and the key-intercept so selection indices stay aligned.
+    pub fn running_background_tasks(&self) -> Vec<&TaskEntry> {
+        self.active_tasks
+            .iter()
+            .filter(|t| t.is_running_background())
+            .collect()
+    }
+
+    /// Cheap (no allocation) existence check for the layout/height pass.
+    pub(crate) fn has_running_background_task(&self) -> bool {
+        self.active_tasks
+            .iter()
+            .any(TaskEntry::is_running_background)
+    }
 }
 
 /// Hook execution entry for the hook panel.

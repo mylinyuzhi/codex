@@ -526,6 +526,10 @@ pub enum FocusTarget {
     #[default]
     Input,
     Chat,
+    /// The footer background-tasks pill ("N shells"). Reached by pressing
+    /// Down at the bottom of the composer history; Enter opens the
+    /// background-tasks dialog, Up/Esc returns focus to the input.
+    FooterShells,
 }
 
 /// A single composer history entry.

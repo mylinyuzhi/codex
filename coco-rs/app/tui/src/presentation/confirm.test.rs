@@ -54,6 +54,62 @@ fn task_detail_content_applies_scroll_window() {
     assert!(!body.lines().any(|line| line == "line-23"));
 }
 
+fn running_shell(id: &str, cmd: &str) -> crate::state::session::TaskEntry {
+    crate::state::session::TaskEntry {
+        task_id: id.to_string(),
+        description: cmd.to_string(),
+        status: crate::state::session::TaskEntryStatus::Running,
+        kind: crate::state::session::TaskEntryKind::Shell,
+        started_at_ms: 0,
+    }
+}
+
+#[test]
+fn background_tasks_list_marks_selection_and_pill() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let mut state = crate::state::AppState::default();
+    state.session.active_tasks = vec![
+        running_shell("s0", "sleep 100"),
+        running_shell("s1", "tail -f log"),
+    ];
+    let bt = crate::state::BackgroundTasksState {
+        selected: 1,
+        detail: None,
+    };
+
+    let (title, body, _) = background_tasks_content(&bt, &state, 0, UiStyles::new(&theme));
+
+    assert_eq!(title, " Background tasks ");
+    assert!(body.contains("2 shells"));
+    assert!(body.contains("❯ tail -f log (running)"));
+    assert!(body.contains("  sleep 100 (running)"));
+    assert!(body.contains("Enter to view"));
+}
+
+#[test]
+fn background_tasks_detail_shows_status_runtime_command_and_output() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let mut state = crate::state::AppState::default();
+    state.session.active_tasks = vec![running_shell("s1", "sleep 100")];
+    let bt = crate::state::BackgroundTasksState {
+        selected: 0,
+        detail: Some("s1".to_string()),
+    };
+
+    // 1h 19m 32s elapsed since started_at_ms = 0.
+    let now_ms = (3600 + 19 * 60 + 32) * 1000;
+    let (title, body, _) = background_tasks_content(&bt, &state, now_ms, UiStyles::new(&theme));
+
+    assert_eq!(title, " Shell details ");
+    assert!(body.contains("Status:   running"));
+    assert!(body.contains("Runtime:  1h 19m 32s"));
+    assert!(body.contains("Command:  sleep 100"));
+    assert!(body.contains("No output available"));
+    assert!(body.contains("to go back"));
+}
+
 #[test]
 fn task_detail_content_clamps_negative_scroll_to_start() {
     let _locale = locale_test_guard("en");

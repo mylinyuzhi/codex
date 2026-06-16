@@ -51,8 +51,10 @@ impl StatusSpan {
 pub(crate) enum StatusBarView {
     ExitPrompt { key: ExitKey, text: String },
     Custom { line: String },
-    BuiltIn { spans: Vec<StatusSpan> },
+    BuiltIn { lines: Vec<Vec<StatusSpan>> },
 }
+
+pub(crate) use builtin::background_pill_label;
 
 pub(crate) fn status_bar_view(state: &AppState) -> StatusBarView {
     if let Some(key) = state.ui.pending_exit_hint() {
@@ -70,8 +72,22 @@ pub(crate) fn status_bar_view(state: &AppState) -> StatusBarView {
     }
 
     StatusBarView::BuiltIn {
-        spans: builtin::built_in_status_spans(state),
+        lines: builtin::built_in_status_lines(state),
     }
+}
+
+/// Rows the status bar occupies for the given state. Used by the viewport to
+/// reserve layout height before rendering. Cheap: avoids building spans.
+/// `ExitPrompt` and a user-configured `Custom` status line stay single-row;
+/// the built-in bar is one-to-three rows depending on populated content.
+pub(crate) fn status_bar_height(state: &AppState) -> u16 {
+    if state.ui.pending_exit_hint().is_some() {
+        return 1;
+    }
+    if state.ui.display_settings.status_line.is_some() {
+        return 1;
+    }
+    builtin::built_in_line_count(state)
 }
 
 #[cfg(test)]

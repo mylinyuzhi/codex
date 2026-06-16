@@ -249,11 +249,24 @@ pub(super) fn history_up(state: &mut AppState) {
 
 /// Down arrow: recall newer history (toward the live draft) when the
 /// cursor is on the last line, otherwise move the cursor down one line.
+///
+/// When the cursor is already at the live draft (no newer history) and the
+/// draft is empty, a further Down parks focus on the footer background-tasks
+/// pill if any task is running — mirrors TS `PromptInput.handleHistoryDown`
+/// → `selectFooterItem`. Enter then opens the background-tasks dialog.
 pub(super) fn history_down(state: &mut AppState) {
-    if cursor_on_last_line(&state.ui.input) {
-        history_next(state);
-    } else {
+    if !cursor_on_last_line(&state.ui.input) {
         state.ui.input.textarea.move_cursor_down();
+        return;
+    }
+    if state.ui.input.history_index.is_some() {
+        history_next(state);
+        return;
+    }
+    if state.ui.input.text().trim().is_empty()
+        && crate::status_bar::background_pill_label(state).is_some()
+    {
+        state.ui.focus = crate::state::FocusTarget::FooterShells;
     }
 }
 

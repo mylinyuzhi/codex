@@ -179,7 +179,7 @@ fn interaction_pane_bottom_reservation(
         .map(InlinePopupView::item_count)
         .unwrap_or(0);
     let popup_active = popup_items > 0;
-    let status_height: u16 = 1;
+    let status_height: u16 = crate::status_bar::status_bar_height(state);
     let prompt_rows = interaction_prompt_height(state, _width, max_height);
     // Match render_live_viewport's avail_below_input base exactly (it subtracts
     // the status-indicator and background-pill rows too) so the sizing pass and
@@ -250,7 +250,7 @@ fn render_live_viewport(
         .map(InlinePopupView::item_count)
         .unwrap_or(0);
     let popup_active = popup_items > 0;
-    let status_height: u16 = 1;
+    let status_height: u16 = crate::status_bar::status_bar_height(state);
     // Single-row main-turn status indicator (spinner + verb + elapsed
     // + tokens) above the activity panel — visible only while a turn
     // is running.

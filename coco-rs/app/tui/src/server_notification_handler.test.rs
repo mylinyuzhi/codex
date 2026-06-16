@@ -750,6 +750,8 @@ fn test_session_reset_preserves_only_persistent_running_subagents() {
             task_id: agent.agent_id.clone(),
             description: agent.description.clone(),
             status: TaskEntryStatus::Running,
+            kind: crate::state::session::TaskEntryKind::Agent,
+            started_at_ms: 0,
         })
         .collect();
 

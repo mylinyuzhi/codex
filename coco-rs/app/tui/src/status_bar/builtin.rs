@@ -6,12 +6,53 @@ use coco_types::PermissionMode;
 use crate::i18n::t;
 use crate::presentation::context_usage::render_context_usage;
 use crate::state::AppState;
+use crate::state::FocusTarget;
+use crate::state::session::TaskEntryKind;
 use crate::status_bar::StatusSpan;
 use crate::status_bar::StatusTone;
 use crate::transcript::cells::CellKind;
 use crate::transcript::cells::RenderedCell;
 
-pub(crate) fn built_in_status_spans(state: &AppState) -> Vec<StatusSpan> {
+/// The built-in status bar is a one-to-three-line block:
+///
+/// 1. model · effort · tokens · cache · context · transcript counts (always)
+/// 2. permission mode (`⏵⏵ auto mode on`) · background-task pill
+/// 3. working-directory basename · `git:(branch)`
+///
+/// Lines 2 and 3 are emitted only when they have content, so the bar collapses
+/// to a single row in the default state and grows to the full three rows in a
+/// real session (a permission mode set + a working dir). [`built_in_line_count`]
+/// mirrors the same predicates for the layout pass without building any spans.
+pub(crate) fn built_in_status_lines(state: &AppState) -> Vec<Vec<StatusSpan>> {
+    let mut lines = vec![model_and_usage_line(state)];
+    if show_permission_tasks_line(state) {
+        lines.push(permission_and_tasks_line(state));
+    }
+    if show_directory_line(state) {
+        lines.push(directory_line(state));
+    }
+    lines
+}
+
+/// Row count of the built-in bar, cheaply (no span building) — for the layout
+/// pass. MUST track the `push` conditions in [`built_in_status_lines`].
+pub(crate) fn built_in_line_count(state: &AppState) -> u16 {
+    1 + u16::from(show_permission_tasks_line(state)) + u16::from(show_directory_line(state))
+}
+
+/// Whether line 2 (permission mode / task pill) has content. Cheap: the task
+/// side is an allocation-free `any`, not the formatted pill label.
+fn show_permission_tasks_line(state: &AppState) -> bool {
+    permission_mode_status(state.session.permission_mode).is_some()
+        || state.session.has_running_background_task()
+}
+
+/// Whether line 3 (working dir / git branch) has content.
+fn show_directory_line(state: &AppState) -> bool {
+    state.session.working_dir.is_some()
+}
+
+fn model_and_usage_line(state: &AppState) -> Vec<StatusSpan> {
     let mut spans = Vec::new();
     let (provider, model_id) = state
         .session
@@ -43,13 +84,6 @@ pub(crate) fn built_in_status_spans(state: &AppState) -> Vec<StatusSpan> {
         state.session.thinking_effort.to_string(),
         StatusTone::Dim,
     ));
-
-    if let Some((mode_label, mode_tone)) =
-        permission_mode_status_label(state.session.permission_mode)
-    {
-        separator(&mut spans);
-        spans.push(StatusSpan::new(mode_label, mode_tone));
-    }
 
     if let Some(hint) = state.ui.kb_handle.pending_display() {
         separator(&mut spans);
@@ -211,17 +245,114 @@ fn separator(spans: &mut Vec<StatusSpan>) {
     spans.push(StatusSpan::new(" | ", StatusTone::Border));
 }
 
-fn permission_mode_status_label(mode: PermissionMode) -> Option<(String, StatusTone)> {
-    let (key, tone) = match mode {
+/// Line 2: permission mode (`⏵⏵ auto mode on`) followed by the
+/// background-task pill (`· 1 agent · 2 shells`). Mirrors TS
+/// `PromptInputFooterLeftSide`. Empty in default mode with no running tasks.
+fn permission_and_tasks_line(state: &AppState) -> Vec<StatusSpan> {
+    let mut spans = Vec::new();
+    if let Some((symbol, label, tone)) = permission_mode_status(state.session.permission_mode) {
+        spans.push(StatusSpan::new(format!(" {symbol} {label}"), tone));
+    }
+    if let Some(pill) = background_pill_label(state) {
+        let lead = if spans.is_empty() { " " } else { " · " };
+        spans.push(StatusSpan::new(lead, StatusTone::Dim));
+        // Reverse-highlight when the footer pill holds focus (down-arrow from
+        // the composer parks here; Enter opens the background-tasks dialog).
+        let tone = if state.ui.focus == FocusTarget::FooterShells {
+            StatusTone::Accent
+        } else {
+            StatusTone::Dim
+        };
+        spans.push(StatusSpan {
+            text: pill,
+            tone,
+            bold: state.ui.focus == FocusTarget::FooterShells,
+        });
+    }
+    spans
+}
+
+/// Symbol + localized "… on" label + tone for the active permission mode.
+/// `⏸` for plan, `⏵⏵` for the auto-proceed modes, none for default. Tones
+/// match TS: auto → warning (yellow), bypass/dont-ask → error (red).
+fn permission_mode_status(mode: PermissionMode) -> Option<(&'static str, String, StatusTone)> {
+    let (symbol, key, tone) = match mode {
         PermissionMode::Default => return None,
-        PermissionMode::AcceptEdits => ("permission_mode.status.accept_edits", StatusTone::Accent),
-        PermissionMode::Plan => ("permission_mode.status.plan", StatusTone::Plan),
-        PermissionMode::BypassPermissions => ("permission_mode.status.bypass", StatusTone::Error),
-        PermissionMode::DontAsk => ("permission_mode.status.dont_ask", StatusTone::Error),
-        PermissionMode::Auto => ("permission_mode.status.auto", StatusTone::Warning),
-        PermissionMode::Bubble => ("permission_mode.status.bubble", StatusTone::Dim),
+        PermissionMode::AcceptEdits => (
+            "⏵⏵",
+            "permission_mode.status.accept_edits",
+            StatusTone::Accent,
+        ),
+        PermissionMode::Plan => ("⏸", "permission_mode.status.plan", StatusTone::Plan),
+        PermissionMode::BypassPermissions => {
+            ("⏵⏵", "permission_mode.status.bypass", StatusTone::Error)
+        }
+        PermissionMode::DontAsk => ("⏵⏵", "permission_mode.status.dont_ask", StatusTone::Error),
+        PermissionMode::Auto => ("⏵⏵", "permission_mode.status.auto", StatusTone::Warning),
+        PermissionMode::Bubble => ("⏵⏵", "permission_mode.status.bubble", StatusTone::Dim),
     };
-    Some((t!(key).to_string(), tone))
+    Some((symbol, t!(key).to_string(), tone))
+}
+
+/// TS `getPillLabel` port: "1 agent", "2 shells", or "1 agent · 2 shells".
+/// Counts only running tasks; `None` when nothing is running.
+pub(crate) fn background_pill_label(state: &AppState) -> Option<String> {
+    let mut shells = 0i64;
+    let mut agents = 0i64;
+    for task in state
+        .session
+        .active_tasks
+        .iter()
+        .filter(|t| t.is_running_background())
+    {
+        match task.kind {
+            TaskEntryKind::Shell => shells += 1,
+            TaskEntryKind::Agent => agents += 1,
+            TaskEntryKind::Other => {}
+        }
+    }
+    let mut parts = Vec::new();
+    if agents > 0 {
+        parts.push(
+            if agents == 1 {
+                t!("status.background.agent_one", count = agents)
+            } else {
+                t!("status.background.agent_other", count = agents)
+            }
+            .to_string(),
+        );
+    }
+    if shells > 0 {
+        parts.push(
+            if shells == 1 {
+                t!("status.background.shell_one", count = shells)
+            } else {
+                t!("status.background.shell_other", count = shells)
+            }
+            .to_string(),
+        );
+    }
+    (!parts.is_empty()).then(|| parts.join(" · "))
+}
+
+/// Line 3: working-directory basename and `git:(branch)`, zsh-prompt style.
+/// Empty when no working directory is known.
+fn directory_line(state: &AppState) -> Vec<StatusSpan> {
+    let mut spans = Vec::new();
+    let Some(dir) = state.session.working_dir.as_deref() else {
+        return spans;
+    };
+    let name = dir
+        .rsplit(['/', '\\'])
+        .find(|seg| !seg.is_empty())
+        .unwrap_or(dir);
+    spans.push(StatusSpan::new(format!(" {name}"), StatusTone::Primary));
+    if let Some(branch) = state.session.git_branch.as_deref() {
+        spans.push(StatusSpan::new(" git:(", StatusTone::Dim));
+        spans.push(StatusSpan::new(branch.to_string(), StatusTone::Accent));
+        spans.push(StatusSpan::new(")", StatusTone::Dim));
+    }
+    spans
 }
 
 pub(crate) fn format_token_count(count: i64) -> String {
