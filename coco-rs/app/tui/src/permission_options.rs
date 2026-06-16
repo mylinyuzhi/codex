@@ -364,7 +364,7 @@ pub(crate) fn edit_path_allow_update(
             .collect(),
         coco_types::ToolName::ApplyPatch => {
             let patch = input.get("patch").and_then(|v| v.as_str())?;
-            crate::tool_display::apply_patch_target_paths(patch)
+            coco_types::tool_summary::apply_patch_target_paths(patch)
         }
         _ => return None,
     };

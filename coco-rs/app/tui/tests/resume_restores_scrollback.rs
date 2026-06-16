@@ -53,6 +53,7 @@ fn fake_running_tool() -> ToolExecution {
         started_at: std::time::Instant::now(),
         completed_at: None,
         description: None,
+        input_preview: None,
         streaming_input: None,
         // Stamped to an arbitrary UUID — SessionResetForResume wipes
         // every execution regardless of anchor, so the value is

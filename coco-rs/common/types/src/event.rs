@@ -1857,29 +1857,28 @@ pub enum TuiOnlyEvent {
     // === Streaming tool display (3) ===
     /// Streaming tool input delta (typing effect).
     ///
-    /// # Status: reserved scaffolding, not yet wired
+    /// A tool call's arguments have started streaming (the model began
+    /// emitting the input JSON). Carries the `call_id` and tool `name` so the
+    /// TUI can create a pre-queue "streaming" row in the activity strip — the
+    /// `call_id` matches the later [`AgentStreamEvent::ToolUseQueued`], which
+    /// upgrades the same row with the finalized input once parsing completes.
     ///
-    /// The TUI has a handler (`server_notification_handler::handle_tui_only`)
-    /// that appends the delta to `ToolExecution.streaming_input` for a
-    /// typing-effect display, but **no producer currently emits this variant**
-    /// in coco-rs.
+    /// Emitted by the engine from `StreamEvent::ToolCallStart`. Like
+    /// [`Self::ToolCallDelta`] it is UI-only: the SDK sees the complete input
+    /// at `ToolUseQueued` and does not need the streaming preamble.
+    ToolCallStreamStart { call_id: String, name: String },
+    /// Partial tool-call input JSON fragment, for the live "typing" preview in
+    /// the activity strip. The TUI appends the delta to
+    /// `ToolExecution.streaming_input` and re-derives the primary-argument
+    /// preview (the command for `Bash`, the path for `Read`, …) so the row
+    /// shows arguments filling in before the call is queued.
     ///
-    /// The inference layer's `StreamEvent::ToolCallDelta` (a different type,
-    /// internal to `coco-inference`) is fully accumulated into the complete
-    /// tool input before the engine emits `AgentStreamEvent::ToolUseQueued`
-    /// with the finalized input. Consumers see the complete input at once.
-    ///
-    /// Future work to wire this up would require the inference layer to
-    /// forward the partial JSON fragments alongside the accumulation, and
-    /// the engine to emit them here as `CoreEvent::Tui(ToolCallDelta { ... })`.
-    ///
-    /// # Why keep it in TuiOnlyEvent (not AgentStreamEvent)
-    ///
-    /// Per `event-system-design.md` §3.3: partial JSON deltas serve a purely
-    /// UI display purpose (typing effect) and the SDK does not need them —
-    /// `ToolUseQueued` already contains the complete input. Promoting to
-    /// `AgentStreamEvent` would burden SDK consumers with partial JSON they
-    /// must re-assemble, with no behavioral benefit.
+    /// Emitted by the engine from `StreamEvent::ToolCallDelta` (a different,
+    /// inference-internal type). Kept in `TuiOnlyEvent` rather than
+    /// `AgentStreamEvent` per `event-system-design.md` §3.3: the partial JSON
+    /// serves a purely UI display purpose — `ToolUseQueued` already contains
+    /// the complete, re-assembled input, so SDK consumers need not handle the
+    /// fragments.
     ToolCallDelta { call_id: String, delta: String },
     /// Tool progress update (progress bar).
     ToolProgress {

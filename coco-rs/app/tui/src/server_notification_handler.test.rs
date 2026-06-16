@@ -808,6 +808,72 @@ fn test_history_replaced_applies_same_boundary_cleanup() {
 }
 
 #[test]
+fn test_turn_completed_drops_streaming_orphans_keeps_committed() {
+    use crate::state::session::ToolStatus;
+    let mut state = AppState::new();
+
+    // Build a representative in-flight ledger:
+    // - `stream-orphan`: args started streaming but never finalized (no
+    //   `ToolUseQueued`) — the leak case. message_uuid = None.
+    state
+        .session
+        .begin_tool_stream("stream-orphan".to_string(), "Bash".to_string());
+    // - `queued-unstamped`: queued but its assistant message never committed.
+    state.session.start_tool(
+        "queued-unstamped".to_string(),
+        "Read".to_string(),
+        &serde_json::json!({ "file_path": "/x" }),
+    );
+    // - `queued-stamped`: a committed queued call (stamped to a message).
+    state.session.start_tool(
+        "queued-stamped".to_string(),
+        "Read".to_string(),
+        &serde_json::json!({ "file_path": "/y" }),
+    );
+    // - `running`: genuinely executing.
+    state.session.start_tool(
+        "running".to_string(),
+        "Bash".to_string(),
+        &serde_json::json!({ "command": "sleep 1" }),
+    );
+    state.session.run_tool("running");
+    // Stamp only the committed one.
+    for t in &mut state.session.tool_executions {
+        if t.call_id == "queued-stamped" {
+            t.message_uuid = Some(uuid::Uuid::nil());
+        }
+    }
+    assert_eq!(state.session.tool_executions.len(), 4);
+
+    handle_core_event(
+        &mut state,
+        CoreEvent::Protocol(ServerNotification::TurnEnded(
+            coco_types::TurnEndedParams::completed(
+                coco_types::TurnId::from("t-orphan"),
+                None,
+                Some(coco_messages::StopReason::EndTurn),
+            ),
+        )),
+    );
+
+    // Streaming orphan + uncommitted queued are dropped; only the running and
+    // the committed-queued rows survive — no ghost activity row persists.
+    let surviving: Vec<(&str, ToolStatus)> = state
+        .session
+        .tool_executions
+        .iter()
+        .map(|t| (t.call_id.as_str(), t.status))
+        .collect();
+    assert_eq!(
+        surviving,
+        vec![
+            ("queued-stamped", ToolStatus::Queued),
+            ("running", ToolStatus::Running),
+        ]
+    );
+}
+
+#[test]
 fn test_live_status_tokens_start_fresh_and_follow_stream_deltas() {
     let mut state = AppState::new();
     handle_core_event(

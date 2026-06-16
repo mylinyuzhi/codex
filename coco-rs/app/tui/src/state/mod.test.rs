@@ -294,9 +294,11 @@ fn test_session_messages() {
 fn test_tool_execution_lifecycle() {
     let mut state = AppState::new();
 
-    state
-        .session
-        .start_tool("call-1".to_string(), "Bash".to_string());
+    state.session.start_tool(
+        "call-1".to_string(),
+        "Bash".to_string(),
+        &serde_json::json!({ "command": "ls" }),
+    );
     assert_eq!(state.session.tool_executions.len(), 1);
     assert_eq!(
         state.session.tool_executions[0].status,
@@ -317,6 +319,61 @@ fn test_tool_execution_lifecycle() {
 
     state.session.complete_tool("call-2", /*is_error*/ true);
     // Non-existent tool: no panic
+}
+
+#[test]
+fn test_streaming_tool_upgrades_in_place_no_duplicate() {
+    use crate::state::session::ToolStatus;
+    let mut state = AppState::new();
+
+    // Args start streaming: a `Streaming` row opens.
+    state
+        .session
+        .begin_tool_stream("c1".to_string(), "Bash".to_string());
+    // Duplicate stream-start for the same call_id is a no-op.
+    state
+        .session
+        .begin_tool_stream("c1".to_string(), "Bash".to_string());
+    assert_eq!(state.session.tool_executions.len(), 1);
+    assert_eq!(
+        state.session.tool_executions[0].status,
+        ToolStatus::Streaming
+    );
+
+    // Partial argument JSON arrives → live preview reflects what's typed.
+    state
+        .session
+        .append_tool_stream_delta("c1", r#"{"command":"cargo bui"#);
+    assert_eq!(
+        state.session.tool_executions[0].input_preview.as_deref(),
+        Some("cargo bui")
+    );
+
+    // Input finalizes (`ToolUseQueued`): the SAME row upgrades in place —
+    // Streaming → Queued, partial preview replaced by the finalized one, no
+    // duplicate row, partial buffer cleared.
+    state.session.start_tool(
+        "c1".to_string(),
+        "Bash".to_string(),
+        &serde_json::json!({ "command": "cargo build" }),
+    );
+    assert_eq!(state.session.tool_executions.len(), 1);
+    assert_eq!(state.session.tool_executions[0].status, ToolStatus::Queued);
+    assert_eq!(
+        state.session.tool_executions[0].input_preview.as_deref(),
+        Some("cargo build")
+    );
+    assert!(state.session.tool_executions[0].streaming_input.is_none());
+}
+
+#[test]
+fn test_begin_tool_stream_suppresses_overlay_tools() {
+    let mut state = AppState::new();
+    state
+        .session
+        .begin_tool_stream("c1".to_string(), "ExitPlanMode".to_string());
+    // Overlay-driven tools own a dedicated surface — no streaming row leaks.
+    assert!(state.session.tool_executions.is_empty());
 }
 
 #[test]

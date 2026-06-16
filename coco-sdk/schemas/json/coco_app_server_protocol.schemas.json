@@ -12584,7 +12584,28 @@
           "type": "object"
         },
         {
-          "description": "Streaming tool input delta (typing effect).\n\n# Status: reserved scaffolding, not yet wired\n\nThe TUI has a handler (`server_notification_handler::handle_tui_only`)\nthat appends the delta to `ToolExecution.streaming_input` for a\ntyping-effect display, but **no producer currently emits this variant**\nin coco-rs.\n\nThe inference layer's `StreamEvent::ToolCallDelta` (a different type,\ninternal to `coco-inference`) is fully accumulated into the complete\ntool input before the engine emits `AgentStreamEvent::ToolUseQueued`\nwith the finalized input. Consumers see the complete input at once.\n\nFuture work to wire this up would require the inference layer to\nforward the partial JSON fragments alongside the accumulation, and\nthe engine to emit them here as `CoreEvent::Tui(ToolCallDelta { ... })`.\n\n# Why keep it in TuiOnlyEvent (not AgentStreamEvent)\n\nPer `event-system-design.md` \u00a73.3: partial JSON deltas serve a purely\nUI display purpose (typing effect) and the SDK does not need them \u2014\n`ToolUseQueued` already contains the complete input. Promoting to\n`AgentStreamEvent` would burden SDK consumers with partial JSON they\nmust re-assemble, with no behavioral benefit.",
+          "description": "Streaming tool input delta (typing effect).\n\nA tool call's arguments have started streaming (the model began\nemitting the input JSON). Carries the `call_id` and tool `name` so the\nTUI can create a pre-queue \"streaming\" row in the activity strip \u2014 the\n`call_id` matches the later [`AgentStreamEvent::ToolUseQueued`], which\nupgrades the same row with the finalized input once parsing completes.\n\nEmitted by the engine from `StreamEvent::ToolCallStart`. Like\n[`Self::ToolCallDelta`] it is UI-only: the SDK sees the complete input\nat `ToolUseQueued` and does not need the streaming preamble.",
+          "properties": {
+            "call_id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "const": "tool_call_stream_start",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "call_id",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Partial tool-call input JSON fragment, for the live \"typing\" preview in\nthe activity strip. The TUI appends the delta to\n`ToolExecution.streaming_input` and re-derives the primary-argument\npreview (the command for `Bash`, the path for `Read`, \u2026) so the row\nshows arguments filling in before the call is queued.\n\nEmitted by the engine from `StreamEvent::ToolCallDelta` (a different,\ninference-internal type). Kept in `TuiOnlyEvent` rather than\n`AgentStreamEvent` per `event-system-design.md` \u00a73.3: the partial JSON\nserves a purely UI display purpose \u2014 `ToolUseQueued` already contains\nthe complete, re-assembled input, so SDK consumers need not handle the\nfragments.",
           "properties": {
             "call_id": {
               "type": "string"

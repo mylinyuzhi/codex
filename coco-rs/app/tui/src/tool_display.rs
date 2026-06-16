@@ -1,18 +1,25 @@
 //! Tool input display helpers shared by permission prompts and chat previews.
+//!
+//! The pure per-tool argument summarisation lives in
+//! [`coco_types::tool_summary`] so producers below the UI layer (the swarm
+//! coordinator) can reuse it. This module keeps only the UI-facing concerns:
+//! syntax-highlighted spans, tone colours, and overlay suppression.
 
 use coco_tui_ui::display::SyntaxHighlighting;
 use coco_tui_ui::style::UiStyles;
-use coco_types::MCP_TOOL_SEPARATOR;
 use coco_types::PermissionDisplayInput;
 use coco_types::ToolName;
+use coco_types::tool_summary::cap_single_line;
+use coco_types::tool_summary::normalized_builtin_tool;
+use coco_types::tool_summary::tool_input_multiline;
+use coco_types::tool_summary::tool_input_summary;
 use ratatui::style::Stylize;
 use ratatui::text::Span;
 use serde_json::Value;
-use std::str::FromStr;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
-const TOOL_INPUT_PREVIEW_MAX_CHARS: usize = 512;
+pub(crate) const TOOL_INPUT_PREVIEW_MAX_CHARS: usize = 512;
 const PERMISSION_DISPLAY_MAX_CHARS: usize = 1_200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,13 +53,13 @@ pub fn permission_display_input(tool_name: &str, input: &Value) -> PermissionDis
     if is_shell_tool(tool_name)
         && let Some(command) = input.get("command").and_then(Value::as_str)
     {
-        return PermissionDisplayInput::Command(single_line_capped(
+        return PermissionDisplayInput::Command(cap_single_line(
             command,
             PERMISSION_DISPLAY_MAX_CHARS,
         ));
     }
 
-    let display = multi_line_tool_input(tool_name, input, PERMISSION_DISPLAY_MAX_CHARS);
+    let display = tool_input_multiline(tool_name, input, PERMISSION_DISPLAY_MAX_CHARS);
     if display.is_empty() {
         PermissionDisplayInput::Empty
     } else {
@@ -61,17 +68,15 @@ pub fn permission_display_input(tool_name: &str, input: &Value) -> PermissionDis
 }
 
 pub fn tool_input_preview(tool_name: &str, input: &Value) -> String {
-    single_line_capped(
+    cap_single_line(
         tool_input_semantic_preview(tool_name, input).plain_text(),
         TOOL_INPUT_PREVIEW_MAX_CHARS,
     )
 }
 
 pub(crate) fn tool_input_semantic_preview(tool_name: &str, input: &Value) -> ToolInputPreview {
-    let Some(tool) = normalized_builtin_tool(tool_name) else {
-        return ToolInputPreview::Plain(object_summary(input));
-    };
-    if matches!(tool, ToolName::Bash | ToolName::PowerShell)
+    if let Some(tool) = normalized_builtin_tool(tool_name)
+        && matches!(tool, ToolName::Bash | ToolName::PowerShell)
         && let Some(command) = input.get("command").and_then(Value::as_str)
     {
         let syntax = if matches!(tool, ToolName::PowerShell) {
@@ -84,7 +89,9 @@ pub(crate) fn tool_input_semantic_preview(tool_name: &str, input: &Value) -> Too
             syntax: syntax.to_string(),
         };
     }
-    ToolInputPreview::Plain(single_line_tool_input(tool_name, input))
+    // Plain branch covers builtin non-shell tools (per-field pick) and
+    // unrecognised tools (object summary) — `tool_input_summary` handles both.
+    ToolInputPreview::Plain(tool_input_summary(tool_name, input))
 }
 
 pub(crate) fn render_tool_input_preview_spans(
@@ -208,14 +215,6 @@ fn truncate_spans_to_width(spans: Vec<Span<'static>>, max_width: usize) -> Vec<S
     out
 }
 
-fn normalized_builtin_tool(tool_name: &str) -> Option<ToolName> {
-    let normalized = tool_name
-        .rsplit(MCP_TOOL_SEPARATOR)
-        .next()
-        .unwrap_or(tool_name);
-    ToolName::from_str(normalized).ok()
-}
-
 /// Tools whose entire user interaction *is* a dedicated overlay or prompt
 /// (the plan-approval dialog, the plan-mode banner, the question dialog).
 /// Their real UI is that surface, so they must never surface as a generic
@@ -240,238 +239,6 @@ pub(crate) fn tool_is_overlay_driven(tool_name: &str) -> bool {
         normalized_builtin_tool(tool_name),
         Some(ToolName::ExitPlanMode | ToolName::EnterPlanMode | ToolName::AskUserQuestion)
     )
-}
-
-pub(crate) fn single_line_tool_input(tool_name: &str, input: &Value) -> String {
-    let Some(tool) = normalized_builtin_tool(tool_name) else {
-        return object_summary(input);
-    };
-    if matches!(tool, ToolName::Bash | ToolName::PowerShell)
-        && let Some(command) = input.get("command").and_then(Value::as_str)
-    {
-        return command.to_string();
-    }
-
-    match tool {
-        ToolName::Glob => join_existing(input, &["pattern", "path"], " in "),
-        ToolName::Grep => join_existing(input, &["pattern", "path"], " in "),
-        ToolName::Read => read_target_preview(input),
-        ToolName::Edit | ToolName::Write | ToolName::NotebookEdit => {
-            scalar_value(input, "file_path")
-                .or_else(|| scalar_value(input, "path"))
-                .unwrap_or_default()
-        }
-        ToolName::WebFetch => scalar_value(input, "url").unwrap_or_default(),
-        ToolName::WebSearch => scalar_value(input, "query").unwrap_or_default(),
-        ToolName::Agent => scalar_value(input, "description")
-            .or_else(|| scalar_value(input, "prompt"))
-            .unwrap_or_default(),
-        ToolName::ApplyPatch => input
-            .get("patch")
-            .and_then(Value::as_str)
-            .map(|patch| apply_patch_target_paths(patch).join(", "))
-            .filter(|paths| !paths.is_empty())
-            .unwrap_or_default(),
-        _ => object_summary(input),
-    }
-}
-
-/// Extract target file paths from an apply_patch envelope's
-/// `*** Add File:` / `*** Update File:` / `*** Delete File:` headers.
-pub(crate) fn apply_patch_target_paths(patch: &str) -> Vec<&str> {
-    const HEADERS: &[&str] = &["*** Add File: ", "*** Update File: ", "*** Delete File: "];
-    patch
-        .lines()
-        .filter_map(|line| {
-            HEADERS
-                .iter()
-                .find_map(|header| line.strip_prefix(header))
-                .map(str::trim)
-        })
-        .filter(|p| !p.is_empty())
-        .collect()
-}
-
-/// Read header preview: the path, plus a `· lines N-M` / `· from line N`
-/// suffix when offset/limit are present (`lines {start}-{end}` when a limit
-/// is set, else `from line {start}`).
-fn read_target_preview(input: &Value) -> String {
-    let path = scalar_value(input, "file_path")
-        .or_else(|| scalar_value(input, "path"))
-        .unwrap_or_default();
-    let offset = input.get("offset").and_then(Value::as_i64);
-    let limit = input.get("limit").and_then(Value::as_i64);
-    if offset.is_none() && limit.is_none() {
-        return path;
-    }
-    let start = offset.unwrap_or(1).max(1);
-    let range = match limit {
-        Some(limit) if limit > 0 => format!("lines {start}-{}", start + limit - 1),
-        _ => format!("from line {start}"),
-    };
-    if path.is_empty() {
-        range
-    } else {
-        format!("{path} · {range}")
-    }
-}
-
-fn multi_line_tool_input(tool_name: &str, input: &Value, max_chars: usize) -> String {
-    let Some(tool) = normalized_builtin_tool(tool_name) else {
-        return capped_lines(object_lines(input), max_chars);
-    };
-    if matches!(tool, ToolName::Bash | ToolName::PowerShell)
-        && let Some(command) = input.get("command").and_then(Value::as_str)
-    {
-        return single_line_capped(command, max_chars);
-    }
-    // apply_patch: show the patch envelope itself (diff-like), not the
-    // `{patch: …}` JSON wrapper it travels in.
-    if matches!(tool, ToolName::ApplyPatch)
-        && let Some(patch) = input.get("patch").and_then(Value::as_str)
-    {
-        return capped_lines(patch.lines().map(str::to_string).collect(), max_chars);
-    }
-
-    let keys: &[&str] = match tool {
-        ToolName::Glob => &["path", "pattern"],
-        ToolName::Grep => &["path", "pattern", "output_mode"],
-        ToolName::Read => &["file_path", "offset", "limit"],
-        ToolName::Edit => &["file_path", "old_string", "new_string"],
-        ToolName::Write => &["file_path"],
-        ToolName::NotebookEdit => &["file_path", "cell_id"],
-        ToolName::WebFetch => &["url", "prompt"],
-        ToolName::WebSearch => &["query"],
-        ToolName::Agent => &["description", "subagent_type", "prompt"],
-        _ => &[],
-    };
-
-    let mut lines = Vec::new();
-    for key in keys {
-        if let Some(value) = scalar_value(input, key) {
-            lines.push(format!("{key}: {value}"));
-        }
-    }
-    if lines.is_empty() {
-        lines = object_lines(input);
-    }
-
-    capped_lines(lines, max_chars)
-}
-
-fn join_existing(input: &Value, keys: &[&str], separator: &str) -> String {
-    keys.iter()
-        .filter_map(|key| scalar_value(input, key))
-        .collect::<Vec<_>>()
-        .join(separator)
-}
-
-fn scalar_value(input: &Value, key: &str) -> Option<String> {
-    value_to_display(input.get(key)?)
-}
-
-fn object_summary(input: &Value) -> String {
-    let lines = object_lines(input);
-    if !lines.is_empty() {
-        return lines.join(", ");
-    }
-    match input {
-        Value::Null => String::new(),
-        other => value_to_display(other).unwrap_or_default(),
-    }
-}
-
-fn object_lines(input: &Value) -> Vec<String> {
-    let Some(obj) = input.as_object() else {
-        return Vec::new();
-    };
-
-    obj.iter()
-        .filter_map(|(key, value)| value_to_display(value).map(|value| format!("{key}: {value}")))
-        .collect()
-}
-
-fn value_to_display(value: &Value) -> Option<String> {
-    match value {
-        Value::Null => None,
-        Value::String(s) => Some(s.clone()),
-        Value::Bool(b) => Some(b.to_string()),
-        Value::Number(n) => Some(n.to_string()),
-        Value::Array(values) => {
-            let parts = values
-                .iter()
-                .filter_map(value_to_display)
-                .collect::<Vec<_>>();
-            (!parts.is_empty()).then(|| parts.join(", "))
-        }
-        Value::Object(_) => None,
-    }
-}
-
-fn capped_lines(lines: Vec<String>, max_chars: usize) -> String {
-    let mut out = String::new();
-    let mut count = 0usize;
-
-    for line in lines {
-        let line = single_line_capped(&line, max_chars);
-        let separator = usize::from(!out.is_empty());
-        let line_len = line.chars().count();
-        if count + separator + line_len > max_chars {
-            if max_chars > 3 {
-                while count + 3 > max_chars {
-                    out.pop();
-                    count = count.saturating_sub(1);
-                }
-                out.push_str("...");
-            }
-            return out;
-        }
-        if separator == 1 {
-            out.push('\n');
-            count += 1;
-        }
-        out.push_str(&line);
-        count += line_len;
-    }
-
-    out
-}
-
-fn single_line_capped(text: &str, max_chars: usize) -> String {
-    if max_chars == 0 {
-        return String::new();
-    }
-
-    let mut out = String::new();
-    let mut pending_space = false;
-    let mut count = 0usize;
-    for chunk in text.split_whitespace() {
-        let space = if out.is_empty() || !pending_space {
-            0
-        } else {
-            1
-        };
-        let chunk_len = chunk.chars().count();
-        if count + space + chunk_len > max_chars {
-            if max_chars > 3 {
-                while count + 3 > max_chars {
-                    out.pop();
-                    count = count.saturating_sub(1);
-                }
-                out.push_str("...");
-            }
-            return out;
-        }
-        if space == 1 {
-            out.push(' ');
-            count += 1;
-        }
-        out.push_str(chunk);
-        count += chunk_len;
-        pending_space = true;
-    }
-
-    out
 }
 
 #[cfg(test)]
