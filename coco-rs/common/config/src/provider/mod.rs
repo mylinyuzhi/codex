@@ -1,6 +1,7 @@
 pub mod client_options;
 pub mod model_override;
 
+pub use client_options::HeaderValue;
 pub use client_options::PartialProviderClientOptions;
 pub use client_options::ProviderClientOptions;
 pub use model_override::PartialProviderModelOverride;

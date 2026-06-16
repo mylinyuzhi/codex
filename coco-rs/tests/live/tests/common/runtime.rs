@@ -219,7 +219,11 @@ pub fn provider_has_credentials(provider_name: &str) -> bool {
 pub fn build_client(provider_name: &str, model_id: &str) -> Result<Arc<ModelRuntimeClient>> {
     let runtime = shared_runtime();
     let _spec = spec_for(provider_name, model_id)?;
-    let registry = Arc::new(ModelRuntimeRegistry::new(runtime.clone(), None)?);
+    let registry = Arc::new(ModelRuntimeRegistry::new(
+        runtime.clone(),
+        None,
+        Arc::new(coco_inference::HeaderVars::empty()),
+    )?);
     let source = ModelRuntimeSource::Explicit(coco_types::ProviderModelSelection {
         provider: provider_name.to_string(),
         model_id: model_id.to_string(),

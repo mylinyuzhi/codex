@@ -70,7 +70,7 @@ fn spec(provider: &str, api: ProviderApi, model_id: &str) -> ModelSpec {
 fn build_anthropic_succeeds_via_runtime() {
     let runtime = build_runtime_with(None);
     let s = spec("anthropic", ProviderApi::Anthropic, "claude-opus-4-7");
-    let result = build_language_model_from_runtime(&runtime, &s, None);
+    let result = build_language_model_from_runtime(&runtime, &s, None, None);
     assert!(
         result.is_ok(),
         "anthropic factory must succeed (err: {:?})",
@@ -82,7 +82,7 @@ fn build_anthropic_succeeds_via_runtime() {
 fn build_openai_succeeds_via_runtime() {
     let runtime = build_runtime_with(None);
     let s = spec("openai", ProviderApi::Openai, "gpt-4o-mini");
-    let result = build_language_model_from_runtime(&runtime, &s, None);
+    let result = build_language_model_from_runtime(&runtime, &s, None, None);
     assert!(
         result.is_ok(),
         "openai factory must succeed (err: {:?})",
@@ -94,7 +94,7 @@ fn build_openai_succeeds_via_runtime() {
 fn build_gemini_dispatches_to_google_provider() {
     let runtime = build_runtime_with(None);
     let s = spec("google", ProviderApi::Gemini, "gemini-2.5-flash");
-    let result = build_language_model_from_runtime(&runtime, &s, None);
+    let result = build_language_model_from_runtime(&runtime, &s, None, None);
     match result {
         Ok(_) => {}
         Err(e) => {
@@ -114,7 +114,7 @@ fn build_volcengine_routes_to_openai_compat_via_runtime() {
     // longer rejected with an error.
     let runtime = build_runtime_with(None);
     let s = spec("volcengine", ProviderApi::Volcengine, "doubao-1.5");
-    let result = build_language_model_from_runtime(&runtime, &s, None);
+    let result = build_language_model_from_runtime(&runtime, &s, None, None);
     assert!(
         result.is_ok(),
         "volcengine should route via openai-compat (err: {:?})",
@@ -145,7 +145,7 @@ fn build_openai_compat_routes_for_user_defined_instance() {
     };
     let runtime = build_runtime_with(Some(("local-router".into(), partial)));
     let s = spec("local-router", ProviderApi::OpenaiCompat, "local-model");
-    let result = build_language_model_from_runtime(&runtime, &s, None);
+    let result = build_language_model_from_runtime(&runtime, &s, None, None);
     assert!(
         result.is_ok(),
         "openai-compat instance should construct (err: {:?})",
@@ -164,11 +164,73 @@ fn build_openai_compat_routes_for_user_defined_instance() {
     );
 }
 
+/// Build an openai-compat `local-router` instance carrying a single custom
+/// header `X-Trace` with the given value.
+fn compat_with_header(value: coco_config::HeaderValue) -> RuntimeConfig {
+    let mut models = BTreeMap::new();
+    models.insert(
+        "local-model".to_string(),
+        coco_config::PartialProviderModelOverride {
+            overrides: coco_config::PartialModelInfo {
+                context_window: Some(coco_config::PositiveTokens::new(128_000)),
+                max_output_tokens: Some(coco_config::PositiveTokens::new(8_192)),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    );
+    let partial = PartialProviderConfig {
+        api: Some(ProviderApi::OpenaiCompat),
+        env_key: Some("LOCAL_KEY".into()),
+        base_url: Some("http://localhost:8080/v1".into()),
+        models: Some(models),
+        client_options: Some(coco_config::PartialProviderClientOptions {
+            headers: Some(BTreeMap::from([("X-Trace".to_string(), value)])),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    build_runtime_with(Some(("local-router".into(), partial)))
+}
+
+#[test]
+fn templated_header_unknown_var_fails_build() {
+    let runtime = compat_with_header(coco_config::HeaderValue::templated("${NOPE}"));
+    let s = spec("local-router", ProviderApi::OpenaiCompat, "local-model");
+    let err = build_language_model_from_runtime(&runtime, &s, None, None)
+        .map(|_| ())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("X-Trace") && err.contains("NOPE"),
+        "error names the offending header + variable: {err}"
+    );
+}
+
+#[test]
+fn templated_header_known_var_builds_with_session_context() {
+    let runtime = compat_with_header(coco_config::HeaderValue::templated(
+        "${PROVIDER}/${SESSION_ID}",
+    ));
+    let s = spec("local-router", ProviderApi::OpenaiCompat, "local-model");
+    let vars = crate::header_template::HeaderVars {
+        session_id: "sess-1".into(),
+        cwd: "/tmp".into(),
+        app_version: "1.2.3".into(),
+    };
+    let result = build_language_model_from_runtime(&runtime, &s, None, Some(&vars));
+    assert!(
+        result.is_ok(),
+        "templated header with known vars should build (err: {:?})",
+        result.err().map(|e| e.to_string())
+    );
+}
+
 #[test]
 fn build_unknown_provider_fails_with_typed_error() {
     let runtime = build_runtime_with(None);
     let s = spec("unknown-provider", ProviderApi::OpenaiCompat, "x");
-    let err = build_language_model_from_runtime(&runtime, &s, None)
+    let err = build_language_model_from_runtime(&runtime, &s, None, None)
         .map(|_| ())
         .unwrap_err()
         .to_string();
@@ -182,7 +244,8 @@ fn build_unknown_provider_fails_with_typed_error() {
 fn build_api_client_uses_real_fingerprint_for_anthropic() {
     let runtime = build_runtime_with(None);
     let s = spec("anthropic", ProviderApi::Anthropic, "claude-sonnet-4-6");
-    let client = build_api_client(&runtime, &s, RetryConfig::default(), None).expect("api client");
+    let client =
+        build_api_client(&runtime, &s, RetryConfig::default(), None, None).expect("api client");
     let fp = client.fingerprint();
     assert_eq!(fp.api, ProviderApi::Anthropic);
     assert_eq!(fp.provider, "anthropic");
@@ -207,7 +270,8 @@ fn build_api_client_anthropic_url_composes_to_messages_endpoint() {
     // format!("{base_url}/messages")`).
     let runtime = build_runtime_with(None);
     let s = spec("anthropic", ProviderApi::Anthropic, "claude-sonnet-4-6");
-    let client = build_api_client(&runtime, &s, RetryConfig::default(), None).expect("api client");
+    let client =
+        build_api_client(&runtime, &s, RetryConfig::default(), None, None).expect("api client");
     let base_url = &client.fingerprint().base_url;
     let composed = if base_url.ends_with("/messages") {
         base_url.clone()
@@ -272,7 +336,7 @@ fn namespace_round_trip_for_openai_compat_instance() {
     };
     let runtime = build_runtime_with(Some(("internal-router".into(), partial)));
     let s = spec("internal-router", ProviderApi::OpenaiCompat, "local-model");
-    let model = build_language_model_from_runtime(&runtime, &s, None).expect("model");
+    let model = build_language_model_from_runtime(&runtime, &s, None, None).expect("model");
 
     let info_partial = coco_config::PartialModelInfo {
         context_window: Some(coco_config::PositiveTokens::new(128_000)),
@@ -335,7 +399,8 @@ fn build_api_client_resolves_api_model_name_override() {
         ProviderApi::OpenaiCompat,
         "internal/coder-v3",
     );
-    let client = build_api_client(&runtime, &s, RetryConfig::default(), None).expect("api client");
+    let client =
+        build_api_client(&runtime, &s, RetryConfig::default(), None, None).expect("api client");
     assert_eq!(
         client.fingerprint().api_model_name,
         "ep-internal-v3-prod",
@@ -464,7 +529,7 @@ fn gemini_code_assist_provider() -> ProviderConfig {
 fn build_google_oauth_not_logged_in_errors_with_login_hint() {
     let cfg = gemini_code_assist_provider();
     // No resolver / not logged in → actionable error, never a silent wrong-key build.
-    let err = match build_google(&cfg, "gemini-3.1-pro-preview", None) {
+    let err = match build_google(&cfg, "gemini-3.1-pro-preview", None, None) {
         Ok(_) => panic!("OAuth Gemini without a logged-in resolver must error"),
         Err(e) => e,
     };
@@ -482,7 +547,7 @@ fn build_google_oauth_logged_in_builds_code_assist_model() {
         project_id: Some("proj-1".into()),
         ..Default::default()
     }));
-    let model = build_google(&cfg, "gemini-3.1-pro-preview", Some(&resolver))
+    let model = build_google(&cfg, "gemini-3.1-pro-preview", Some(&resolver), None)
         .expect("a logged-in Code Assist provider builds");
     // The provider label is the configured instance name (set from the config,
     // like every other provider), not the crate default.

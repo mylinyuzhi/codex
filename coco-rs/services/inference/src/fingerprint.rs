@@ -136,12 +136,16 @@ impl ProviderClientFingerprint {
 /// digest.
 fn digest_client_options(opts: &ProviderClientOptions) -> [u8; 32] {
     let mut hasher = Sha256::new();
-    // headers: tag 0x01, then count, then per-entry (key, value).
+    // headers: tag 0x01, then count, then per-entry (key, mode-tag, raw value).
+    // The mode tag distinguishes a literal `"x"` from a template `{template:"x"}`
+    // with the same body, and `raw()` hashes the *unexpanded* template so a
+    // settings edit to the template string still invalidates the cached client.
     update_u8(&mut hasher, 0x01);
     update_u64(&mut hasher, opts.headers.len() as u64);
     for (k, v) in &opts.headers {
         update_bytes(&mut hasher, k.as_bytes());
-        update_bytes(&mut hasher, v.as_bytes());
+        update_u8(&mut hasher, if v.is_templated() { 1 } else { 0 });
+        update_bytes(&mut hasher, v.raw().as_bytes());
     }
     update_u8(&mut hasher, 0x02);
     update_optional_bytes(

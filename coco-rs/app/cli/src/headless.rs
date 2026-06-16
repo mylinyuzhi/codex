@@ -731,9 +731,22 @@ pub async fn run_chat_with_options(
     let main_model = resolve_main_model(&runtime_config);
     let provider_api = main_model.provider_api;
     let model_id = main_model.model_id.clone();
+    // Resolve the session id up front so the registry's header-template vars
+    // (`${SESSION_ID}`) and the `SessionRuntime` share one id. For
+    // resume/continue/fork the override is already `Some`; a fresh run mints
+    // one here and threads it into the build opts below.
+    let session_id = opts
+        .session_id_override
+        .clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let model_runtimes = Arc::new(coco_inference::ModelRuntimeRegistry::new(
         Arc::new(runtime_config.clone()),
         Some(crate::provider_login::shared_resolver()),
+        Arc::new(coco_inference::HeaderVars {
+            session_id: session_id.clone(),
+            cwd: cwd.display().to_string(),
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+        }),
     )?);
     let installed_fallback_count = runtime_config
         .model_roles
@@ -813,8 +826,10 @@ pub async fn run_chat_with_options(
             agent_search_paths: crate::paths::standard_agent_search_paths(&config_home, &cwd),
             builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
             // Resume / continue / fork: key every runtime subsystem off the
-            // resumed id, else task dirs + agent transcripts orphan.
-            session_id_override: opts.session_id_override.clone(),
+            // resumed id, else task dirs + agent transcripts orphan. Resolved
+            // above (override or freshly minted) and shared with the registry's
+            // header-template vars.
+            session_id_override: Some(session_id.clone()),
             // Headless / print: file-history checkpointing defaults OFF.
             is_non_interactive: true,
         },

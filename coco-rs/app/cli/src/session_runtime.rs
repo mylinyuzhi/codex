@@ -804,6 +804,11 @@ impl SessionRuntime {
             None => Arc::new(coco_inference::ModelRuntimeRegistry::new(
                 runtime_config.clone(),
                 Some(crate::provider_login::shared_resolver()),
+                Arc::new(coco_inference::HeaderVars {
+                    session_id: session_id.clone(),
+                    cwd: cwd.display().to_string(),
+                    app_version: env!("CARGO_PKG_VERSION").to_string(),
+                }),
             )?),
         };
         let side_query: coco_tool_runtime::SideQueryHandle = Arc::new(
