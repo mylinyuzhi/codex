@@ -253,6 +253,7 @@ fn picker_dismiss(modal: &ModalState) -> Option<PickerDismiss> {
         | M::Trust(_)
         | M::BypassPermissions(_)
         | M::TaskDetail(_)
+        | M::BackgroundTasks(_)
         | M::TeamRoster(_)
         | M::PluginHint(_)
         | M::Feedback(_) => return None,

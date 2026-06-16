@@ -6,6 +6,7 @@ use crate::state::agents_dialog::AgentsDialogState;
 use crate::state::permissions_editor::PermissionsEditorState;
 use crate::state::plugin_dialog::PluginDialogState;
 use crate::state::skills_dialog::SkillsDialogState;
+use crate::state::surface_payloads::BackgroundTasksState;
 use crate::state::surface_payloads::CopyPickerState;
 use crate::state::surface_payloads::DiffViewState;
 use crate::state::surface_payloads::DoctorState;
@@ -47,6 +48,7 @@ pub enum ModalState {
     Trust(surface_payloads::TrustState),
     BypassPermissions(surface_payloads::BypassPermissionsState),
     TaskDetail(TaskDetailState),
+    BackgroundTasks(BackgroundTasksState),
     Feedback(surface_payloads::FeedbackState),
     McpServerSelect(surface_payloads::McpServerSelectState),
     CopyPicker(CopyPickerState),
@@ -69,6 +71,7 @@ impl ModalState {
             | Self::Export(_)
             | Self::Feedback(_)
             | Self::TaskDetail(_)
+            | Self::BackgroundTasks(_)
             | Self::Doctor(_)
             | Self::Settings(_)
             | Self::Transcript(_)

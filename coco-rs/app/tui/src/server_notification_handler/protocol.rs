@@ -35,6 +35,7 @@ use crate::state::session::SubagentInstance;
 use crate::state::session::SubagentKind;
 use crate::state::session::SubagentStatus;
 use crate::state::session::TaskEntry;
+use crate::state::session::TaskEntryKind;
 use crate::state::session::TaskEntryStatus;
 use crate::state::ui::Toast;
 
@@ -312,10 +313,24 @@ pub(super) fn handle(
                 }
                 _ => {}
             }
+            let kind = match p.task_type.as_deref() {
+                Some(s) if s == task_type_wire::LOCAL_BASH => TaskEntryKind::Shell,
+                Some(s)
+                    if s == task_type_wire::LOCAL_AGENT
+                        || s == task_type_wire::IN_PROCESS_TEAMMATE
+                        || s == task_type_wire::REMOTE_AGENT =>
+                {
+                    TaskEntryKind::Agent
+                }
+                _ => TaskEntryKind::Other,
+            };
+            let started_at_ms = state.clock.now_ms();
             state.session.active_tasks.push(TaskEntry {
                 task_id: p.task_id,
                 description: p.description,
                 status: TaskEntryStatus::Running,
+                kind,
+                started_at_ms,
             });
             true
         }

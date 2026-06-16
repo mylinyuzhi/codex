@@ -64,9 +64,10 @@ fn status_bar_view_renders_model_tokens_context_and_messages() {
             },
         )));
 
-    let StatusBarView::BuiltIn { spans } = status_bar_view(&state) else {
+    let StatusBarView::BuiltIn { lines } = status_bar_view(&state) else {
         panic!("expected built-in status bar");
     };
+    let spans: Vec<&StatusSpan> = lines.iter().flatten().collect();
     let text = spans
         .iter()
         .map(|span| span.text.as_str())
@@ -86,14 +87,79 @@ fn status_bar_view_renders_model_tokens_context_and_messages() {
 }
 
 #[test]
+fn status_bar_splits_permission_pill_and_directory_onto_dynamic_lines() {
+    use crate::state::session::TaskEntry;
+    use crate::state::session::TaskEntryKind;
+    use crate::state::session::TaskEntryStatus;
+    use coco_types::PermissionMode;
+
+    let _locale = locale_test_guard("en");
+    let mut state = AppState::default();
+    state.session.provider = "openai".into();
+    state.session.model = "gpt-5.4".into();
+    state.session.permission_mode = PermissionMode::Auto;
+    state.session.working_dir = Some("/home/user/codex".into());
+    state.session.git_branch = Some("feat/automode".into());
+    state.session.active_tasks = vec![
+        TaskEntry {
+            task_id: "a1".into(),
+            description: "monitor".into(),
+            status: TaskEntryStatus::Running,
+            kind: TaskEntryKind::Agent,
+            started_at_ms: 0,
+        },
+        TaskEntry {
+            task_id: "s1".into(),
+            description: "sleep 9999".into(),
+            status: TaskEntryStatus::Running,
+            kind: TaskEntryKind::Shell,
+            started_at_ms: 0,
+        },
+    ];
+
+    assert_eq!(status_bar_height(&state), 3);
+    let StatusBarView::BuiltIn { lines } = status_bar_view(&state) else {
+        panic!("expected built-in status bar");
+    };
+    assert_eq!(lines.len(), 3);
+
+    let line_text = |i: usize| {
+        lines[i]
+            .iter()
+            .map(|span| span.text.as_str())
+            .collect::<String>()
+    };
+    // Line 1 no longer carries the permission segment.
+    assert!(line_text(0).contains("openai/gpt-5.4"));
+    assert!(!line_text(0).contains("auto mode on"));
+    // Line 2: permission symbol + label, then the TS-style pill.
+    assert!(line_text(1).contains("⏵⏵ auto mode on"));
+    assert!(line_text(1).contains("1 agent · 1 shell"));
+    // Line 3: directory basename + git branch (zsh-prompt style).
+    assert_eq!(line_text(2), " codex git:(feat/automode)");
+}
+
+#[test]
+fn status_bar_collapses_to_single_line_in_default_state() {
+    let _locale = locale_test_guard("en");
+    let state = AppState::default();
+    assert_eq!(status_bar_height(&state), 1);
+    let StatusBarView::BuiltIn { lines } = status_bar_view(&state) else {
+        panic!("expected built-in status bar");
+    };
+    assert_eq!(lines.len(), 1);
+}
+
+#[test]
 fn status_bar_view_renders_lsp_badge() {
     let _locale = locale_test_guard("en");
     let mut state = AppState::default();
     state.session.lsp_active = true;
 
-    let StatusBarView::BuiltIn { spans } = status_bar_view(&state) else {
+    let StatusBarView::BuiltIn { lines } = status_bar_view(&state) else {
         panic!("expected built-in status bar");
     };
+    let spans: Vec<&StatusSpan> = lines.iter().flatten().collect();
     let text = spans
         .iter()
         .map(|span| span.text.as_str())
@@ -107,9 +173,10 @@ fn status_bar_view_renders_unknown_context_without_assistant_usage() {
     let _locale = locale_test_guard("en");
     let state = AppState::default();
 
-    let StatusBarView::BuiltIn { spans } = status_bar_view(&state) else {
+    let StatusBarView::BuiltIn { lines } = status_bar_view(&state) else {
         panic!("expected built-in status bar");
     };
+    let spans: Vec<&StatusSpan> = lines.iter().flatten().collect();
     let text = spans
         .iter()
         .map(|span| span.text.as_str())
@@ -126,9 +193,10 @@ fn status_bar_view_renders_total_input_tokens_and_cache_breakdown() {
     state.session.token_usage.output_tokens = 14_800;
     state.session.token_usage.cache_read_tokens = 4_600_000;
 
-    let StatusBarView::BuiltIn { spans } = status_bar_view(&state) else {
+    let StatusBarView::BuiltIn { lines } = status_bar_view(&state) else {
         panic!("expected built-in status bar");
     };
+    let spans: Vec<&StatusSpan> = lines.iter().flatten().collect();
     let text = spans
         .iter()
         .map(|span| span.text.as_str())
@@ -156,9 +224,10 @@ fn status_bar_view_counts_transcript_messages_by_uuid_and_role() {
         .on_message_appended(Arc::new(assistant));
     test_helpers::push_tool_result(&mut state.session, "call-1", "Glob", "done", false);
 
-    let StatusBarView::BuiltIn { spans } = status_bar_view(&state) else {
+    let StatusBarView::BuiltIn { lines } = status_bar_view(&state) else {
         panic!("expected built-in status bar");
     };
+    let spans: Vec<&StatusSpan> = lines.iter().flatten().collect();
     let text = spans
         .iter()
         .map(|span| span.text.as_str())
@@ -233,9 +302,10 @@ fn built_in_status_preserves_pending_chord_hint() {
     );
     assert!(matches!(result, ResolverResult::Pending));
 
-    let StatusBarView::BuiltIn { spans } = status_bar_view(&state) else {
+    let StatusBarView::BuiltIn { lines } = status_bar_view(&state) else {
         panic!("expected built-in status bar");
     };
+    let spans: Vec<&StatusSpan> = lines.iter().flatten().collect();
     let text = spans
         .iter()
         .map(|span| span.text.as_str())

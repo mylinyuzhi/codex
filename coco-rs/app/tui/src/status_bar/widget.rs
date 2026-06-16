@@ -30,7 +30,7 @@ impl Widget for StatusBarWidget<'_> {
         if area.height == 0 {
             return;
         }
-        let line = match status_bar_view(self.state) {
+        let lines: Vec<Line> = match status_bar_view(self.state) {
             StatusBarView::ExitPrompt { key, text } => {
                 tracing::info!(
                     key = key.label(),
@@ -38,23 +38,28 @@ impl Widget for StatusBarWidget<'_> {
                     width = area.width,
                     "status bar rendering exit prompt"
                 );
-                Line::from(Span::styled(
+                vec![Line::from(Span::styled(
                     text,
                     Style::default().fg(self.styles.warning()).bold(),
-                ))
+                ))]
             }
-            StatusBarView::Custom { line } => Line::from(Span::styled(
+            StatusBarView::Custom { line } => vec![Line::from(Span::styled(
                 line,
                 Style::default().fg(self.styles.primary()),
-            )),
-            StatusBarView::BuiltIn { spans } => Line::from(
-                spans
-                    .iter()
-                    .map(|span| status_span(span, self.styles))
-                    .collect::<Vec<_>>(),
-            ),
+            ))],
+            StatusBarView::BuiltIn { lines } => lines
+                .iter()
+                .map(|spans| {
+                    Line::from(
+                        spans
+                            .iter()
+                            .map(|span| status_span(span, self.styles))
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect(),
         };
-        Paragraph::new(line).render(area, buf);
+        Paragraph::new(lines).render(area, buf);
     }
 }
 

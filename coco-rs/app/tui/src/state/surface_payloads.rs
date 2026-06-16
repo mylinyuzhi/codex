@@ -554,6 +554,24 @@ pub struct TaskDetailState {
     pub scroll: i32,
 }
 
+/// Background-tasks dialog state: a list of running shells/agents that drills
+/// into a per-task detail view. The task rows are derived live from
+/// `SessionState::running_background_tasks`; this struct holds only the
+/// cursor and which layer is showing.
+///
+/// No output-scroll offset yet: the detail view's output is a placeholder
+/// ("No output available") until live shell output is wired through a
+/// TUI↔core round-trip, at which point a `scroll` field returns alongside the
+/// renderer that reads it.
+#[derive(Debug, Clone, Default)]
+pub struct BackgroundTasksState {
+    /// Index into the live row list (clamped on render).
+    pub selected: usize,
+    /// `Some(task_id)` when the detail layer is open for that task; `None`
+    /// shows the list layer.
+    pub detail: Option<String>,
+}
+
 /// Feedback survey state.
 #[derive(Debug, Clone)]
 pub struct FeedbackState {

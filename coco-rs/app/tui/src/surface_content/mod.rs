@@ -39,6 +39,7 @@ pub(crate) enum TextSurfaceContent<'a> {
     Trust(&'a crate::state::TrustState),
     BypassPermissions(&'a crate::state::BypassPermissionsState),
     TaskDetail(&'a crate::state::TaskDetailState),
+    BackgroundTasks(&'a crate::state::BackgroundTasksState),
     Feedback(&'a crate::state::FeedbackState),
     PluginHint(&'a crate::state::PluginHintState),
     McpServerSelect(&'a crate::state::McpServerSelectState),
@@ -96,6 +97,7 @@ pub(crate) fn modal_text_surface(modal: &ModalState) -> Option<TextSurfaceConten
         ModalState::Trust(tr) => TextSurfaceContent::Trust(tr),
         ModalState::BypassPermissions(bp) => TextSurfaceContent::BypassPermissions(bp),
         ModalState::TaskDetail(td) => TextSurfaceContent::TaskDetail(td),
+        ModalState::BackgroundTasks(bt) => TextSurfaceContent::BackgroundTasks(bt),
         ModalState::Feedback(f) => TextSurfaceContent::Feedback(f),
         ModalState::McpServerSelect(ms) => TextSurfaceContent::McpServerSelect(ms),
         ModalState::PluginHint(ph) => TextSurfaceContent::PluginHint(ph),
@@ -162,6 +164,9 @@ pub(crate) fn surface_content(
             confirm::bypass_permissions_content(bp, styles)
         }
         TextSurfaceContent::TaskDetail(td) => confirm::task_detail_content(td, styles),
+        TextSurfaceContent::BackgroundTasks(bt) => {
+            confirm::background_tasks_content(bt, state, state.clock.now_ms(), styles)
+        }
         TextSurfaceContent::Feedback(f) => confirm::feedback_content(f, styles),
         TextSurfaceContent::PluginHint(ph) => confirm::plugin_hint_content(ph, styles),
         TextSurfaceContent::McpServerSelect(ms) => pickers::mcp_server_select_content(ms, styles),

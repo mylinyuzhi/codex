@@ -21,6 +21,7 @@ use coco_tui_ui::constants;
 use exit::ExitEffect;
 
 mod agents_dialog;
+mod background_tasks;
 mod clipboard;
 pub(crate) use clipboard::sniff_image_path_paste;
 mod edit;
@@ -106,6 +107,14 @@ pub async fn handle_command(
         return changed;
     }
 
+    // The background-tasks dialog (full-screen list + per-task detail) owns
+    // its own ↑/↓ select, Enter drill, `x` stop, ←/Esc back-or-close.
+    if let background_tasks::Handled::Yes(changed) =
+        background_tasks::intercept(state, &cmd, command_tx).await
+    {
+        return changed;
+    }
+
     // The `/permissions` editor has its own tab cycle, inline add form,
     // and delete confirmation that the generic modal dispatch can't model.
     if let crate::modal_pane::permissions_editor::Handled::Yes(changed) =
@@ -118,6 +127,32 @@ pub async fn handle_command(
     // consumed here so the keystrokes don't leak into the chat composer.
     if crate::bottom_pane::permission::intercept_prefix_edit(state, &cmd) {
         return true;
+    }
+
+    // When the footer background-tasks pill holds focus (parked there by
+    // pressing Down at the bottom of the composer), Enter opens the dialog
+    // and Up/Esc/Left return focus to the input. Any other key drops focus
+    // back to the input and falls through so the keystroke isn't lost. If the
+    // pill vanished (all tasks finished) while parked here, release focus so
+    // the user isn't stuck on an invisible target.
+    if state.ui.focus == FocusTarget::FooterShells {
+        if crate::status_bar::background_pill_label(state).is_none() {
+            state.ui.focus = FocusTarget::Input;
+        } else {
+            match &cmd {
+                TuiCommand::SubmitInput => {
+                    state.ui.focus = FocusTarget::Input;
+                    background_tasks::open(state);
+                    return true;
+                }
+                TuiCommand::CursorUp | TuiCommand::Cancel | TuiCommand::CursorLeft => {
+                    state.ui.focus = FocusTarget::Input;
+                    return true;
+                }
+                TuiCommand::CursorDown => return true,
+                _ => state.ui.focus = FocusTarget::Input,
+            }
+        }
     }
 
     let changed = match cmd {
@@ -603,7 +638,7 @@ pub async fn handle_command(
         TuiCommand::FocusNext | TuiCommand::FocusPrevious => {
             state.ui.focus = match state.ui.focus {
                 FocusTarget::Input => FocusTarget::Chat,
-                FocusTarget::Chat => FocusTarget::Input,
+                FocusTarget::Chat | FocusTarget::FooterShells => FocusTarget::Input,
             };
             true
         }
