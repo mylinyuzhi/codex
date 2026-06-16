@@ -301,7 +301,7 @@ impl QueryEngine {
         if let (Some(store), Some(session_id)) =
             (&self.transcript_store, &self.transcript_session_id)
         {
-            return Some(store.session_artifact_dir(session_id));
+            return store.session_artifact_dir(session_id);
         }
         None
     }
@@ -700,7 +700,7 @@ impl QueryEngine {
             transcript_path: self
                 .transcript_store
                 .as_ref()
-                .map(|store| store.transcript_path(&self.config.session_id)),
+                .and_then(|store| store.transcript_path(&self.config.session_id)),
             hook_handle,
             // Real `AgentHandle` when the CLI / SDK / TUI installed
             // one via `with_agent_handle`; otherwise fall back to

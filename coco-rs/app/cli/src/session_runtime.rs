@@ -65,6 +65,15 @@ use crate::Cli;
 /// `FileHistorySnapshotSink` that writes via [`TranscriptStore`]. Lives
 /// here because both runners need to install it on `FileHistoryState`.
 ///
+/// **Deliberately bypasses the `SessionStore` backend trait** and
+/// constructs a concrete disk [`TranscriptStore`] directly: file-history
+/// checkpoints are a low-frequency, local-only convenience (rewind / disk
+/// backup), not authoritative session state — they are not needed to
+/// recover a conversation and are explicitly declared local-cache
+/// (`docs/coco-rs/session-storage-backend-design.md` §3.4). So even under
+/// a non-`Disk` `session.backend` they stay on disk; there's nothing to
+/// gain from routing them through the swappable boundary.
+///
 /// `session_id` is shared via `Arc<std::sync::RwLock<String>>` so
 /// `SessionRuntime::clear_conversation` can swap it in place without
 /// rebuilding the sink. Without this, a `/clear` regen would leave the
@@ -613,8 +622,9 @@ pub struct SessionRuntime {
     /// Main-session transcript store. JSONL writes for the user /
     /// assistant / attachment / tool_result chain land here, keyed
     /// by the live session id (rotates on `/clear`). Cloned into
-    /// every per-turn engine via [`Self::wire_engine`].
-    transcript_store: Arc<TranscriptStore>,
+    /// every per-turn engine via [`Self::wire_engine`]. Backend-agnostic
+    /// (`dyn SessionStore`) so it honors the configured `session.backend`.
+    transcript_store: Arc<dyn coco_session::SessionStore>,
     /// When false, all transcript / usage / file-history persistence is
     /// suppressed for this run.
     persist_session: bool,
@@ -1260,12 +1270,20 @@ impl SessionRuntime {
         // role overrides through the shared ModelRuntimeRegistry.
         let hook_llm_handle =
             Arc::new(coco_query::hook_llm::QueryHookLlm::for_session(model_runtimes.clone()).await);
-        // Main-session transcript store. Constructed once so the
-        // file-history sink, the per-turn message append in
-        // `engine_finalize_turn`, and the agent-transcript persistence
-        // path all share the same `TranscriptStore` instance keyed at
-        // `<memory_base>/projects/<slug>/` for this cwd.
-        let transcript_store = Arc::new(TranscriptStore::new(project_paths.clone()));
+        // Main-session transcript store, selected by `session.backend`.
+        // Constructed once so the per-turn message append in
+        // `engine_finalize_turn` and the agent-transcript persistence path
+        // share one instance. `Disk` keys at `<memory_base>/projects/<slug>/`
+        // for this cwd (today's behavior); `Memory` pulls the shared
+        // in-memory store from the session manager's catalog so the engine
+        // and `SessionManager` observe the same ephemeral state.
+        let transcript_store: Arc<dyn coco_session::SessionStore> =
+            match runtime_config.settings.merged.session.backend {
+                coco_config::SessionBackend::Disk => {
+                    Arc::new(TranscriptStore::new(project_paths.clone()))
+                }
+                coco_config::SessionBackend::Memory => session_manager.store_for(&cwd),
+            };
         let session_usage_tracker = Arc::new(tokio::sync::Mutex::new(
             transcript_store
                 .load_usage_snapshot(&session_id)

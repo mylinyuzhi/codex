@@ -237,7 +237,7 @@ impl QueryEngine {
     /// in-memory ledger only (commits are lost on restart).
     pub fn with_transcript_store(
         mut self,
-        store: Arc<coco_session::TranscriptStore>,
+        store: Arc<dyn coco_session::SessionStore>,
         session_id: String,
     ) -> Self {
         self.transcript_store = Some(store);

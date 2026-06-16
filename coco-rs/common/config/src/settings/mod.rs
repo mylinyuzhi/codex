@@ -621,6 +621,36 @@ pub struct SessionSettings {
     /// `ModelRole::Fast` — if no Fast role is configured, the feature
     /// silently stays off.
     pub auto_title: bool,
+
+    /// Where session transcripts + usage snapshots are persisted. The
+    /// resolved value selects the `coco_session::SessionCatalog` backend
+    /// at both construction points (the cross-project `SessionManager`
+    /// and each per-turn engine's transcript store).
+    pub backend: SessionBackend,
+}
+
+/// Backend the session store persists to. `Disk` is the authoritative
+/// default (append-only JSONL under `<memory_base>/projects/`); every
+/// other variant trades durability for something else.
+///
+/// Scope note: this only governs the **main transcript + usage
+/// snapshot**. Local-only sidecars (file-history checkpoints, subagent
+/// transcripts, tool-result blobs) keep their own local-cache policy and
+/// may still touch disk under a non-`Disk` backend — full-fidelity
+/// recovery of those degrades by design (see
+/// `docs/coco-rs/session-storage-backend-design.md` §0/§3.4).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionBackend {
+    /// Append-only JSONL on local disk. Authoritative; supports resume,
+    /// cross-project listing, and `coco ps`. The only durable backend.
+    #[default]
+    Disk,
+    /// Process-lifetime RAM only — nothing is written to disk, so the
+    /// session vanishes on exit and cannot be resumed. Useful for
+    /// ephemeral / throwaway runs and as the heterogeneous backend that
+    /// proves the store traits aren't carved to the on-disk shape.
+    Memory,
 }
 
 /// Phase-4 "Final Plan" prompt strictness (5-phase workflow only).

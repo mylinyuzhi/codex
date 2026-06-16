@@ -408,7 +408,10 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     let model_id = resources.model_id.clone();
     let system_prompt = Some(resources.system_prompt.clone());
 
-    let session_manager = Arc::new(SessionManager::new(global_config::config_home()));
+    let session_manager = Arc::new(SessionManager::with_backend(
+        runtime_config.settings.merged.session.backend,
+        global_config::config_home(),
+    ));
     let session_manager_for_runtime = session_manager.clone();
 
     let mcp_manager = Arc::new(tokio::sync::Mutex::new(
