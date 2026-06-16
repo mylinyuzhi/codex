@@ -5,6 +5,7 @@ pub mod error;
 pub mod history;
 pub mod recovery;
 pub mod storage;
+pub mod store;
 pub mod title_generator;
 
 pub use concurrent_sessions::SessionKind;
@@ -27,8 +28,17 @@ pub use storage::TranscriptMetadata;
 pub use storage::TranscriptStore;
 pub use storage::TranscriptUsage;
 pub use storage::build_file_history_snapshot_chain;
+pub use store::AgentTranscriptStore;
+pub use store::DiskCatalog;
+pub use store::InMemoryCatalog;
+pub use store::InMemoryStore;
+pub use store::ResolvedSession;
+pub use store::SessionCatalog;
+pub use store::SessionStore;
+pub use store::TranscriptIo;
+pub use store::UsageSnapshotStore;
+pub use store::catalog_for_backend;
 
-use coco_paths::ProjectPaths;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::Path;
@@ -106,21 +116,48 @@ impl Session {
 /// keyed by session id walk projects to locate the transcript.
 pub struct SessionManager {
     memory_base: PathBuf,
+    catalog: Arc<dyn SessionCatalog>,
 }
 
 impl SessionManager {
     /// Build a session manager rooted at `memory_base` (typically
-    /// `coco_config::global_config::config_home()`).
+    /// `coco_config::global_config::config_home()`). Always disk-backed —
+    /// use [`with_backend`](Self::with_backend) to honor a configured
+    /// `session.backend`.
     pub fn new(memory_base: PathBuf) -> Self {
-        Self { memory_base }
+        let catalog = Arc::new(DiskCatalog::new(memory_base.clone()));
+        Self {
+            memory_base,
+            catalog,
+        }
     }
 
-    fn project_paths_for(&self, cwd: &Path) -> Arc<ProjectPaths> {
-        Arc::new(ProjectPaths::new(self.memory_base.clone(), cwd))
+    /// Build a session manager for the configured backend. The selection
+    /// is the resolved `RuntimeConfig` field `session.backend` — callers
+    /// pass `runtime_config.settings.merged.session.backend`.
+    pub fn with_backend(backend: coco_config::SessionBackend, memory_base: PathBuf) -> Self {
+        let catalog = store::catalog_for_backend(backend, memory_base.clone());
+        Self {
+            memory_base,
+            catalog,
+        }
     }
 
-    fn store_for(&self, cwd: &Path) -> storage::TranscriptStore {
-        storage::TranscriptStore::new(self.project_paths_for(cwd))
+    /// Inject a custom backend catalog (e.g. a future remote / tee store).
+    /// `memory_base` is retained only for the disk-specific maintenance
+    /// helper (`cleanup_older_than`) that has no backend-agnostic form yet.
+    pub fn with_catalog(memory_base: PathBuf, catalog: Arc<dyn SessionCatalog>) -> Self {
+        Self {
+            memory_base,
+            catalog,
+        }
+    }
+
+    /// A store scoped to `cwd`'s project, from the configured backend.
+    /// The per-turn engine sources its transcript store here so it shares
+    /// the manager's backend (and, for non-disk backends, its state).
+    pub fn store_for(&self, cwd: &Path) -> Arc<dyn SessionStore> {
+        self.catalog.store_for(cwd)
     }
 
     /// Create a new in-memory session. **Does not write to disk** —
@@ -241,13 +278,11 @@ impl SessionManager {
     /// `<memory_base>/projects/*/{id}.jsonl` (via global scan) and
     /// deriving the lite metadata view.
     pub fn load(&self, id: &str) -> crate::Result<Session> {
-        let Some(resolved) = storage::resolve_session_file_path(&self.memory_base, id, None)?
-        else {
+        let Some(meta) = self.catalog.read_metadata(id, None)? else {
             return Err(SessionError::TranscriptNotFound {
                 path: coco_paths::projects_root(&self.memory_base).join(format!("*/{id}.jsonl")),
             });
         };
-        let meta = storage::read_transcript_metadata_at(&resolved.file_path, id)?;
         Ok(Session::from_transcript_metadata(meta))
     }
 
@@ -261,7 +296,7 @@ impl SessionManager {
 
     /// List every session across every project, newest first.
     pub fn list(&self) -> crate::Result<Vec<Session>> {
-        let metas = storage::list_all_sessions(&self.memory_base)?;
+        let metas = self.catalog.list_all()?;
         Ok(metas
             .into_iter()
             .map(Session::from_transcript_metadata)
@@ -310,11 +345,9 @@ impl SessionManager {
     /// re-appended — AI titles are lower-priority and are not refreshed
     /// to EOF.
     pub fn re_append_session_metadata(&self, id: &str) -> crate::Result<()> {
-        let Some(resolved) = storage::resolve_session_file_path(&self.memory_base, id, None)?
-        else {
+        let Some(meta) = self.catalog.read_metadata(id, None)? else {
             return Ok(());
         };
-        let meta = storage::read_transcript_metadata_at(&resolved.file_path, id)?;
         let working_dir = meta.cwd.as_deref().map(PathBuf::from).unwrap_or_default();
         let store = self.store_for(&working_dir);
 
@@ -436,7 +469,9 @@ impl SessionManager {
         if needle.is_empty() {
             return Ok(Vec::new());
         }
-        Ok(storage::list_all_sessions(&self.memory_base)?
+        Ok(self
+            .catalog
+            .list_all()?
             .into_iter()
             .filter(|meta| match meta.custom_title.as_deref() {
                 Some(t) => {
@@ -458,15 +493,7 @@ impl SessionManager {
     /// session subdirectory (`<project>/<id>/`) is left intact;
     /// the retention sweep handles its eventual collection.
     pub fn delete(&self, id: &str) -> crate::Result<()> {
-        let Some(resolved) = storage::resolve_session_file_path(&self.memory_base, id, None)?
-        else {
-            return Ok(());
-        };
-        match std::fs::remove_file(&resolved.file_path) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e.into()),
-        }
+        self.catalog.delete(id, None)
     }
 
     /// Most-recent session across every project (= the first entry

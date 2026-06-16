@@ -746,7 +746,9 @@ impl TranscriptStore {
     }
 
     /// Append messages using TS-compatible wire conversion and prefix-only
-    /// dedup semantics.
+    /// dedup semantics. Thin wrapper over the backend-independent
+    /// [`build_message_chain_entries`] — it builds the entry list (and
+    /// mutates `seen`) then writes each line to the JSONL.
     pub fn append_message_chain<'a, I>(
         &self,
         session_id: &str,
@@ -757,63 +759,10 @@ impl TranscriptStore {
     where
         I: IntoIterator<Item = &'a coco_messages::Message>,
     {
-        let mut prev_uuid = options.starting_parent_uuid.clone();
-        let mut wrote_new = false;
-        let mut result = ChainWriteResult::default();
-        let mut source_by_tool_use: std::collections::HashMap<String, Uuid> =
-            std::collections::HashMap::new();
-
-        for msg in messages {
-            let Some(uuid) = msg.uuid().copied() else {
-                continue;
-            };
-            remember_assistant_tool_calls(msg, uuid, &mut source_by_tool_use);
-
-            if seen.contains(&uuid) {
-                if !wrote_new {
-                    prev_uuid = Some(uuid.to_string());
-                }
-                continue;
-            }
-
-            let logical_parent_uuid = prev_uuid.clone();
-            let source_assistant_uuid = source_assistant_uuid_for_tool_result(msg).or_else(|| {
-                tool_result_use_id(msg).and_then(|id| source_by_tool_use.get(id).copied())
-            });
-            let parent_uuid = if is_compact_boundary_message(msg) {
-                None
-            } else if let Some(source_uuid) = source_assistant_uuid {
-                Some(source_uuid.to_string())
-            } else {
-                prev_uuid.clone()
-            };
-            let entries = transcript_entries_for_message(
-                msg,
-                TranscriptEntryOptions {
-                    session_id,
-                    cwd: &options.cwd,
-                    timestamp: &options.timestamp,
-                    parent_uuid: parent_uuid.as_deref(),
-                    logical_parent_uuid: logical_parent_uuid.as_deref(),
-                    is_sidechain: options.is_sidechain,
-                    agent_id: options.agent_id.as_deref(),
-                    git_branch: options.git_branch.as_deref(),
-                },
-            );
-            if entries.is_empty() {
-                continue;
-            }
-
-            for entry in &entries {
-                self.append_message(session_id, entry)?;
-            }
-            seen.insert(uuid);
-            wrote_new = true;
-            prev_uuid = Some(uuid.to_string());
-            result.last_written_uuid = Some(uuid);
-            result.appended += entries.len();
+        let (entries, result) = build_message_chain_entries(session_id, messages, seen, &options);
+        for entry in &entries {
+            self.append_entry(session_id, entry)?;
         }
-
         Ok(result)
     }
 
@@ -929,25 +878,7 @@ impl TranscriptStore {
         session_id: &str,
     ) -> crate::Result<(Vec<serde_json::Value>, Option<serde_json::Value>)> {
         let entries = self.load_entries(session_id)?;
-        let mut commits = Vec::new();
-        let mut last_snapshot: Option<serde_json::Value> = None;
-        for e in entries {
-            let Entry::Metadata(meta) = e else { continue };
-            match meta {
-                MetadataEntry::MarbleOrigamiCommit { payload } => {
-                    if matches_session(&payload, session_id) {
-                        commits.push(payload);
-                    }
-                }
-                MetadataEntry::MarbleOrigamiSnapshot { payload } => {
-                    if matches_session(&payload, session_id) {
-                        last_snapshot = Some(payload);
-                    }
-                }
-                _ => {}
-            }
-        }
-        Ok((commits, last_snapshot))
+        Ok(marble_origami_entries(&entries, session_id))
     }
 
     /// Replay file-history snapshots from the transcript JSONL in
@@ -1032,6 +963,80 @@ impl TranscriptStore {
         }
         Ok(())
     }
+}
+
+/// Build the transcript entries for a conversation chain with prefix-only
+/// dedup, mutating `seen` exactly as the append path does. Pure: no IO.
+///
+/// Both [`TranscriptStore::append_message_chain`] (writes the entries to
+/// the JSONL) and the in-memory backend ([`crate::store::InMemoryStore`])
+/// drive off this, so chain / parent-uuid / dedup semantics stay
+/// identical regardless of where the bytes land.
+pub fn build_message_chain_entries<'a, I>(
+    session_id: &str,
+    messages: I,
+    seen: &mut HashSet<Uuid>,
+    options: &ChainWriteOptions,
+) -> (Vec<Entry>, ChainWriteResult)
+where
+    I: IntoIterator<Item = &'a coco_messages::Message>,
+{
+    let mut prev_uuid = options.starting_parent_uuid.clone();
+    let mut wrote_new = false;
+    let mut result = ChainWriteResult::default();
+    let mut out: Vec<Entry> = Vec::new();
+    let mut source_by_tool_use: std::collections::HashMap<String, Uuid> =
+        std::collections::HashMap::new();
+
+    for msg in messages {
+        let Some(uuid) = msg.uuid().copied() else {
+            continue;
+        };
+        remember_assistant_tool_calls(msg, uuid, &mut source_by_tool_use);
+
+        if seen.contains(&uuid) {
+            if !wrote_new {
+                prev_uuid = Some(uuid.to_string());
+            }
+            continue;
+        }
+
+        let logical_parent_uuid = prev_uuid.clone();
+        let source_assistant_uuid = source_assistant_uuid_for_tool_result(msg)
+            .or_else(|| tool_result_use_id(msg).and_then(|id| source_by_tool_use.get(id).copied()));
+        let parent_uuid = if is_compact_boundary_message(msg) {
+            None
+        } else if let Some(source_uuid) = source_assistant_uuid {
+            Some(source_uuid.to_string())
+        } else {
+            prev_uuid.clone()
+        };
+        let entries = transcript_entries_for_message(
+            msg,
+            TranscriptEntryOptions {
+                session_id,
+                cwd: &options.cwd,
+                timestamp: &options.timestamp,
+                parent_uuid: parent_uuid.as_deref(),
+                logical_parent_uuid: logical_parent_uuid.as_deref(),
+                is_sidechain: options.is_sidechain,
+                agent_id: options.agent_id.as_deref(),
+                git_branch: options.git_branch.as_deref(),
+            },
+        );
+        if entries.is_empty() {
+            continue;
+        }
+
+        result.appended += entries.len();
+        out.extend(entries.into_iter().map(|e| Entry::Transcript(Box::new(e))));
+        seen.insert(uuid);
+        wrote_new = true;
+        prev_uuid = Some(uuid.to_string());
+        result.last_written_uuid = Some(uuid);
+    }
+
+    (out, result)
 }
 
 fn unlink_if_older_than(path: &Path, cutoff: std::time::SystemTime) -> crate::Result<bool> {
@@ -1145,6 +1150,34 @@ pub fn content_replacements_for_chain(
         .flat_map(|records| records.iter())
         .cloned()
         .collect()
+}
+
+/// Replay marble-origami entries for `session_id` from in-memory entries:
+/// `(commits_in_order, last_snapshot_or_none)`, snapshot last-wins. Pure;
+/// shared by the disk loader and the in-memory backend.
+pub fn marble_origami_entries(
+    entries: &[Entry],
+    session_id: &str,
+) -> (Vec<serde_json::Value>, Option<serde_json::Value>) {
+    let mut commits = Vec::new();
+    let mut last_snapshot: Option<serde_json::Value> = None;
+    for e in entries {
+        let Entry::Metadata(meta) = e else { continue };
+        match meta {
+            MetadataEntry::MarbleOrigamiCommit { payload } => {
+                if matches_session(payload, session_id) {
+                    commits.push(payload.clone());
+                }
+            }
+            MetadataEntry::MarbleOrigamiSnapshot { payload } => {
+                if matches_session(payload, session_id) {
+                    last_snapshot = Some(payload.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    (commits, last_snapshot)
 }
 
 /// Whether a marble-origami payload's session id field equals `session_id`.
@@ -1296,8 +1329,29 @@ fn read_transcript_metadata(path: &Path, session_id: &str) -> crate::Result<Tran
     } else {
         std::fs::read_to_string(path)?
     };
-    let lines: Vec<&str> = content.lines().collect();
+    let entries: Vec<Entry> = content
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(parse_entry)
+        .collect();
 
+    // Content-derived fields come from the shared fold; the fs-stat trio
+    // (created/modified/file_size) is layered on top here — those are the
+    // disk-specific bits a non-fs backend cannot supply from entries alone.
+    let mut meta = fold_transcript_metadata(&entries, session_id);
+    meta.created_at = created_at;
+    meta.modified_at = modified_at;
+    meta.file_size = file_size;
+    Ok(meta)
+}
+
+/// Derive the **content** fields of [`TranscriptMetadata`] from in-memory
+/// entries — everything except the fs-stat trio
+/// (`created_at`/`modified_at`/`file_size`), which is left at its default
+/// for the caller to stamp. Pure: no IO. Shared by the disk head/tail
+/// reader and any non-fs backend ([`crate::store::InMemoryStore`]) that
+/// already holds the entries in memory.
+pub fn fold_transcript_metadata(entries: &[Entry], session_id: &str) -> TranscriptMetadata {
     let mut first_prompt = String::new();
     let mut custom_title: Option<String> = None;
     let mut ai_title: Option<String> = None;
@@ -1314,12 +1368,8 @@ fn read_transcript_metadata(path: &Path, session_id: &str) -> crate::Result<Tran
     let mut is_sidechain = false;
     let mut message_count: i32 = 0;
 
-    for line in &lines {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let entry = parse_entry(line);
-        match &entry {
+    for entry in entries {
+        match entry {
             Entry::Transcript(t) => {
                 if t.entry_type == entry_kind::USER || t.entry_type == entry_kind::ASSISTANT {
                     message_count += 1;
@@ -1415,7 +1465,7 @@ fn read_transcript_metadata(path: &Path, session_id: &str) -> crate::Result<Tran
         }
     }
 
-    Ok(TranscriptMetadata {
+    TranscriptMetadata {
         session_id: session_id.to_string(),
         first_prompt,
         message_count,
@@ -1432,10 +1482,10 @@ fn read_transcript_metadata(path: &Path, session_id: &str) -> crate::Result<Tran
         git_branch,
         cwd,
         is_sidechain,
-        created_at,
-        modified_at,
-        file_size,
-    })
+        created_at: String::new(),
+        modified_at: String::new(),
+        file_size: 0,
+    }
 }
 
 fn metadata_payload_session_id(payload: &serde_json::Value) -> Option<String> {

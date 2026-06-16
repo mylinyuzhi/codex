@@ -127,6 +127,7 @@ pub use settings::PartialLogSettings;
 pub use settings::PlanModeSettings;
 pub use settings::PlanModeWorkflow;
 pub use settings::PlanPhase4Variant;
+pub use settings::SessionBackend;
 pub use settings::SessionSettings;
 pub use settings::Settings;
 pub use settings::SettingsWithSource;

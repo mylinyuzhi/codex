@@ -818,7 +818,10 @@ pub async fn run_chat_with_options(
             permission_mode,
             model_runtimes: Some(model_runtimes),
             tools: tools.clone(),
-            session_manager: Arc::new(coco_session::SessionManager::new(config_home.clone())),
+            session_manager: Arc::new(coco_session::SessionManager::with_backend(
+                runtime_config.settings.merged.session.backend,
+                config_home.clone(),
+            )),
             fast_model_spec: None,
             permission_bridge: None,
             command_registry: Arc::new(tokio::sync::RwLock::new(Arc::new(command_registry))),

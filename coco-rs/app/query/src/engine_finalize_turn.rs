@@ -1027,12 +1027,9 @@ impl QueryEngine {
             starting_parent_uuid: None,
             git_branch,
         };
-        if let Err(e) = store.append_message_chain(
-            sid,
-            history.iter().map(AsRef::as_ref),
-            &mut seen_guard,
-            options,
-        ) {
+        let message_refs: Vec<&coco_messages::Message> =
+            history.iter().map(AsRef::as_ref).collect();
+        if let Err(e) = store.append_message_chain(sid, &message_refs, &mut seen_guard, options) {
             warn!(error = %e, "failed to append transcript chain");
         }
     }

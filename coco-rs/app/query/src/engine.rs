@@ -373,7 +373,7 @@ pub struct QueryEngine {
     /// per-turn user/assistant JSONL append. `None` disables
     /// persistence (in-memory ledger only). Caller wires this via
     /// `with_transcript_store`.
-    pub(crate) transcript_store: Option<Arc<coco_session::TranscriptStore>>,
+    pub(crate) transcript_store: Option<Arc<dyn coco_session::SessionStore>>,
     /// Shared session-level usage tracker. QueryEngine is rebuilt per
     /// user message, so the runtime owns this and wires it into every
     /// engine instance.

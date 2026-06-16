@@ -19,6 +19,14 @@ pub enum SessionError {
     #[error(transparent)]
     Json(#[from] serde_json::Error),
 
+    /// Error raised by a non-fs backend (DB / HTTP / object store). Carries
+    /// the backend's own `StatusCode` so classification survives the
+    /// boundary instead of collapsing to `Generic`. `Box<dyn ErrorExt>`
+    /// does not auto-impl `std::error::Error`, so this is a plain
+    /// `Display`-formatted variant (no `transparent` / `#[from]`).
+    #[error("backend error: {0}")]
+    Backend(coco_error::BoxedError),
+
     #[error("transcript not found: {path}")]
     TranscriptNotFound { path: PathBuf },
 
@@ -55,6 +63,7 @@ impl ErrorExt for SessionError {
         match self {
             Self::Io(_) => StatusCode::IoError,
             Self::Json(_) => StatusCode::InvalidJson,
+            Self::Backend(e) => e.status_code(),
             Self::TranscriptNotFound { .. } => StatusCode::FileNotFound,
             Self::InvalidTranscriptPath { .. } => StatusCode::InvalidArguments,
             Self::DurationOverflow => StatusCode::Internal,

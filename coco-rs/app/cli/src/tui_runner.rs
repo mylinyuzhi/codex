@@ -142,8 +142,11 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
 
     // Session manager for auto-title persistence (F5). Built here so
     // `SessionRuntime::build` can borrow it and the cleanup task can
-    // own it.
-    let session_manager = Arc::new(coco_session::SessionManager::new(
+    // own it. Backend (disk / memory) follows the resolved
+    // `session.backend`; `SessionRuntime` sources its engine store from
+    // this same manager so both observe one backend.
+    let session_manager = Arc::new(coco_session::SessionManager::with_backend(
+        runtime_config.settings.merged.session.backend,
         coco_config::global_config::config_home(),
     ));
     let _ = session_manager.create(&model_id, &cwd);
