@@ -439,9 +439,11 @@ fn exit_plan_pending_live_tail_has_no_busy_spinner() {
     // ToolUseQueued fires start_tool("ExitPlanMode"); the overlay-driven skip
     // keeps it out of the ledger, so no `⠋ Processing…` busy spinner appears
     // above the plan (the prior leak: active_transcript_cell saw it Queued).
-    state
-        .session
-        .start_tool("call-1".into(), "ExitPlanMode".into());
+    state.session.start_tool(
+        "call-1".into(),
+        "ExitPlanMode".into(),
+        &serde_json::Value::Null,
+    );
     let styles = UiStyles::new(&state.ui.theme);
     let lines = build_live_tail_lines(&state, styles, 96, native_plan());
     let text = lines

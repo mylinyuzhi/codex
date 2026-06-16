@@ -342,18 +342,14 @@ pub(super) fn handle(
         }
 
         // === Streaming tool display ===
+        TuiOnlyEvent::ToolCallStreamStart { call_id, name } => {
+            // Open a pre-queue streaming row so the activity strip shows the
+            // tool (and its arguments, as they arrive) before it is queued.
+            state.session.begin_tool_stream(call_id, name);
+            true
+        }
         TuiOnlyEvent::ToolCallDelta { call_id, delta } => {
-            let Some(tool) = state
-                .session
-                .tool_executions
-                .iter_mut()
-                .find(|t| t.call_id == call_id)
-            else {
-                return false;
-            };
-            tool.streaming_input
-                .get_or_insert_with(String::new)
-                .push_str(&delta);
+            state.session.append_tool_stream_delta(&call_id, &delta);
             true
         }
         TuiOnlyEvent::ToolProgress { tool_use_id, data } => {

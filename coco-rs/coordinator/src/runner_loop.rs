@@ -501,9 +501,14 @@ pub async fn run_in_process_teammate(
                     if recent_activities.len() >= RECENT_ACTIVITIES_CAP {
                         recent_activities.pop_front();
                     }
+                    // The committed ToolCall carries its full input — flatten it
+                    // to the salient argument so the activity row reads
+                    // `Bash(cargo build)` instead of a bare `Bash`.
+                    let summary =
+                        coco_types::tool_summary::tool_input_summary(&call.tool_name, &call.input);
                     recent_activities.push_back(coco_types::TaskActivity {
                         tool_name: call.tool_name.clone(),
-                        summary: None,
+                        summary: (!summary.is_empty()).then_some(summary),
                     });
                 }
             }

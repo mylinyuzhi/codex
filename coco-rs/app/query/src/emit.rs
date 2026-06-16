@@ -196,6 +196,7 @@ fn tui_kind(evt: &TuiOnlyEvent) -> &'static str {
         TuiOnlyEvent::SessionMemoryExtractionFailed { .. } => "session_memory_extraction_failed",
         TuiOnlyEvent::CronJobDisabled { .. } => "cron_job_disabled",
         TuiOnlyEvent::CronJobsMissed { .. } => "cron_jobs_missed",
+        TuiOnlyEvent::ToolCallStreamStart { .. } => "tool_call_stream_start",
         TuiOnlyEvent::ToolCallDelta { .. } => "tool_call_delta",
         TuiOnlyEvent::ToolProgress { .. } => "tool_progress",
         TuiOnlyEvent::ToolInterruptibilityChanged { .. } => "tool_interruptibility_changed",

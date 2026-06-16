@@ -578,6 +578,12 @@ fn spawn_task_event_drain(
         // while TextDelta is appended so TaskOutput can read mid-flight
         // output.
         let mut tracker = coco_types::TaskProgress::default();
+        // `ToolUseQueued` (carries the full input) fires before
+        // `ToolUseStarted` (carries no input); stash the input-derived
+        // summary keyed by call_id so the activity row can read
+        // `Bash(cargo build)` rather than a bare `Bash`.
+        let mut pending_summaries: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
         while let Some(event) = event_rx.recv().await {
             match event {
                 coco_types::CoreEvent::Stream(coco_types::AgentStreamEvent::TextDelta {
@@ -586,7 +592,18 @@ fn spawn_task_event_drain(
                 }) => {
                     registry.append_output(&task_id, &delta).await;
                 }
+                coco_types::CoreEvent::Stream(coco_types::AgentStreamEvent::ToolUseQueued {
+                    call_id,
+                    name,
+                    input,
+                }) => {
+                    let summary = coco_types::tool_summary::tool_input_summary(&name, &input);
+                    if !summary.is_empty() {
+                        pending_summaries.insert(call_id, summary);
+                    }
+                }
                 coco_types::CoreEvent::Stream(coco_types::AgentStreamEvent::ToolUseStarted {
+                    call_id,
                     name,
                     ..
                 }) => {
@@ -601,7 +618,7 @@ fn spawn_task_event_drain(
                     }
                     tracker.recent_activities.push(coco_types::TaskActivity {
                         tool_name: name,
-                        summary: None,
+                        summary: pending_summaries.remove(&call_id),
                     });
                     registry.set_progress(&task_id, tracker.clone()).await;
                 }

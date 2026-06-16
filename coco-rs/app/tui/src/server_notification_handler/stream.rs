@@ -44,13 +44,13 @@ pub(super) fn handle(state: &mut AppState, event: AgentStreamEvent) -> bool {
         AgentStreamEvent::ToolUseQueued {
             call_id,
             name,
-            input: _,
+            input,
         } => {
             // Clear the live streaming overlay; the engine's
             // Message::Assistant push (with ToolCall content blocks)
             // will appear via transcript when the turn finalizes.
             flush_streaming_to_messages(state);
-            state.session.start_tool(call_id, name);
+            state.session.start_tool(call_id, name, &input);
             true
         }
         AgentStreamEvent::ToolUseStarted { call_id, .. } => {
@@ -81,9 +81,12 @@ pub(super) fn handle(state: &mut AppState, event: AgentStreamEvent) -> bool {
                 .iter()
                 .any(|t| t.call_id == call_id);
             if !already_tracked {
+                // `McpToolCallBegin` carries no arguments (those ride the
+                // regular `ToolUseQueued` path); fall back to a name-only row.
                 state.session.start_tool(
                     call_id,
                     format!("{MCP_TOOL_PREFIX}{server}{MCP_TOOL_SEPARATOR}{tool}"),
+                    &serde_json::Value::Null,
                 );
             }
             true

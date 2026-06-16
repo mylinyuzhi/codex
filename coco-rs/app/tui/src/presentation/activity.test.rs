@@ -104,9 +104,11 @@ fn exit_plan_mode_tool_is_hidden_from_activity() {
     // ExitPlanMode's UI is the "Ready to code?" dialog, so `start_tool` keeps
     // it out of the tool ledger entirely — no activity strip, no busy spinner,
     // no foreground-task count.
-    state
-        .session
-        .start_tool("call-1".into(), "ExitPlanMode".into());
+    state.session.start_tool(
+        "call-1".into(),
+        "ExitPlanMode".into(),
+        &serde_json::Value::Null,
+    );
 
     assert!(state.session.tool_executions.is_empty());
     assert!(matches!(
@@ -121,9 +123,11 @@ fn ask_user_question_tool_is_hidden_from_activity() {
     let mut state = AppState::default();
     // AskUserQuestion's UI is the question dialog; like ExitPlanMode it stays
     // out of the tool ledger (TS + codex-rs both suppress it).
-    state
-        .session
-        .start_tool("call-1".into(), "AskUserQuestion".into());
+    state.session.start_tool(
+        "call-1".into(),
+        "AskUserQuestion".into(),
+        &serde_json::Value::Null,
+    );
 
     assert!(state.session.tool_executions.is_empty());
     assert!(matches!(
@@ -136,18 +140,26 @@ fn ask_user_question_tool_is_hidden_from_activity() {
 fn ordinary_running_tool_still_shows_in_activity() {
     let _locale = crate::i18n::locale_test_guard("en");
     let mut state = AppState::default();
-    state.session.start_tool("call-1".into(), "Bash".into());
+    state.session.start_tool(
+        "call-1".into(),
+        "Bash".into(),
+        &serde_json::json!({ "command": "ls -la" }),
+    );
 
     assert_eq!(state.session.tool_executions.len(), 1);
     let view = surface(turn_activity_view(&state, 160));
 
     assert_eq!(view.title, ActivityTitle::Activity);
-    assert!(
-        view.lines
-            .iter()
-            .flat_map(|line| &line.spans)
-            .any(|span| span.text.contains("Bash"))
-    );
+    // The row carries both the tool name and its argument preview
+    // (`Bash(ls -la)`), not just the bare name.
+    let row_text: String = view
+        .lines
+        .iter()
+        .flat_map(|line| &line.spans)
+        .map(|span| span.text.as_ref())
+        .collect();
+    assert!(row_text.contains("Bash"));
+    assert!(row_text.contains("ls -la"));
 }
 
 #[test]

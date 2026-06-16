@@ -767,6 +767,7 @@ fn tool_execution(status: ToolStatus) -> ToolExecution {
         started_at: std::time::Instant::now(),
         completed_at: None,
         description: None,
+        input_preview: None,
         streaming_input: None,
         // Unstamped: presentation-test fixture, anchor is irrelevant.
         message_uuid: None,

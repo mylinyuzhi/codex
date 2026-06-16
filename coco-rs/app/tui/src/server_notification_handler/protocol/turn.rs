@@ -160,11 +160,17 @@ fn on_turn_completed_outcome(state: &mut AppState, p: &coco_types::TurnEndedPara
     // `ReasoningMetadataAttached` handler (engine emits with the
     // assistant message UUID), so no cell-walk anchoring here.
     state.ui.ephemeral.end_turn();
-    state.session.tool_executions.retain(|t| {
-        matches!(
-            t.status,
-            crate::state::session::ToolStatus::Queued | crate::state::session::ToolStatus::Running
-        )
+    // Drop resolved rows (now folded into transcript ToolResult cells) and any
+    // in-flight orphan. `Streaming`/uncommitted-`Queued` rows that never reached
+    // a committed call (e.g. a provider that truncated the tool-call args mid
+    // stream — `engine.rs` drops the incomplete call, so no `ToolUseQueued`
+    // arrives) would otherwise persist forever as a ghost activity row; only
+    // genuinely-executing (`Running`) or committed (`Queued` + stamped) rows survive.
+    use crate::state::session::ToolStatus;
+    state.session.tool_executions.retain(|t| match t.status {
+        ToolStatus::Running => true,
+        ToolStatus::Queued => t.message_uuid.is_some(),
+        ToolStatus::Streaming | ToolStatus::Completed | ToolStatus::Failed => false,
     });
     true
 }
@@ -364,6 +370,13 @@ fn on_max_turns_reached_outcome(state: &mut AppState, max_turns: Option<i32>) ->
     state.session.set_busy(false);
     state.ui.ephemeral.end_turn();
     state.ui.streaming = None;
+    // Drop in-flight tool widgets (same rationale as Failed/Interrupted): a
+    // terminal stop leaves unstamped streaming/queued rows that would ghost
+    // the activity strip across the next prompt.
+    state
+        .session
+        .tool_executions
+        .retain(|t| t.message_uuid.is_some());
     let msg = match max_turns {
         Some(n) => t!("toast.max_turns_reached", n = n).to_string(),
         None => t!("toast.max_turns_unbounded").to_string(),
@@ -388,6 +401,11 @@ fn on_budget_exhausted_outcome(
     state.session.set_busy(false);
     state.ui.ephemeral.end_turn();
     state.ui.streaming = None;
+    // Drop in-flight tool widgets (same rationale as Failed/Interrupted).
+    state
+        .session
+        .tool_executions
+        .retain(|t| t.message_uuid.is_some());
     let msg = match budget_tokens {
         Some(budget) => {
             format!("Token budget exhausted: used {used_tokens} of {budget}. Stop and acknowledge.")

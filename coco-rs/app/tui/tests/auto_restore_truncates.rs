@@ -53,6 +53,7 @@ fn fake_running_tool(call_id: &str) -> ToolExecution {
         started_at: std::time::Instant::now(),
         completed_at: None,
         description: None,
+        input_preview: None,
         streaming_input: None,
         // Unstamped (`None`) — mid-stream tool with no committed
         // assistant message UUID yet. D4 keeps these on truncate.

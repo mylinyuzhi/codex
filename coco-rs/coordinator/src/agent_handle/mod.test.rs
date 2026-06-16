@@ -231,6 +231,9 @@ struct TestAgentTaskRegistry {
     detaches: std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Notify>>>,
     current_work:
         std::sync::Mutex<std::collections::HashMap<String, tokio_util::sync::CancellationToken>>,
+    /// Latest `set_progress` snapshot per task — lets tests assert the
+    /// event-drain populated `TaskProgress.recent_activities` (incl. summaries).
+    progress: std::sync::Mutex<std::collections::HashMap<String, coco_types::TaskProgress>>,
 }
 
 impl TestAgentTaskRegistry {
@@ -349,7 +352,12 @@ impl coco_tool_runtime::TaskHandle for TestAgentTaskRegistry {
 
     async fn set_progress_summary(&self, _task_id: &str, _summary: String) {}
 
-    async fn set_progress(&self, _task_id: &str, _progress: coco_types::TaskProgress) {}
+    async fn set_progress(&self, task_id: &str, progress: coco_types::TaskProgress) {
+        self.progress
+            .lock()
+            .expect("progress lock")
+            .insert(task_id.to_string(), progress);
+    }
 
     async fn mark_completed(
         &self,
@@ -1109,6 +1117,91 @@ async fn test_spawn_subagent_sync_drains_stream_events_to_task_registry() {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     panic!("foreground stream output was not drained into task registry");
+}
+
+#[tokio::test]
+async fn test_drain_fills_task_activity_summary_from_tool_input() {
+    use async_trait::async_trait;
+    use coco_tool_runtime::AgentQueryConfig;
+    use coco_tool_runtime::AgentQueryEngine;
+    use coco_tool_runtime::AgentQueryResult;
+
+    // `ToolUseQueued` carries the input; `ToolUseStarted` (no input) commits the
+    // activity row. The drain must pair them by call_id and stamp the
+    // input-derived summary onto `TaskActivity.summary`.
+    struct ToolEngine;
+    #[async_trait]
+    impl AgentQueryEngine for ToolEngine {
+        async fn execute_query(
+            &self,
+            _prompt: &str,
+            config: AgentQueryConfig,
+        ) -> Result<AgentQueryResult, coco_error::BoxedError> {
+            let tx = config.event_tx.expect("foreground task event sink");
+            tx.send(coco_types::CoreEvent::Stream(
+                coco_types::AgentStreamEvent::ToolUseQueued {
+                    call_id: "toolu_1".into(),
+                    name: "Read".into(),
+                    input: serde_json::json!({ "file_path": "/x" }),
+                },
+            ))
+            .await
+            .expect("event receiver active");
+            tx.send(coco_types::CoreEvent::Stream(
+                coco_types::AgentStreamEvent::ToolUseStarted {
+                    call_id: "toolu_1".into(),
+                    name: "Read".into(),
+                    batch_id: None,
+                },
+            ))
+            .await
+            .expect("event receiver active");
+            Ok(AgentQueryResult {
+                response_text: Some("done".into()),
+                messages: Vec::new(),
+                turns: 1,
+                input_tokens: 0,
+                output_tokens: 0,
+                tool_use_count: 1,
+                cancelled: false,
+            })
+        }
+    }
+
+    let registry = Arc::new(TestAgentTaskRegistry::default());
+    let mut handle = create_test_handle_with_registry(
+        registry.clone() as coco_tool_runtime::AgentTaskRegistryRef
+    );
+    handle.set_execution_engine(Arc::new(ToolEngine));
+
+    let response = handle
+        .spawn_agent(AgentSpawnRequest {
+            prompt: "do work".into(),
+            subagent_type: Some("Explore".into()),
+            session_id: "test-session".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let task_id = response.agent_id.expect("task id");
+
+    for _ in 0..50 {
+        let snapshot = registry
+            .progress
+            .lock()
+            .expect("progress lock")
+            .get(&task_id)
+            .cloned();
+        if let Some(progress) = snapshot
+            && let Some(last) = progress.recent_activities.last()
+        {
+            assert_eq!(last.tool_name, "Read");
+            assert_eq!(last.summary.as_deref(), Some("/x"));
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("drain did not stamp TaskActivity.summary from the tool input");
 }
 
 #[tokio::test]

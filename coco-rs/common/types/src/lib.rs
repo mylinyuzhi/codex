@@ -49,6 +49,7 @@ mod thinking;
 mod token;
 mod tool;
 mod tool_filter;
+pub mod tool_summary;
 mod wire_tagged;
 
 // === Re-exports ===

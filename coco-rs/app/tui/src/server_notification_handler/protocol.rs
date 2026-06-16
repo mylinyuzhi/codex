@@ -893,12 +893,13 @@ pub(super) fn handle(
             }
             true
         }
-        ServerNotification::ToolProgress(p) => {
-            if let Some(tool) = state.session.tool_executions.iter_mut().find(|t| {
-                t.call_id == p.tool_use_id || Some(&t.call_id) == p.parent_tool_use_id.as_ref()
-            }) {
-                tool.description = Some(format!("{}s", p.elapsed_time_seconds));
-            }
+        ServerNotification::ToolProgress(_) => {
+            // Agent progress heartbeat. Returning `true` requests a redraw so
+            // the activity strip's elapsed badge keeps ticking; the badge is
+            // derived from `ToolExecution.started_at` and the args preview is
+            // stamped once at `start_tool`, so there is no state to mutate
+            // here. (This previously clobbered `description` with a redundant
+            // `"{n}s"` echo that duplicated the elapsed badge.)
             true
         }
 

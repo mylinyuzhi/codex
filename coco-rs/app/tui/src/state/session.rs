@@ -403,13 +403,37 @@ impl SessionState {
     }
 
     /// Queue a tool execution (called from ToolUseQueued).
-    pub fn start_tool(&mut self, call_id: String, name: String) {
+    ///
+    /// `input` is the complete tool-call arguments (`ToolUseQueued` fires
+    /// once the block is fully parsed) — it is flattened to a one-line
+    /// [`Self::input_preview`] so the activity strip can show the call's
+    /// key argument, not just its name.
+    pub fn start_tool(&mut self, call_id: String, name: String, input: &serde_json::Value) {
         // Overlay-driven tools (plan approval, plan-mode entry, question
         // dialog) own a dedicated surface; keeping them out of the UI tool
         // ledger is the single chokepoint that stops them leaking into the
         // activity strip, the `⠋ Processing…` busy spinner, and the Ctrl+B
         // foreground-task check. Their result still renders from MessageHistory.
         if crate::tool_display::tool_is_overlay_driven(&name) {
+            return;
+        }
+        let preview = crate::tool_display::tool_input_preview(&name, input);
+        let input_preview = (!preview.is_empty()).then_some(preview);
+        // A `Streaming` row may already exist for this call_id — opened at
+        // `ToolCallStreamStart` while the arguments streamed in. Upgrade it in
+        // place (transition `Streaming → Queued`, swap the partial preview for
+        // the finalized one) instead of pushing a duplicate; the partial buffer
+        // is no longer needed once we have the complete input.
+        if let Some(existing) = self
+            .tool_executions
+            .iter_mut()
+            .find(|t| t.call_id == call_id)
+        {
+            existing.status = ToolStatus::Queued;
+            if input_preview.is_some() {
+                existing.input_preview = input_preview;
+            }
+            existing.streaming_input = None;
             return;
         }
         self.tool_executions.push(ToolExecution {
@@ -419,12 +443,66 @@ impl SessionState {
             started_at: Instant::now(),
             completed_at: None,
             description: None,
+            input_preview,
             streaming_input: None,
             // Set later by `on_message_appended` when the assistant
             // turn that owns this tool_use commits. Mid-stream, the
             // engine assistant message UUID isn't known yet.
             message_uuid: None,
         });
+    }
+
+    /// Open a pre-queue [`ToolStatus::Streaming`] row for a tool whose
+    /// arguments are still arriving (`ToolCallStreamStart`). Mirrors
+    /// [`Self::start_tool`]'s overlay suppression and de-dupes by `call_id` so
+    /// a duplicate start is a no-op. The row is distinct from `Queued` on
+    /// purpose: a tool whose input hasn't finalized is NOT a committed call, so
+    /// it must not count toward foreground-task / interrupt gating, and a
+    /// never-upgraded `Streaming` orphan is dropped at turn end rather than
+    /// retained like a real queued tool. `start_tool` transitions it to
+    /// `Queued` once the input finalizes.
+    pub fn begin_tool_stream(&mut self, call_id: String, name: String) {
+        if crate::tool_display::tool_is_overlay_driven(&name) {
+            return;
+        }
+        if self.tool_executions.iter().any(|t| t.call_id == call_id) {
+            return;
+        }
+        self.tool_executions.push(ToolExecution {
+            call_id,
+            name,
+            status: ToolStatus::Streaming,
+            started_at: Instant::now(),
+            completed_at: None,
+            description: None,
+            input_preview: None,
+            streaming_input: Some(String::new()),
+            message_uuid: None,
+        });
+    }
+
+    /// Append a streamed input fragment to the matching row and refresh its
+    /// live argument preview (the partial command / path / pattern) so the
+    /// activity strip shows arguments filling in before the call is queued.
+    pub fn append_tool_stream_delta(&mut self, call_id: &str, delta: &str) {
+        let Some(tool) = self
+            .tool_executions
+            .iter_mut()
+            .find(|t| t.call_id == call_id)
+        else {
+            return;
+        };
+        let buffer = tool.streaming_input.get_or_insert_with(String::new);
+        buffer.push_str(delta);
+        if let Some(partial) = coco_types::tool_summary::partial_primary_arg(&tool.name, buffer) {
+            // Collapse to one line — the activity row is a single line. Same
+            // bound as the finalized preview (`start_tool` → `tool_input_preview`)
+            // so the live and committed previews agree on "too long".
+            tool.input_preview = Some(coco_types::tool_summary::cap_single_line(
+                &partial,
+                crate::tool_display::TOOL_INPUT_PREVIEW_MAX_CHARS,
+            ));
+        }
     }
 
     /// Stamp the parent assistant message UUID onto every ToolExecution
@@ -615,6 +693,14 @@ pub struct ToolExecution {
     /// continuing to grow while the message stays in the transcript.
     pub completed_at: Option<Instant>,
     pub description: Option<String>,
+    /// One-line semantic summary of the call's input arguments — the file
+    /// path for `Read`, the command for `Bash`, the description/prompt for
+    /// `Agent`, etc. Computed once at `start_tool` via
+    /// [`crate::tool_display::tool_input_preview`] so the live activity strip
+    /// can render `Bash(cargo build)` instead of a bare `Bash`, mirroring the
+    /// committed-transcript invocation header. `None` when the tool carries no
+    /// useful preview.
+    pub input_preview: Option<String>,
     /// Streaming tool input delta (typing effect for bash/powershell).
     pub streaming_input: Option<String>,
     /// UUID of the engine `Message::Assistant` that emitted this
@@ -641,8 +727,17 @@ impl ToolExecution {
 }
 
 /// Tool execution status.
+///
+/// `Streaming` is the pre-commit state: the model is still emitting the tool
+/// call's argument JSON (`ToolCallStreamStart` → `ToolCallDelta`s). It is
+/// distinct from `Queued` (a committed call awaiting execution) because the two
+/// differ for several consumers — a streaming row shows in the activity strip
+/// but must NOT count as a real pending tool for interrupt/foreground gating,
+/// and an un-upgraded `Streaming` orphan is dropped at turn end. `start_tool`
+/// transitions `Streaming → Queued` once the input finalizes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolStatus {
+    Streaming,
     Queued,
     Running,
     Completed,

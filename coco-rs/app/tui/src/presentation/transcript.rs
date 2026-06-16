@@ -341,6 +341,10 @@ pub(crate) fn active_transcript_cell<'a>(
             }))
         });
     }
+    // `Streaming` is deliberately excluded: a tool whose arguments are still
+    // streaming is part of the live assistant turn (covered by the streaming
+    // tail above when text is present), not the post-commit "tools pending, no
+    // live content" gap the busy spinner exists to fill.
     if tool_executions
         .iter()
         .any(|t| matches!(t.status, ToolStatus::Queued | ToolStatus::Running))

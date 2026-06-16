@@ -141,11 +141,14 @@ pub(crate) fn turn_activity_view(state: &AppState, width: u16) -> TurnActivityVi
     let has_plan_activity = !state.session.plan_tasks.is_empty()
         || !state.session.todos_by_agent.is_empty()
         || !state.session.active_tasks.is_empty();
-    let has_tool_activity = state
-        .session
-        .tool_executions
-        .iter()
-        .any(|t| matches!(t.status, ToolStatus::Queued | ToolStatus::Running));
+    // `Streaming` is included so the activity strip appears while a tool's
+    // arguments are still arriving (the user sees `◦ Bash(cargo bui…)` form).
+    let has_tool_activity = state.session.tool_executions.iter().any(|t| {
+        matches!(
+            t.status,
+            ToolStatus::Streaming | ToolStatus::Queued | ToolStatus::Running
+        )
+    });
 
     if matches!(state.session.expanded_view, ExpandedView::Tasks) && has_plan_activity {
         return TurnActivityView::Surface(limit_surface_rows(plan_surface(state), width));
@@ -514,7 +517,12 @@ fn append_tool_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
         .session
         .tool_executions
         .iter()
-        .filter(|tool| matches!(tool.status, ToolStatus::Queued | ToolStatus::Running))
+        .filter(|tool| {
+            matches!(
+                tool.status,
+                ToolStatus::Streaming | ToolStatus::Queued | ToolStatus::Running
+            )
+        })
         .collect();
     if tools.is_empty() {
         return;
@@ -530,13 +538,13 @@ fn append_tool_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
     let start = tools.len().saturating_sub(display_count);
     for tool in &tools[start..] {
         let (icon, tone) = match tool.status {
-            ToolStatus::Queued => ("◦", ActivityTone::Running),
+            // Streaming shares the queued glyph — both read as "pending"; the
+            // growing arg preview already signals that input is arriving.
+            ToolStatus::Streaming | ToolStatus::Queued => ("◦", ActivityTone::Running),
             ToolStatus::Running => ("⏳", ActivityTone::Running),
             ToolStatus::Completed => ("✓", ActivityTone::Completed),
             ToolStatus::Failed => ("✗", ActivityTone::Error),
         };
-        let desc = tool.description.as_deref().unwrap_or(&tool.name);
-        let truncated = truncate_chars(desc, constants::TOOL_DESCRIPTION_MAX_CHARS as usize);
         let elapsed = tool.elapsed();
         let elapsed_str = if elapsed.as_secs() >= 60 {
             format!("{}m{}s", elapsed.as_secs() / 60, elapsed.as_secs() % 60)
@@ -545,13 +553,31 @@ fn append_tool_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
         } else {
             format!("{}ms", elapsed.as_millis())
         };
-        lines.push(ActivityLine {
-            spans: vec![
-                ActivitySpan::tone(format!("{icon} "), tone),
-                ActivitySpan::raw(truncated),
-                ActivitySpan::tone(format!(" ({elapsed_str})"), ActivityTone::Dim),
-            ],
-        });
+        // Mirror the committed-transcript invocation header
+        // (`assistant.rs`): `{name}({arg preview})`. Prefer the
+        // input-derived preview; fall back to a non-arg `description`
+        // (e.g. MCP progress text) so the row always carries whatever
+        // detail is available beyond the bare tool name.
+        let mut spans = vec![
+            ActivitySpan::tone(format!("{icon} "), tone),
+            ActivitySpan::raw(tool.name.clone()),
+        ];
+        let preview = tool
+            .input_preview
+            .as_deref()
+            .or(tool.description.as_deref())
+            .filter(|preview| !preview.is_empty());
+        if let Some(preview) = preview {
+            let truncated = truncate_chars(preview, constants::TOOL_DESCRIPTION_MAX_CHARS as usize);
+            spans.push(ActivitySpan::raw("("));
+            spans.push(ActivitySpan::tone(truncated, ActivityTone::Dim));
+            spans.push(ActivitySpan::raw(")"));
+        }
+        spans.push(ActivitySpan::tone(
+            format!(" ({elapsed_str})"),
+            ActivityTone::Dim,
+        ));
+        lines.push(ActivityLine { spans });
     }
     lines.push(ActivityLine::blank());
 }

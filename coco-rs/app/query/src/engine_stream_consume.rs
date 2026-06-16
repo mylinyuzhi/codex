@@ -293,6 +293,18 @@ impl QueryEngine {
                     if !tool_buffers.contains_key(&id) {
                         tool_order.push(id.clone());
                     }
+                    // Open a pre-queue "streaming" row in the TUI activity strip
+                    // so arguments can render as they arrive. The `call_id` here
+                    // matches the later `ToolUseQueued` (both use this stream
+                    // `id`), which upgrades the same row with the finalized input.
+                    let _ = crate::emit::emit_tui(
+                        event_tx,
+                        coco_types::TuiOnlyEvent::ToolCallStreamStart {
+                            call_id: id.clone(),
+                            name: tool_name.clone(),
+                        },
+                    )
+                    .await;
                     tool_buffers.insert(
                         id.clone(),
                         StreamingToolCallBuffer {
@@ -306,6 +318,15 @@ impl QueryEngine {
                     if let Some(buf) = tool_buffers.get_mut(&id) {
                         buf.input_json.push_str(&delta);
                     }
+                    // Forward the partial JSON fragment to the TUI for the live
+                    // "typing" preview. UI-only — the SDK gets the complete,
+                    // re-assembled input at `ToolUseQueued`. The TUI coalesces
+                    // these per call_id, so per-token emission is cheap.
+                    let _ = crate::emit::emit_tui(
+                        event_tx,
+                        coco_types::TuiOnlyEvent::ToolCallDelta { call_id: id, delta },
+                    )
+                    .await;
                 }
                 StreamEvent::ToolCallEnd { id } => {
                     if let Some(buf) = tool_buffers.get_mut(&id) {
