@@ -80,6 +80,7 @@ pub use prompt_cache_settings::AccountKindSetting;
 pub use prompt_cache_settings::PartialAccountSettings;
 pub use prompt_cache_settings::PartialPromptCacheSettings;
 pub use prompt_cache_settings::PromptCacheRuntimeConfig;
+pub use provider::HeaderValue;
 pub use provider::PartialProviderClientOptions;
 pub use provider::PartialProviderConfig;
 pub use provider::PartialProviderModelOverride;

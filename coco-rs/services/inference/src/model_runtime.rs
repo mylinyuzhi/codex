@@ -60,6 +60,7 @@ use coco_types::ProviderModelSelection;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::HeaderVars;
 use crate::InferenceError;
 use crate::LanguageModel;
 use crate::ProviderClientFingerprint;
@@ -659,6 +660,11 @@ pub enum ModelRuntimeFeedbackOutcome {
 pub struct ModelRuntimeRegistry {
     runtime_config: std::sync::RwLock<Option<Arc<RuntimeConfig>>>,
     resolver: Option<Arc<dyn ProviderCredentialResolver>>,
+    /// Session-scoped header-template variables (`${SESSION_ID}`, …), shared
+    /// by every client this registry builds and surviving `RuntimeConfig`
+    /// hot-reloads. `empty()` for prebuilt registries that don't expand
+    /// templated headers.
+    header_vars: Arc<HeaderVars>,
     role_runtimes: std::sync::RwLock<HashMap<ModelRole, Arc<std::sync::Mutex<ModelRuntime>>>>,
     role_overrides: std::sync::RwLock<HashMap<ModelRole, ModelSpec>>,
     explicit_runtimes:
@@ -760,6 +766,7 @@ impl ModelRuntimeRegistry {
     pub fn new(
         runtime_config: Arc<RuntimeConfig>,
         resolver: Option<Arc<dyn ProviderCredentialResolver>>,
+        header_vars: Arc<HeaderVars>,
     ) -> Result<Self, InferenceError> {
         let retry: RetryConfig = runtime_config.api.retry.clone().into();
         let mut role_runtimes = HashMap::new();
@@ -780,6 +787,7 @@ impl ModelRuntimeRegistry {
                     primary,
                     retry.clone(),
                     resolver.as_ref(),
+                    Some(header_vars.as_ref()),
                 )?;
                 role_runtimes.insert(role, Arc::new(std::sync::Mutex::new(runtime)));
             }
@@ -788,6 +796,7 @@ impl ModelRuntimeRegistry {
         Ok(Self {
             runtime_config: std::sync::RwLock::new(Some(runtime_config)),
             resolver,
+            header_vars,
             role_runtimes: std::sync::RwLock::new(role_runtimes),
             role_overrides: std::sync::RwLock::new(HashMap::new()),
             explicit_runtimes: std::sync::RwLock::new(HashMap::new()),
@@ -804,6 +813,7 @@ impl ModelRuntimeRegistry {
         Self {
             runtime_config: std::sync::RwLock::new(None),
             resolver: None,
+            header_vars: Arc::new(HeaderVars::empty()),
             role_runtimes: std::sync::RwLock::new(
                 runtimes
                     .into_iter()
@@ -1094,6 +1104,7 @@ impl ModelRuntimeRegistry {
             primary,
             retry,
             self.resolver.as_ref(),
+            Some(self.header_vars.as_ref()),
         )?));
         rw_write(&self.role_runtimes).insert(role, runtime.clone());
         Ok(runtime)
@@ -1116,7 +1127,13 @@ impl ModelRuntimeRegistry {
         })?;
         let spec = explicit_spec(&cfg, &selection)?;
         let retry: RetryConfig = cfg.api.retry.clone().into();
-        let client = model_factory::build_api_client(&cfg, &spec, retry, self.resolver.as_ref())?;
+        let client = model_factory::build_api_client(
+            &cfg,
+            &spec,
+            retry,
+            self.resolver.as_ref(),
+            Some(self.header_vars.as_ref()),
+        )?;
         let runtime = Arc::new(std::sync::Mutex::new(ModelRuntime::new(client, Vec::new())));
         rw_write(&self.explicit_runtimes).insert(selection, runtime.clone());
         Ok(runtime)
@@ -1164,7 +1181,14 @@ impl ModelRuntimeRegistry {
             .build()
         })?;
         let retry: RetryConfig = cfg.api.retry.clone().into();
-        let runtime = build_role_runtime(&cfg, role, spec.clone(), retry, self.resolver.as_ref())?;
+        let runtime = build_role_runtime(
+            &cfg,
+            role,
+            spec.clone(),
+            retry,
+            self.resolver.as_ref(),
+            Some(self.header_vars.as_ref()),
+        )?;
         rw_write(&self.role_overrides).insert(role, spec.clone());
         if let Some(old) = mutex_lock(&self.recovery_tasks).remove(&ModelRuntimeSource::Role(role))
         {
@@ -1207,6 +1231,7 @@ impl ModelRuntimeRegistry {
                     primary,
                     retry.clone(),
                     self.resolver.as_ref(),
+                    Some(self.header_vars.as_ref()),
                 )?;
                 rebuilt.insert(role, Arc::new(std::sync::Mutex::new(runtime)));
             }
@@ -1223,6 +1248,7 @@ impl ModelRuntimeRegistry {
                 &spec,
                 retry.clone(),
                 self.resolver.as_ref(),
+                Some(self.header_vars.as_ref()),
             )?;
             rebuilt_explicit.insert(
                 selection,
@@ -1530,14 +1556,28 @@ fn build_role_runtime(
     primary: ModelSpec,
     retry: RetryConfig,
     resolver: Option<&Arc<dyn ProviderCredentialResolver>>,
+    header_vars: Option<&HeaderVars>,
 ) -> Result<ModelRuntime, InferenceError> {
-    let primary =
-        model_factory::build_api_client(runtime_config, &primary, retry.clone(), resolver)?;
+    let primary = model_factory::build_api_client(
+        runtime_config,
+        &primary,
+        retry.clone(),
+        resolver,
+        header_vars,
+    )?;
     let fallbacks = runtime_config
         .model_roles
         .fallbacks(role)
         .iter()
-        .map(|spec| model_factory::build_api_client(runtime_config, spec, retry.clone(), resolver))
+        .map(|spec| {
+            model_factory::build_api_client(
+                runtime_config,
+                spec,
+                retry.clone(),
+                resolver,
+                header_vars,
+            )
+        })
         .collect::<Result<Vec<_>, _>>()?;
     let runtime = ModelRuntime::new(primary, fallbacks);
     Ok(match runtime_config.model_roles.policy(role) {

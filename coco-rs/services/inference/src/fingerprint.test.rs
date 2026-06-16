@@ -170,18 +170,24 @@ fn fingerprint_changes_when_client_options_headers_differ() {
     let mut cfg_b = provider_cfg("openai", "https://api.openai.com/v1", None);
     let overlay = PartialProviderClientOptions {
         headers: Some(
-            [("X-Tenant".to_string(), "team-a".to_string())]
-                .into_iter()
-                .collect(),
+            [(
+                "X-Tenant".to_string(),
+                coco_config::HeaderValue::literal("team-a"),
+            )]
+            .into_iter()
+            .collect(),
         ),
         ..Default::default()
     };
     cfg_a.client_options.merge_partial(&overlay);
     let overlay_b = PartialProviderClientOptions {
         headers: Some(
-            [("X-Tenant".to_string(), "team-b".to_string())]
-                .into_iter()
-                .collect(),
+            [(
+                "X-Tenant".to_string(),
+                coco_config::HeaderValue::literal("team-b"),
+            )]
+            .into_iter()
+            .collect(),
         ),
         ..Default::default()
     };

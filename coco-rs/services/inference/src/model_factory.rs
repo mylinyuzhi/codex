@@ -27,6 +27,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use coco_config::HeaderValue;
 use coco_config::ModelInfo;
 use coco_config::ProviderClientOptions;
 use coco_config::ProviderConfig;
@@ -45,6 +46,8 @@ use crate::ProviderClientFingerprint;
 use crate::RetryConfig;
 use crate::client::ApiClient;
 use crate::credentials::ProviderCredentialResolver;
+use crate::header_template::HeaderVars;
+use crate::header_template::PerBuildVars;
 
 /// Surface a `tracing::warn` when a `ProviderClientOptions` field is
 /// set to a non-default value but the chosen provider doesn't consume
@@ -121,6 +124,7 @@ pub fn build_language_model_from_runtime(
     runtime: &RuntimeConfig,
     spec: &ModelSpec,
     resolver: Option<&Arc<dyn ProviderCredentialResolver>>,
+    header_vars: Option<&HeaderVars>,
 ) -> Result<Arc<dyn LanguageModel>, InferenceError> {
     let provider_cfg = runtime.providers.get(&spec.provider).ok_or_else(|| {
         crate::errors::UnknownProviderSnafu {
@@ -136,6 +140,18 @@ pub fn build_language_model_from_runtime(
         .map(|r| r.info.clone());
     let timeout_secs = effective_timeout_secs(provider_cfg, model_info.as_ref());
 
+    // Expand custom-header templates once, here — the resolved `(provider,
+    // model, base_url, account_kind)` per-build vars come from scope, the
+    // session vars (`session_id`, …) are threaded in via `header_vars`.
+    let per_build = PerBuildVars {
+        provider: provider_cfg.name.clone(),
+        model_id: api_model_name.clone(),
+        api: api_family_str(spec.api),
+        base_url: provider_cfg.base_url.clone(),
+        account_kind: account_kind_str(runtime.account.kind),
+    };
+    let headers = header_map(&provider_cfg.client_options, header_vars, &per_build)?;
+
     match spec.api {
         ProviderApi::Anthropic => build_anthropic(
             runtime,
@@ -143,12 +159,39 @@ pub fn build_language_model_from_runtime(
             &api_model_name,
             timeout_secs,
             model_info.as_ref(),
+            headers,
         ),
-        ProviderApi::Openai => build_openai(provider_cfg, &api_model_name, timeout_secs, resolver),
-        ProviderApi::Gemini => build_google(provider_cfg, &api_model_name, resolver),
+        ProviderApi::Openai => build_openai(
+            provider_cfg,
+            &api_model_name,
+            timeout_secs,
+            resolver,
+            headers,
+        ),
+        ProviderApi::Gemini => build_google(provider_cfg, &api_model_name, resolver, headers),
         ProviderApi::Volcengine | ProviderApi::Zai | ProviderApi::OpenaiCompat => {
-            build_openai_compat(provider_cfg, &api_model_name, timeout_secs)
+            build_openai_compat(provider_cfg, &api_model_name, timeout_secs, headers)
         }
+    }
+}
+
+/// Stable lowercase tag for the `${API}` header variable.
+fn api_family_str(api: ProviderApi) -> &'static str {
+    match api {
+        ProviderApi::Anthropic => "anthropic",
+        ProviderApi::Openai => "openai",
+        ProviderApi::Gemini => "gemini",
+        ProviderApi::Volcengine => "volcengine",
+        ProviderApi::Zai => "zai",
+        ProviderApi::OpenaiCompat => "openai_compat",
+    }
+}
+
+/// Stable tag for the `${ACCOUNT_KIND}` header variable.
+fn account_kind_str(kind: coco_types::AccountKind) -> &'static str {
+    match kind {
+        coco_types::AccountKind::ApiKey => "api_key",
+        coco_types::AccountKind::ClaudeAiSubscriber => "subscriber",
     }
 }
 
@@ -168,6 +211,7 @@ pub(crate) fn build_api_client(
     spec: &ModelSpec,
     retry: RetryConfig,
     resolver: Option<&Arc<dyn ProviderCredentialResolver>>,
+    header_vars: Option<&HeaderVars>,
 ) -> Result<Arc<ApiClient>, InferenceError> {
     let provider_cfg = runtime.providers.get(&spec.provider).ok_or_else(|| {
         crate::errors::UnknownProviderSnafu {
@@ -180,7 +224,7 @@ pub(crate) fn build_api_client(
         .model_registry
         .resolve(&spec.provider, &spec.model_id)
         .map(|r| r.info.clone());
-    let model = build_language_model_from_runtime(runtime, spec, resolver)?;
+    let model = build_language_model_from_runtime(runtime, spec, resolver, header_vars)?;
     let fingerprint = ProviderClientFingerprint::compute_with_runtime_state(
         provider_cfg,
         &api_model_name,
@@ -231,6 +275,7 @@ fn build_anthropic(
     api_model: &str,
     timeout_secs: i64,
     model_info: Option<&ModelInfo>,
+    headers: Option<HashMap<String, String>>,
 ) -> Result<Arc<dyn LanguageModel>, InferenceError> {
     let opts = &provider_cfg.client_options;
     let capabilities = anthropic_caps_from(model_info.and_then(|i| i.capabilities.as_ref()));
@@ -256,7 +301,7 @@ fn build_anthropic(
         base_url: Some(provider_cfg.base_url.clone()),
         api_key: provider_cfg.resolve_api_key(),
         auth_token: opts.auth_token.as_ref().map(|t| t.expose().to_string()),
-        headers: header_map(opts),
+        headers,
         name: Some(provider_cfg.name.clone()),
         client: build_http_client(timeout_secs),
         supports_native_structured_output: None,
@@ -336,6 +381,7 @@ fn build_openai(
     api_model: &str,
     timeout_secs: i64,
     resolver: Option<&Arc<dyn ProviderCredentialResolver>>,
+    headers: Option<HashMap<String, String>>,
 ) -> Result<Arc<dyn LanguageModel>, InferenceError> {
     let opts = &provider_cfg.client_options;
     let auth = build_openai_auth(provider_cfg, resolver)?;
@@ -344,7 +390,7 @@ fn build_openai(
         auth,
         organization: opts.organization_id.clone(),
         project: opts.project_id.clone(),
-        headers: header_map(opts),
+        headers,
         name: Some(provider_cfg.name.clone()),
         client: build_http_client(timeout_secs),
         full_url: Some(opts.full_url),
@@ -418,19 +464,19 @@ fn build_google(
     provider_cfg: &ProviderConfig,
     api_model: &str,
     resolver: Option<&Arc<dyn ProviderCredentialResolver>>,
+    headers: Option<HashMap<String, String>>,
 ) -> Result<Arc<dyn LanguageModel>, InferenceError> {
     // Gemini Code Assist subscription (`auth: OAuth`) uses a distinct wire
     // contract (Bearer + `{project, request}` envelope + `:method` RPC +
     // onboarding) served by `vercel-ai-google-codeassist`. API-key Gemini stays
     // on the standard generativelanguage provider below.
     if let coco_config::ProviderAuth::OAuth { flow } = provider_cfg.auth {
-        return build_google_code_assist(provider_cfg, api_model, flow, resolver);
+        return build_google_code_assist(provider_cfg, api_model, flow, resolver, headers);
     }
-    let opts = &provider_cfg.client_options;
     let settings = vercel_ai_google::GoogleGenerativeAIProviderSettings {
         base_url: Some(provider_cfg.base_url.clone()),
         api_key: provider_cfg.resolve_api_key(),
-        headers: header_map(opts),
+        headers,
         name: Some(provider_cfg.name.clone()),
     };
     let provider = vercel_ai_google::create_google_generative_ai(settings);
@@ -455,6 +501,7 @@ fn build_google_code_assist(
     api_model: &str,
     flow: coco_types::OAuthFlowId,
     resolver: Option<&Arc<dyn ProviderCredentialResolver>>,
+    headers: Option<HashMap<String, String>>,
 ) -> Result<Arc<dyn LanguageModel>, InferenceError> {
     // Only the Gemini flow is valid on a Google provider.
     if !matches!(flow, coco_types::OAuthFlowId::GeminiCodeAssist) {
@@ -481,11 +528,10 @@ fn build_google_code_assist(
             project_id: c.project_id,
         })
     });
-    let opts = &provider_cfg.client_options;
     let settings = vercel_ai_google_codeassist::GoogleCodeAssistProviderSettings {
         base_url: Some(provider_cfg.base_url.clone()),
         creds,
-        headers: header_map(opts),
+        headers,
         name: Some(provider_cfg.name.clone()),
         client: None,
     };
@@ -504,6 +550,7 @@ fn build_openai_compat(
     provider_cfg: &ProviderConfig,
     api_model: &str,
     timeout_secs: i64,
+    headers: Option<HashMap<String, String>>,
 ) -> Result<Arc<dyn LanguageModel>, InferenceError> {
     let opts = &provider_cfg.client_options;
     let knobs = vercel_ai_openai_compatible::parse_provider_options(&provider_cfg.provider_options)
@@ -520,7 +567,7 @@ fn build_openai_compat(
         api_key: provider_cfg.resolve_api_key(),
         api_key_env_var: Some(provider_cfg.env_key.clone()),
         api_key_description: Some(provider_cfg.name.clone()),
-        headers: header_map(opts),
+        headers,
         query_params: None,
         // The runtime instance name (e.g. `"xai"`, `"volcengine"`,
         // `"internal-router"`) is the namespace key the OpenAI-compat
@@ -549,19 +596,37 @@ fn build_openai_compat(
 
 /// Convert `ProviderClientOptions.headers` (BTreeMap, deterministic)
 /// into the `HashMap` shape every `vercel-ai-*ProviderSettings.headers`
-/// expects. Empty maps surface as `None` so the SDK's "no extra
-/// headers" path applies.
-fn header_map(opts: &ProviderClientOptions) -> Option<HashMap<String, String>> {
+/// expects, expanding `{ "template": "..." }` values against the built-in
+/// variables (see [`crate::header_template`]). Literal values pass through
+/// verbatim. Empty maps surface as `None` so the SDK's "no extra headers"
+/// path applies. A bad template (unknown variable / unterminated `${`) fails
+/// the provider build — surfacing the config error at startup.
+fn header_map(
+    opts: &ProviderClientOptions,
+    vars: Option<&HeaderVars>,
+    per_build: &PerBuildVars,
+) -> Result<Option<HashMap<String, String>>, InferenceError> {
     if opts.headers.is_empty() {
-        None
-    } else {
-        Some(
-            opts.headers
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
-        )
+        return Ok(None);
     }
+    let mut out = HashMap::with_capacity(opts.headers.len());
+    for (key, value) in &opts.headers {
+        let resolved = match value {
+            HeaderValue::Literal(literal) => literal.clone(),
+            HeaderValue::Templated { template } => {
+                crate::header_template::expand(template, vars, per_build).map_err(|e| {
+                    crate::errors::ProviderBuildFailedSnafu {
+                        provider: "header_template",
+                        provider_name: per_build.provider.clone(),
+                        message: format!("header `{key}`: {e}"),
+                    }
+                    .build()
+                })?
+            }
+        };
+        out.insert(key.clone(), resolved);
+    }
+    Ok(Some(out))
 }
 
 /// Effective per-request timeout for a (provider, model) pair.

@@ -17,14 +17,80 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fmt;
 
+/// A single custom-header value. Two authoring modes:
+///
+/// - [`HeaderValue::Literal`] — a plain JSON string. The value is sent
+///   verbatim, with **no** variable expansion. This is the simplified,
+///   default form and is byte-for-byte the historical behavior.
+/// - [`HeaderValue::Templated`] — `{ "template": "..." }`. The string
+///   is expanded against built-in variables (`${SESSION_ID}`,
+///   `${MODEL_ID}`, …) at provider-build time by
+///   `coco_inference::header_template`.
+///
+/// Variables use **mandatory braces** (`${NAME}`); a bare `$` is a
+/// literal, so a JSON document used as a header value (`{"sid":"${SESSION_ID}"}`)
+/// needs no escaping of its own `{`/`}`. Templates are stored
+/// unexpanded here so the `ProviderClientFingerprint` reflects config
+/// identity (stable within a session); expansion happens downstream.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum HeaderValue {
+    /// Mode 2 — sent verbatim, no expansion.
+    Literal(String),
+    /// Mode 1 — expanded against built-in variables.
+    Templated { template: String },
+}
+
+impl HeaderValue {
+    /// Construct a literal (no-expansion) value.
+    pub fn literal(value: impl Into<String>) -> Self {
+        Self::Literal(value.into())
+    }
+
+    /// Construct a templated value.
+    pub fn templated(template: impl Into<String>) -> Self {
+        Self::Templated {
+            template: template.into(),
+        }
+    }
+
+    /// The raw configured string — either the literal value or the
+    /// unexpanded template body. Used by the fingerprint digest.
+    pub fn raw(&self) -> &str {
+        match self {
+            Self::Literal(s) => s,
+            Self::Templated { template } => template,
+        }
+    }
+
+    /// Whether this value carries a template requiring expansion.
+    pub fn is_templated(&self) -> bool {
+        matches!(self, Self::Templated { .. })
+    }
+}
+
+impl From<&str> for HeaderValue {
+    fn from(value: &str) -> Self {
+        Self::Literal(value.to_string())
+    }
+}
+
+impl From<String> for HeaderValue {
+    fn from(value: String) -> Self {
+        Self::Literal(value)
+    }
+}
+
 /// Wire format — `BTreeMap`-ordered, every field `Option`.
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields, rename_all = "snake_case")]
 pub struct PartialProviderClientOptions {
     /// Custom HTTP headers (e.g. `X-Corp-Tenant`, gateway tracking, `api-version`).
-    /// `BTreeMap` so order is stable across restarts.
+    /// `BTreeMap` so order is stable across restarts. Each value is
+    /// either a literal string or a `{ "template": "..." }` object — see
+    /// [`HeaderValue`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub headers: Option<BTreeMap<String, String>>,
+    pub headers: Option<BTreeMap<String, HeaderValue>>,
     /// Anthropic bearer token; if set, `api_key` is ignored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_token: Option<RedactedSecret>,
@@ -70,7 +136,7 @@ impl fmt::Debug for PartialProviderClientOptions {
 /// Resolved form — required fields concrete; only genuinely-optional fields stay `Option`.
 #[derive(Clone, Default, Serialize)]
 pub struct ProviderClientOptions {
-    pub headers: BTreeMap<String, String>,
+    pub headers: BTreeMap<String, HeaderValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_token: Option<RedactedSecret>,
     #[serde(skip_serializing_if = "Option::is_none")]
