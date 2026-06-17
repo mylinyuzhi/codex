@@ -38,6 +38,11 @@ pub struct PromptOptions {
     /// Restrict the listed agents to this set (e.g. user's
     /// `Agent(type1,type2)` permission rule). `None` = no restriction.
     pub allowed_agent_types: Option<Vec<String>>,
+    /// Agent types denied by an `Agent(<type>)` permission deny rule. These
+    /// are dropped from the listing so the model never sees an agent that
+    /// `AgentTool::execute` would reject with a permission error. Mirrors TS
+    /// `filterDeniedAgents`. Empty = no deny filtering.
+    pub denied_agent_types: Vec<String>,
     /// Pre-filter MCP-required agents whose servers are not yet ready.
     /// `None` = no MCP filtering.
     pub ready_mcp_servers: Option<Vec<String>>,
@@ -189,6 +194,11 @@ fn visible_to_prompt(def: &AgentDefinition, opts: &PromptOptions) -> bool {
     if let Some(allowed) = opts.allowed_agent_types.as_ref()
         && !allowed.iter().any(|t| t == &def.name)
     {
+        return false;
+    }
+    // Mirror TS `filterDeniedAgents`: drop agents an `Agent(<type>)` deny rule
+    // forbids, so the model never sees an agent `AgentTool::execute` rejects.
+    if opts.denied_agent_types.iter().any(|t| t == &def.name) {
         return false;
     }
     if !def.required_mcp_servers.is_empty() {

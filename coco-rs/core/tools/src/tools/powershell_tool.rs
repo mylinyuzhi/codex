@@ -226,6 +226,33 @@ impl Tool for PowerShellTool {
         POWERSHELL_PROMPT.into()
     }
 
+    /// Model-facing spec. Mirrors [`BashTool`]: when background tasks are
+    /// disabled (`COCO_BACKGROUND_TASKS_DISABLE`), drop `run_in_background`
+    /// from the schema so the model never sets a field whose background
+    /// execution path (`execute_background`) would then fail for lack of a
+    /// task handle. (PowerShell has no internal-only field to always omit, so
+    /// the enabled case keeps the full schema.)
+    async fn tool_spec(
+        &self,
+        ctx: &coco_tool_runtime::SchemaContext,
+        prompt_opts: &coco_tool_runtime::PromptOptions,
+    ) -> coco_tool_runtime::ToolSpec {
+        let omit: &[&str] = if ctx.background_tasks_disabled {
+            &["run_in_background"]
+        } else {
+            &[]
+        };
+        coco_tool_runtime::ToolSpec::Function(coco_tool_runtime::FunctionToolSpec {
+            name: self.name().to_string(),
+            description: self.prompt(prompt_opts).await,
+            parameters: coco_tool_runtime::schema_omit_properties(
+                self.runtime_validation_schema().as_value(),
+                omit,
+            ),
+            strict: self.strict(),
+        })
+    }
+
     /// Mirror Bash's read-only fast path. A command classified as search/read
     /// is concurrency-safe and skips the user-approval flow upstream.
     fn is_read_only(&self, input: &PowerShellInput) -> bool {

@@ -413,11 +413,6 @@ impl QueryEngine {
         model_tools.sort_by(|a, b| (a.is_mcp(), a.name()).cmp(&(b.is_mcp(), b.name())));
         let tool_names: Vec<String> = model_tools.iter().map(|t| t.name().to_string()).collect();
 
-        let agent_names: Vec<String> = self
-            .session_bootstrap
-            .as_ref()
-            .map(|b| b.agents.clone())
-            .unwrap_or_default();
         let skill_names: Vec<String> = {
             let mut names = self
                 .session_bootstrap
@@ -449,10 +444,11 @@ impl QueryEngine {
         let agent_catalog = self.agent_catalog.clone();
         // Read the MCP-ready set off the engine's installed handle
         // (`with_mcp_handle` at session bootstrap). When unset
-        // (tests / minimal embeddings), pass `None` to the renderer
-        // which then SKIPS the MCP-availability filter rather than
-        // hiding everything — closer to TS behaviour where an empty
-        // mcp set still lets non-MCP-required agents through.
+        // (tests / minimal embeddings), `None` flows to the renderer, which
+        // then HIDES every agent that REQUIRES MCP servers (none are
+        // available) while still letting non-MCP agents through. That matches
+        // the call-time guard, which rejects the same set via the NoOp
+        // handle's empty `list_tools()` — no advertise-then-reject gap.
         let ready_mcp_servers = self.mcp_servers_ready_snapshot().await;
         let coordinator_mode = coco_subagent::is_coordinator_mode(self.config.features.as_ref());
         let fork_enabled = coco_subagent::is_fork_subagent_active(
@@ -497,7 +493,6 @@ impl QueryEngine {
         let prompt_options = coco_tool_runtime::PromptOptions {
             is_non_interactive: self.config.is_non_interactive,
             tool_names,
-            agent_names,
             allowed_agent_types: None,
             skill_names,
             permission_context: Some(permission_context),
@@ -634,13 +629,56 @@ impl QueryEngine {
     /// fields (`thinking_level`, `is_non_interactive`, `max_budget_usd`,
     /// `custom_system_prompt`, `append_system_prompt`) — is verified in
     /// `tool_context.test.rs`.
-    /// Snapshot the connected MCP server names. Returns the list
-    /// emptied to `None` when no MCP handle was installed — the
-    /// AgentTool prompt renderer treats absent ready_mcp_servers as
-    /// "no filter applies" rather than "filter everything out".
+    /// Snapshot the MCP servers that are actually usable — i.e. servers that
+    /// contributed tools (connected AND authenticated) — for the model-facing
+    /// agent listing. Returns `None` only when no MCP handle was installed.
+    ///
+    /// `None` is the no-handle sentinel, NOT "skip the filter": the AgentTool
+    /// prompt renderer (`core/subagent prompt.rs`) HIDES every agent that
+    /// requires MCP servers when `ready_mcp_servers` is `None` (agents with no
+    /// requirement still pass). That mirrors TS, where an empty
+    /// `mcpServersWithTools` makes `hasRequiredMcpServers` false for any
+    /// MCP-requiring agent. The call-time guard stays aligned: with no handle
+    /// `ctx.mcp` is the NoOp handle whose `list_tools()` is empty, so `execute`
+    /// rejects exactly the agents the listing hid — no advertise-then-reject
+    /// gap. (The "absent → show all" behavior lives only in the non-model-facing
+    /// `context_analysis::agent_estimates` estimator.)
+    ///
+    /// Derived from `list_tools()` (distinct `server_name`s), NOT
+    /// `connected_servers()`. This mirrors TS, which builds `mcpServersWithTools`
+    /// from `mcp__`-prefixed tool names for both the prose listing and the
+    /// call-time guard, and matches `AgentTool`'s own `mcp_servers_with_tools`
+    /// call-time check. Using `connected_servers()` here would advertise an
+    /// agent whose required server is connected-but-unauthenticated (zero tools)
+    /// and then let `execute` reject the spawn — the advertise-then-reject gap.
     pub(crate) async fn mcp_servers_ready_snapshot(&self) -> Option<Vec<String>> {
         let handle = self.mcp_handle.as_ref()?;
-        Some(handle.connected_servers().await)
+        let mut servers: Vec<String> = Vec::new();
+        for tool in handle.list_tools().await {
+            if !servers.iter().any(|s| s == &tool.server_name) {
+                servers.push(tool.server_name);
+            }
+        }
+        Some(servers)
+    }
+
+    /// Current active agent type names from the wired catalog — the single
+    /// source of truth for every catalog-derived reminder (agent mentions,
+    /// explore/plan hint, agent-listing delta) in BOTH the turn-reminder and
+    /// post-compaction paths. Keyed on `def.name` (= TS `agentType`), matching
+    /// the model-visible "Available agent types" listing and the set
+    /// `AgentTool::execute` validates `subagent_type` against. Empty when no
+    /// catalog is wired (tests / minimal embeddings).
+    ///
+    /// Deliberately NOT `session_bootstrap.agents`: that field is `None` in
+    /// every production path (TUI/SDK/headless), so reading it silently emptied
+    /// these reminders. Funnel both reminder paths through here so they cannot
+    /// drift back onto the dead field independently.
+    pub(crate) fn current_agent_types(&self) -> Vec<String> {
+        self.agent_catalog
+            .as_ref()
+            .map(|catalog| catalog.active().map(|def| def.name.clone()).collect())
+            .unwrap_or_default()
     }
 
     pub(crate) async fn with_current_tool_search_candidates(

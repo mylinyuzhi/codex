@@ -592,13 +592,24 @@ pub async fn run_plan_mode_turn_with_events(
     let model_runtimes = Arc::new(ModelRuntimeRegistry::from_prebuilt_language_model_roles(
         registry_runtimes,
     ));
+    // Wire the agent catalog (Explore/Plan built-ins enabled) — the live
+    // source `current_agent_types` reads for `explore_plan_agents_available`
+    // and the agent-mention/listing reminders. `session_bootstrap.agents` is
+    // `None` in production and is no longer consulted, so the catalog is the
+    // only way to make those agents "available" in tests.
+    let mut agent_store = coco_subagent::AgentDefinitionStore::new(
+        coco_subagent::BuiltinAgentCatalog::all_enabled(),
+        coco_subagent::AgentSearchPaths::empty(),
+    );
+    agent_store.load();
     let engine = QueryEngine::new(config, model_runtimes, params.tools, cancel, None)
         .with_app_state(params.app_state)
         .with_config_home(params.config_home)
-        .with_session_bootstrap(SessionBootstrap {
-            agents: vec!["Explore".into(), "Plan".into()],
-            ..Default::default()
-        })
+        .with_agent_catalog(agent_store.snapshot())
+        // Keep a (default) bootstrap so any `session_bootstrap.is_some()`
+        // behavior the harness ran under is preserved; its `agents` field is
+        // dead now that `current_agent_types` reads the catalog above.
+        .with_session_bootstrap(SessionBootstrap::default())
         // Auto-approve any `Ask` decision (ExitPlanMode, etc.) — tests
         // script the model flow, not user interaction.
         .with_permission_bridge(allow_all_bridge());

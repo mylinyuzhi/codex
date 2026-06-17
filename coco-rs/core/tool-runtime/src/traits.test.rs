@@ -177,7 +177,6 @@ fn test_prompt_options_to_description_options() {
     let prompt_opts = PromptOptions {
         is_non_interactive: true,
         tool_names: vec!["Read".into(), "Write".into()],
-        agent_names: vec!["Explore".into()],
         skill_names: vec![],
         ..Default::default()
     };

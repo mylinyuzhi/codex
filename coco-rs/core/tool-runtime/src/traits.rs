@@ -81,8 +81,6 @@ pub struct PromptOptions {
     pub is_non_interactive: bool,
     /// Names of all available tools.
     pub tool_names: Vec<String>,
-    /// Available agent type names.
-    pub agent_names: Vec<String>,
     /// Allowed agent types (if restricted).
     pub allowed_agent_types: Option<Vec<String>>,
     /// Names of model-invocable skills available this turn. Sorted

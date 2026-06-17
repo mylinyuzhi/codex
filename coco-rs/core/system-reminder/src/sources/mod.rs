@@ -72,7 +72,7 @@ impl ReminderSources {
             just_compacted,
             per_source_timeout,
             skill_overrides,
-            skill_listing_enabled,
+            skill_tool_loaded,
         } = mctx;
         let a = agent_id;
         let t = per_source_timeout;
@@ -119,7 +119,7 @@ impl ReminderSources {
             let so = so.clone();
             gate(
                 self.skills.as_ref(),
-                config.attachments.skill_listing && skill_listing_enabled,
+                config.attachments.skill_listing && skill_tool_loaded,
                 t,
                 move |s| {
                     let s = s.clone();
@@ -142,6 +142,17 @@ impl ReminderSources {
                 .skills
                 .as_ref()
                 .filter(|_| config.attachments.skill_discovery)
+                // Gate on the Skill tool being loaded, exactly like
+                // `skill_listing` above. The discovery reminder tells the model
+                // to "Invoke via `Skill(\"<name>\")`" — unactionable when the
+                // Skill tool is filtered out of this turn's tool set (e.g. a
+                // subagent with a restrictive tool filter). This is deliberately
+                // STRICTER than literal TS: TS registers `SkillTool`
+                // unconditionally and gates discovery only on the
+                // `EXPERIMENTAL_SKILL_SEARCH` feature, with no Skill-tool check.
+                // coco-rs adds the tool-loaded check to uphold the "never
+                // advertise an unavailable Skill tool" invariant.
+                .filter(|_| skill_tool_loaded)
                 .filter(|_| user_input.is_some());
             let input_owned = user_input.unwrap_or("").to_string();
             let so = so.clone();
