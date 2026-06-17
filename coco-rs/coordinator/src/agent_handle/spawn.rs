@@ -578,6 +578,7 @@ fn spawn_task_event_drain(
         // while TextDelta is appended so TaskOutput can read mid-flight
         // output.
         let mut tracker = coco_types::TaskProgress::default();
+        tracing::debug!(task_id = %task_id, "subagent event drain started");
         // `ToolUseQueued` (carries the full input) fires before
         // `ToolUseStarted` (carries no input); stash the input-derived
         // summary keyed by call_id so the activity row can read
@@ -620,11 +621,22 @@ fn spawn_task_event_drain(
                         tool_name: name,
                         summary: pending_summaries.remove(&call_id),
                     });
+                    tracing::debug!(
+                        task_id = %task_id,
+                        tool = tracker.last_tool_name.as_deref().unwrap_or_default(),
+                        tool_use_count = tracker.tool_use_count,
+                        "subagent drain: ToolUseStarted → set_progress"
+                    );
                     registry.set_progress(&task_id, tracker.clone()).await;
                 }
                 _ => {}
             }
         }
+        tracing::debug!(
+            task_id = %task_id,
+            total_tools = tracker.tool_use_count,
+            "subagent event drain ended (event channel closed)"
+        );
     });
 }
 
@@ -1191,6 +1203,10 @@ impl SwarmAgentHandle {
             } else {
                 coco_tool_runtime::PermissionPromptPolicy::PromptAllowed
             },
+            // Read-scope inheritance: forward the parent's read working dirs so
+            // an isolated-worktree subagent can read the parent project without
+            // a prompt (TS subagent cwd + additionalWorkingDirectories parity).
+            inherited_read_dirs: request.inherited_read_dirs.clone(),
             // `max_turns` precedence: constraints (memory forks tighten
             // via `AgentSpawnConstraints.max_turns`) > definition. Top-
             // level `request.max_turns` was a dead slot and is gone.

@@ -28,6 +28,7 @@ pub(crate) use cells_renderer::CellsRenderer;
 pub(crate) use cells_renderer::assistant_stream_lead_marker;
 pub(crate) use cells_renderer::attachment_summary_text;
 pub(crate) use cells_renderer::compact_file_reference_chip_path;
+pub(crate) use cells_renderer::in_flight_tool_lines;
 pub(crate) use cells_renderer::mention_summary_lines;
 pub(crate) use cells_renderer::nested_memory_chip_path;
 // Shared helpers the per-category renderers reach via `super::…` (they were

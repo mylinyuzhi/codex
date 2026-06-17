@@ -662,12 +662,13 @@ fn transcript_modal_caps_expanded_tool_result_lines() {
 }
 
 #[test]
-fn active_transcript_cell_prioritizes_streaming_over_busy_spinner() {
+fn active_transcript_cell_prioritizes_streaming_then_in_flight_tools() {
     let mut streaming = StreamingState::new();
     streaming.append_text("hello");
     streaming.reveal_all();
     let tools = vec![tool_execution(ToolStatus::Running)];
 
+    // Streaming text always wins.
     assert_eq!(
         active_transcript_cell(Some(&streaming), true, &tools),
         Some(ActiveTranscriptCell::Streaming(StreamingTailView {
@@ -675,14 +676,34 @@ fn active_transcript_cell_prioritizes_streaming_over_busy_spinner() {
             thinking_tokens: None,
         }))
     );
+    // No streaming + an in-flight tool → inline `● Tool(args)` rows.
     assert_eq!(
         active_transcript_cell(None, true, &tools),
-        Some(ActiveTranscriptCell::BusySpinner)
+        Some(ActiveTranscriptCell::InFlightTools)
     );
+    // Completed tool → no active cell (its committed header now pairs + paints).
     assert_eq!(
         active_transcript_cell(None, true, &[tool_execution(ToolStatus::Completed)]),
         None
     );
+}
+
+#[test]
+fn active_transcript_cell_in_flight_regardless_of_message_uuid() {
+    // The committed `● Tool` header is held out of scrollback until the result
+    // pairs, so a running tool yields the inline row whether or not its owning
+    // assistant message has committed (`message_uuid` set). Guards against
+    // re-introducing a `message_uuid` gate that would blank the multi-minute
+    // `Agent`-run window.
+    for tool in [
+        tool_execution(ToolStatus::Running), // message_uuid: None
+        committed_tool_execution(ToolStatus::Running), // message_uuid: Some
+    ] {
+        assert_eq!(
+            active_transcript_cell(None, true, &[tool]),
+            Some(ActiveTranscriptCell::InFlightTools)
+        );
+    }
 }
 
 #[test]
@@ -713,7 +734,7 @@ fn transcript_presentation_appends_active_streaming_after_committed_cells() {
 }
 
 #[test]
-fn transcript_presentation_appends_busy_spinner_when_tools_are_active() {
+fn transcript_presentation_appends_in_flight_tools_when_uncommitted() {
     let cells = vec![assistant_text_cell("done")];
     let tools = vec![tool_execution(ToolStatus::Queued)];
     let presentation = transcript_presentation(TranscriptPresentationInput {
@@ -731,7 +752,31 @@ fn transcript_presentation_appends_busy_spinner_when_tools_are_active() {
         presentation.cells,
         vec![
             TranscriptSourceCell::Committed(TranscriptCell::Cell { index: 0 }),
-            TranscriptSourceCell::Active(ActiveTranscriptCell::BusySpinner),
+            TranscriptSourceCell::Active(ActiveTranscriptCell::InFlightTools),
+        ]
+    );
+}
+
+#[test]
+fn transcript_presentation_appends_in_flight_tools_for_committed_running_tool() {
+    let cells = vec![assistant_text_cell("done")];
+    let tools = vec![committed_tool_execution(ToolStatus::Running)];
+    let presentation = transcript_presentation(TranscriptPresentationInput {
+        cells: &cells,
+        options: TranscriptProjectionOptions {
+            show_system_reminders: false,
+            show_compact_internals: false,
+        },
+        streaming: None,
+        show_thinking: true,
+        tool_executions: &tools,
+    });
+
+    assert_eq!(
+        presentation.cells,
+        vec![
+            TranscriptSourceCell::Committed(TranscriptCell::Cell { index: 0 }),
+            TranscriptSourceCell::Active(ActiveTranscriptCell::InFlightTools),
         ]
     );
 }
@@ -769,7 +814,17 @@ fn tool_execution(status: ToolStatus) -> ToolExecution {
         description: None,
         input_preview: None,
         streaming_input: None,
-        // Unstamped: presentation-test fixture, anchor is irrelevant.
+        // Unstamped (`None`) ⇒ mid-stream / uncommitted: the owning assistant
+        // message hasn't landed, so this renders as an inline InFlightTools row.
         message_uuid: None,
+    }
+}
+
+/// Same fixture but stamped with a `message_uuid`, i.e. the owning assistant
+/// message has committed and a `● Tool` header already renders for it.
+fn committed_tool_execution(status: ToolStatus) -> ToolExecution {
+    ToolExecution {
+        message_uuid: Some(Uuid::new_v4()),
+        ..tool_execution(status)
     }
 }

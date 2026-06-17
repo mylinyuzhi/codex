@@ -173,7 +173,15 @@ impl AgentQueryEngine for QueryEngineAdapter {
             live_permission_rules: config.live_permission_rules.clone(),
             live_permission_mode: config.live_permission_mode.clone(),
             permission_rule_source_roots: Default::default(),
-            session_additional_dirs: Default::default(),
+            // Parent's read-scope dirs (TS subagent cwd +
+            // additionalWorkingDirectories parity): fold them into the child's
+            // permission `additional_dirs` so reads of the parent project are
+            // in-scope even though the child executes in an isolated worktree
+            // cwd. `read_permission`'s `in_working_dirs` branch then allows
+            // them without a prompt.
+            session_additional_dirs: inherited_read_dirs_to_additional_dirs(
+                &config.inherited_read_dirs,
+            ),
             // Propagate the subagent's cwd_override (set by worktree
             // isolation or explicit `cwd:` input) so the child
             // engine's ToolContextFactory installs it onto every
@@ -397,6 +405,27 @@ struct InitialRuleMaps {
 }
 
 /// Build the initial permission-rule maps for a fork-spawned subagent.
+/// Convert a subagent's inherited read-scope dirs (the parent cwd +
+/// `additional_dirs`) into the `session_additional_dirs` map the engine folds
+/// into `ToolPermissionContext.additional_dirs`. This is what lets an
+/// isolated-worktree subagent READ the parent project without a prompt — TS
+/// `createSubagentContext` cwd + `additionalWorkingDirectories` parity.
+fn inherited_read_dirs_to_additional_dirs(
+    dirs: &[String],
+) -> std::collections::HashMap<String, coco_types::AdditionalWorkingDir> {
+    dirs.iter()
+        .map(|path| {
+            (
+                path.clone(),
+                coco_types::AdditionalWorkingDir {
+                    path: path.clone(),
+                    source: coco_types::WorkingDirectorySource::Session,
+                },
+            )
+        })
+        .collect()
+}
+
 fn build_initial_rule_maps(extra: &[coco_types::PermissionRule]) -> InitialRuleMaps {
     let mut maps = InitialRuleMaps::default();
     for rule in extra {

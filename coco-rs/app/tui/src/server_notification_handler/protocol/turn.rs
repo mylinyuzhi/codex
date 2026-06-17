@@ -326,8 +326,10 @@ fn apply_auto_restore(
 }
 
 /// `TurnEnded(Failed)` handler. Engine-level failure: clear streaming
-/// state, drop in-flight tool widgets, surface a toast, and raise a
-/// blocking modal so the user must acknowledge the failure.
+/// state and drop in-flight tool widgets. The user-facing error renders
+/// inline in the transcript — the engine appends a `SystemMessage::ApiError`
+/// row (`⚠ <error>`) before emitting this event (TS `SystemAPIErrorMessage`
+/// parity), so this handler raises neither a toast nor a blocking modal.
 fn on_turn_failed_outcome(state: &mut AppState, error: &coco_types::ErrorPayload) -> bool {
     state.session.set_busy(false);
     state.ui.ephemeral.end_turn();
@@ -355,11 +357,6 @@ fn on_turn_failed_outcome(state: &mut AppState, error: &coco_types::ErrorPayload
             "TurnEnded(Failed)",
         );
     }
-    state.ui.add_toast(Toast::error(
-        t!("toast.turn_failed_short", error = error.message.as_str()).to_string(),
-    ));
-    let body = crate::widgets::error_dialog::turn_failed_body(error);
-    state.ui.show_modal(ModalState::Error(body));
     true
 }
 

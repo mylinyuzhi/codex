@@ -226,13 +226,27 @@ impl TaskManager {
     }
 
     async fn emit_progress(&self, task_id: &str, progress: TaskProgress) {
-        let Some(tx) = &self.event_tx else { return };
+        let Some(tx) = &self.event_tx else {
+            tracing::trace!(
+                task_id = %task_id,
+                "emit_progress: no event sink wired; TaskProgress dropped"
+            );
+            return;
+        };
         if let Some(gate) = &self.sdk_summaries_enabled
             && !gate.load(Ordering::Relaxed)
         {
+            tracing::debug!(
+                task_id = %task_id,
+                "emit_progress: suppressed — sdk_summaries gate closed"
+            );
             return;
         }
         let Some(state) = self.rows.read().await.get(task_id).cloned() else {
+            tracing::debug!(
+                task_id = %task_id,
+                "emit_progress: task row missing; TaskProgress dropped"
+            );
             return;
         };
         let duration_ms = current_time_ms().saturating_sub(state.start_time);
@@ -250,11 +264,24 @@ impl TaskManager {
             recent_activities: progress.recent_activities,
             workflow_progress: Vec::new(),
         };
-        let _ = tx
+        let tool_uses = params.usage.tool_uses;
+        match tx
             .send(CoreEvent::Protocol(ServerNotification::TaskProgress(
                 params,
             )))
-            .await;
+            .await
+        {
+            Ok(()) => tracing::debug!(
+                task_id = %task_id,
+                tool_uses,
+                "emit_progress: TaskProgress sent to event sink"
+            ),
+            Err(e) => tracing::warn!(
+                task_id = %task_id,
+                error = %e,
+                "emit_progress: TaskProgress send failed (receiver dropped)"
+            ),
+        }
     }
 
     pub async fn mark_retrieved(&self, id: &str) {

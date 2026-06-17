@@ -285,6 +285,29 @@ impl QueryEngine {
         if let (Err(e), Some(id)) = (&result, cycle_turn_id.as_ref())
             && !self.cancel.is_cancelled()
         {
+            // Inline transcript error row (TS `SystemAPIErrorMessage` parity):
+            // a display-only `SystemMessage::ApiError` appended to history so
+            // the failure renders as a `⚠ <error>` row in turn order instead
+            // of an ephemeral toast / blocking modal. Dropped from the API
+            // request by `normalize_messages_for_api` (every `SystemMessage`
+            // except `LocalCommand` maps to `None`), so it never re-enters the
+            // model context. Skipped when the engine already pushed an
+            // api-error signal (abnormal-stop / context-overflow paths) so a
+            // single failure surfaces exactly one row.
+            let already_reported = history
+                .last()
+                .is_some_and(|m| coco_messages::predicates::is_api_error_message(m.as_ref()));
+            if !already_reported {
+                crate::history_sync::history_push_and_emit(
+                    &mut history,
+                    coco_messages::create_api_error_message(
+                        &e.to_string(),
+                        /*status_code*/ None,
+                    ),
+                    &event_tx,
+                )
+                .await;
+            }
             let _ = emit_protocol(
                 &event_tx,
                 ServerNotification::TurnEnded(coco_types::TurnEndedParams::failed(

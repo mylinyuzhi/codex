@@ -45,6 +45,7 @@ pub use cost::get_model_pricing;
 pub use creation::CANCEL_MESSAGE;
 pub use creation::INTERRUPT_MESSAGE;
 pub use creation::INTERRUPT_MESSAGE_FOR_TOOL_USE;
+pub use creation::create_api_error_message;
 pub use creation::create_assistant_error_message;
 pub use creation::create_assistant_message;
 pub use creation::create_compact_boundary_message;

@@ -237,18 +237,8 @@ impl<'a> CellsRenderer<'a> {
             TranscriptSourceCell::Active(ActiveTranscriptCell::Streaming(view)) => {
                 self.render_streaming(view.clone(), lines);
             }
-            TranscriptSourceCell::Active(ActiveTranscriptCell::BusySpinner) => {
-                /// Static fallback glyph for the chat-cell busy spinner.
-                /// The animated status-indicator spinner lives in
-                /// [`coco_tui_ui::widgets::status_indicator`]; this widget
-                /// just needs a single character to anchor the
-                /// "processing…" line and never re-renders fast
-                /// enough to animate.
-                const BUSY_GLYPH: &str = "⠋";
-                lines.push(Line::from(vec![
-                    Span::raw(format!("{BUSY_GLYPH} ")).fg(self.styles.thinking()),
-                    Span::raw(t!("chat.processing").to_string()).fg(self.styles.thinking()),
-                ]));
+            TranscriptSourceCell::Active(ActiveTranscriptCell::InFlightTools) => {
+                lines.extend(in_flight_tool_lines(self.tool_executions, self.styles));
             }
         }
         if selected {
@@ -780,6 +770,46 @@ pub(super) fn result_line(text: String, color: ratatui::style::Color) -> Line<'s
     Line::from(vec![Span::raw("  └ ").fg(color), Span::raw(text).fg(color)])
 }
 
+/// Synthesize the live `● Tool(args) (Ns)` progress rows for mid-stream tools
+/// that have no committed `CellKind::ToolUse` header yet (filtered by
+/// [`is_uncommitted_in_flight`]). Shared by the chat renderer and the Ctrl+O
+/// transcript reader so both surfaces format in-flight tools identically — and
+/// identically to the committed [`CellsRenderer::render_tool_call_header`], so
+/// the row doesn't visually jump when the owning message commits. Reads
+/// `elapsed()` live, so the timer ticks on each frame.
+pub(crate) fn in_flight_tool_lines(
+    tools: &[ToolExecution],
+    styles: UiStyles<'_>,
+) -> Vec<Line<'static>> {
+    tools
+        .iter()
+        .filter(|t| crate::presentation::transcript::is_tool_in_flight(t))
+        .map(|tool| {
+            let tone = tool_tone_color(tool_name_tone(&tool.name), styles);
+            let mut spans = vec![
+                Span::raw("● ").fg(tone),
+                Span::raw(tool.name.clone()).fg(tone).bold(),
+            ];
+            if let Some(preview) = tool
+                .input_preview
+                .as_deref()
+                .or(tool.description.as_deref())
+                .filter(|preview| !preview.is_empty())
+            {
+                spans.push(Span::raw("(").fg(styles.text()));
+                spans.push(Span::raw(truncate_chars(preview, 96)).fg(styles.dim()));
+                spans.push(Span::raw(")").fg(styles.text()));
+            }
+            spans.push(
+                Span::raw(format!(" ({})", format_duration_seconds(tool.elapsed())))
+                    .fg(styles.dim())
+                    .dim(),
+            );
+            Line::from(spans)
+        })
+        .collect()
+}
+
 fn tool_tone_color(
     tone: ToolNameTone,
     styles: coco_tui_ui::style::UiStyles<'_>,
@@ -879,8 +909,8 @@ fn cell_perf_label(cells: &[RenderedCell], cell: &TranscriptSourceCell<'_>) -> S
         TranscriptSourceCell::Active(ActiveTranscriptCell::Streaming(_)) => {
             "streaming_tail".to_string()
         }
-        TranscriptSourceCell::Active(ActiveTranscriptCell::BusySpinner) => {
-            "busy_spinner".to_string()
+        TranscriptSourceCell::Active(ActiveTranscriptCell::InFlightTools) => {
+            "in_flight_tools".to_string()
         }
     }
 }

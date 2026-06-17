@@ -552,14 +552,20 @@ impl ToolContextFactory {
                 .app_state
                 .as_ref()
                 .map(|arc| AppStateReadHandle::new(arc.clone())),
-            // Fork isolation: fresh `DenialTracker` per fork so a
-            // fork's circuit-breaker streak cannot leak into the
-            // parent's consecutive-denial counter (a fresh
-            // `denialTrackingState` is created per fork). The
-            // classifier site honors this by reading
-            // `ctx.local_denial_tracking` before the engine-level
-            // session tracker.
-            local_denial_tracking: self.config.fork_isolation.as_ref().map(|_| {
+            // Per-subagent denial isolation (TS `createSubagentContext`
+            // parity): every subagent — fork OR ordinary — gets its own fresh
+            // `DenialTracker`, so one child's consecutive-denial streak cannot
+            // trip the SHARED auto-mode circuit breaker for the parent and its
+            // sibling subagents (which, under parallel spawns, would cascade
+            // every concurrent agent back to manual prompts). TS does exactly
+            // this: `localDenialTracking: createDenialTrackingState()` for any
+            // subagent context, sharing only when `shareSetAppState`. The main
+            // session (`agent_id == None`) keeps `None` here and uses the
+            // engine-level session tracker. `AutoModeState` stays shared — only
+            // the per-agent denial *counter* is isolated. The classifier site
+            // honors this by reading `ctx.local_denial_tracking` before the
+            // engine-level session tracker.
+            local_denial_tracking: self.config.agent_id.as_ref().map(|_| {
                 Arc::new(tokio::sync::Mutex::new(
                     coco_tool_runtime::DenialTracker::new(),
                 ))
