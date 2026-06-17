@@ -86,3 +86,26 @@ fn test_message_origin_slash_command_serde() {
     let json = serde_json::to_string(&MessageOrigin::SlashCommand).unwrap();
     assert_eq!(json, "\"slash_command\"");
 }
+
+#[test]
+fn mention_summary_attachment_is_display_only() {
+    let att = AttachmentMessage::mention_summary(crate::MentionSummaryPayload {
+        items: vec![crate::MentionSummaryItem {
+            display_path: "src/lib.rs".to_string(),
+            kind: crate::MentionItemKind::File,
+            count: Some(42),
+            truncated: false,
+        }],
+    });
+
+    assert_eq!(att.kind, AttachmentKind::File);
+    // `Unit` body → dropped from the API request (no empty message to model).
+    assert!(att.as_api_message().is_none());
+    assert!(att.as_text_for_display().is_empty());
+    // Typed extras carry the rows; `File` keeps the cell renderable.
+    assert!(matches!(
+        att.extras,
+        Some(AttachmentExtras::MentionSummary(_))
+    ));
+    assert!(att.kind.renders_in_transcript());
+}

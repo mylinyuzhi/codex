@@ -50,6 +50,54 @@ pub enum AttachmentBody {
 pub enum AttachmentExtras {
     SkillDiscovery(SkillDiscoveryPayload),
     CompactFileReference(CompactFileReferencePayload),
+    /// Display-only summary of the `@`-mentioned files / directories resolved
+    /// for a turn. Carried on a `Unit`-body `AttachmentKind::File` message so
+    /// the transcript can render a compact `Read <path> (N lines)` /
+    /// `Listed directory <path>/` row per item — the model-visible content is
+    /// injected separately as `<system-reminder>`-wrapped tool narration, so
+    /// this payload never reaches the API.
+    MentionSummary(MentionSummaryPayload),
+}
+
+/// One resolved `@`-mention, for the transcript's compact display row.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MentionItemKind {
+    /// File read into context.
+    #[default]
+    File,
+    /// File already in context this session (dedup) — no fresh line count.
+    AlreadyRead,
+    /// Directory listing.
+    Directory,
+    /// Image file.
+    Image,
+    /// Large PDF attached as a reference.
+    Pdf,
+}
+
+/// A single `@`-mention's display metadata.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct MentionSummaryItem {
+    /// Path relative to CWD at resolution time, for stable display.
+    pub display_path: String,
+    pub kind: MentionItemKind,
+    /// Line count for `File` mentions; page count for `Pdf`. `None` when the
+    /// figure is unavailable (dedup / image).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count: Option<i32>,
+    /// Whether the file content was truncated by the per-attachment budget.
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+/// Display-only payload for [`AttachmentExtras::MentionSummary`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct MentionSummaryPayload {
+    pub items: Vec<MentionSummaryItem>,
 }
 
 /// TS parity: `CompactFileReferenceAttachment`

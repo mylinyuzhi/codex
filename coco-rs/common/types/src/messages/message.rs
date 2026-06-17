@@ -24,6 +24,7 @@ use super::attachment_body::HookNonBlockingErrorPayload;
 use super::attachment_body::HookPermissionDecisionPayload;
 use super::attachment_body::HookSystemMessagePayload;
 use super::attachment_body::MaxTurnsReachedPayload;
+use super::attachment_body::MentionSummaryPayload;
 use super::attachment_body::SkillDiscoveryPayload;
 use super::attachment_body::StructuredOutputPayload;
 
@@ -370,6 +371,22 @@ impl AttachmentMessage {
             kind: AttachmentKind::CompactFileReference,
             body: AttachmentBody::Api(message),
             extras: Some(AttachmentExtras::CompactFileReference(payload)),
+        }
+    }
+
+    /// Build a display-only `@`-mention summary attachment.
+    ///
+    /// The body is [`AttachmentBody::Unit`] so it is dropped from the API
+    /// request (`as_api_message` returns `None`) — the model-visible file /
+    /// directory content is injected separately as `<system-reminder>` tool
+    /// narration. `AttachmentKind::File` keeps `renders_in_transcript()` true
+    /// so the transcript renders the compact per-item rows from `extras`.
+    pub fn mention_summary(payload: MentionSummaryPayload) -> Self {
+        Self {
+            uuid: Uuid::new_v4(),
+            kind: AttachmentKind::File,
+            body: AttachmentBody::Unit,
+            extras: Some(AttachmentExtras::MentionSummary(payload)),
         }
     }
     pub fn silent_already_read_file(payload: AlreadyReadFilePayload) -> Self {

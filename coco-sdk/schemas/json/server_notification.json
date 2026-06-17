@@ -1896,6 +1896,20 @@
           "required": [
             "type"
           ]
+        },
+        {
+          "description": "Display-only summary of the `@`-mentioned files / directories resolved\nfor a turn. Carried on a `Unit`-body `AttachmentKind::File` message so\nthe transcript can render a compact `Read <path> (N lines)` /\n`Listed directory <path>/` row per item — the model-visible content is\ninjected separately as `<system-reminder>`-wrapped tool narration, so\nthis payload never reaches the API.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "mention_summary"
+            }
+          },
+          "$ref": "#/$defs/MentionSummaryPayload",
+          "required": [
+            "type"
+          ]
         }
       ]
     },
@@ -3549,6 +3563,81 @@
       "required": [
         "server",
         "status"
+      ]
+    },
+    "MentionItemKind": {
+      "description": "One resolved `@`-mention, for the transcript's compact display row.",
+      "oneOf": [
+        {
+          "description": "File read into context.",
+          "type": "string",
+          "const": "file"
+        },
+        {
+          "description": "File already in context this session (dedup) — no fresh line count.",
+          "type": "string",
+          "const": "already_read"
+        },
+        {
+          "description": "Directory listing.",
+          "type": "string",
+          "const": "directory"
+        },
+        {
+          "description": "Image file.",
+          "type": "string",
+          "const": "image"
+        },
+        {
+          "description": "Large PDF attached as a reference.",
+          "type": "string",
+          "const": "pdf"
+        }
+      ]
+    },
+    "MentionSummaryItem": {
+      "description": "A single `@`-mention's display metadata.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "description": "Line count for `File` mentions; page count for `Pdf`. `None` when the\nfigure is unavailable (dedup / image).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "display_path": {
+          "description": "Path relative to CWD at resolution time, for stable display.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/MentionItemKind"
+        },
+        "truncated": {
+          "description": "Whether the file content was truncated by the per-attachment budget.",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "display_path",
+        "kind"
+      ]
+    },
+    "MentionSummaryPayload": {
+      "description": "Display-only payload for [`AttachmentExtras::MentionSummary`].",
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MentionSummaryItem"
+          }
+        }
+      },
+      "required": [
+        "items"
       ]
     },
     "Message": {

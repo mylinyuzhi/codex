@@ -141,14 +141,6 @@ pub(crate) fn turn_activity_view(state: &AppState, width: u16) -> TurnActivityVi
     let has_plan_activity = !state.session.plan_tasks.is_empty()
         || !state.session.todos_by_agent.is_empty()
         || !state.session.active_tasks.is_empty();
-    // `Streaming` is included so the activity strip appears while a tool's
-    // arguments are still arriving (the user sees `◦ Bash(cargo bui…)` form).
-    let has_tool_activity = state.session.tool_executions.iter().any(|t| {
-        matches!(
-            t.status,
-            ToolStatus::Streaming | ToolStatus::Queued | ToolStatus::Running
-        )
-    });
 
     if matches!(state.session.expanded_view, ExpandedView::Tasks) && has_plan_activity {
         return TurnActivityView::Surface(limit_surface_rows(plan_surface(state), width));
@@ -160,7 +152,12 @@ pub(crate) fn turn_activity_view(state: &AppState, width: u16) -> TurnActivityVi
 
     if has_subagents {
         TurnActivityView::Surface(limit_surface_rows(agent_surface(state), width))
-    } else if has_tool_activity || state.session.stream_stall {
+    } else if state.session.stream_stall {
+        // No separate "Activity / Tools:" panel for ordinary single-agent tool
+        // runs — in-flight tools render inline in the transcript as
+        // `● Tool(args) (elapsed)` plus the bottom status spinner (codex /
+        // claude-code parity). The panel survives only for a stream stall
+        // (warning) and the swarm / task surfaces handled above.
         TurnActivityView::Surface(limit_surface_rows(activity_surface(state), width))
     } else {
         TurnActivityView::None
@@ -252,9 +249,11 @@ fn agent_surface(state: &AppState) -> ActivitySurfaceView {
     }
 }
 
+/// Stall-only surface. The tool list moved inline to the transcript, so this
+/// now carries just the stream-stall warning (`status_activity_lines`); it is
+/// only reached when `stream_stall` is set.
 fn activity_surface(state: &AppState) -> ActivitySurfaceView {
     let mut lines = status_activity_lines(state);
-    append_tool_lines(state, &mut lines);
     trim_trailing_blank(&mut lines);
     ActivitySurfaceView {
         title: ActivityTitle::Activity,

@@ -1,6 +1,7 @@
 use super::TRANSCRIPT_LINE_CHAR_CAP;
 use super::attachment_summary_text;
 use super::compact_file_reference_chip_path;
+use super::mention_summary_lines;
 use super::nested_memory_chip_path;
 use super::single_line_capped;
 use super::transcript_safe_line;
@@ -62,6 +63,64 @@ fn nested_memory_chip_path_extracts_path_for_memory_kinds_only() {
         LlmMessage::user_text("The date has changed to 2026-06-02."),
     ));
     assert_eq!(nested_memory_chip_path(&other, Some("/repo")), None);
+}
+
+#[test]
+fn mention_summary_lines_render_compact_rows() {
+    let _locale = crate::i18n::locale_test_guard("en");
+    let theme = coco_tui_ui::theme::Theme::default();
+    let styles = coco_tui_ui::style::UiStyles::new(&theme);
+
+    let msg = Message::Attachment(AttachmentMessage::mention_summary(
+        coco_messages::MentionSummaryPayload {
+            items: vec![
+                coco_messages::MentionSummaryItem {
+                    display_path: "foo.rs".to_string(),
+                    kind: coco_messages::MentionItemKind::File,
+                    count: Some(3),
+                    truncated: false,
+                },
+                coco_messages::MentionSummaryItem {
+                    display_path: "dir".to_string(),
+                    kind: coco_messages::MentionItemKind::Directory,
+                    count: None,
+                    truncated: false,
+                },
+            ],
+        },
+    ));
+
+    let lines = mention_summary_lines(&msg, styles).expect("summary rows");
+    assert_eq!(lines.len(), 2);
+    let text: Vec<String> = lines
+        .iter()
+        .map(|l| {
+            l.spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>()
+        })
+        .collect();
+    assert!(text[0].contains("Read foo.rs (3 lines)"), "{text:?}");
+    assert!(text[1].contains("Listed directory dir/"), "{text:?}");
+}
+
+#[test]
+fn bare_file_attachment_listing_renders_nothing() {
+    // The `@-mentioned files` generator listing (`K::File` + API body) is
+    // model-only metadata — it must not leak as a transcript row, and it has
+    // no `MentionSummary` extras to render either.
+    let msg = Message::Attachment(AttachmentMessage::api(
+        AttachmentKind::File,
+        LlmMessage::user_text(
+            "The user @-mentioned the following file(s). Their content has been loaded into context:\n- foo.rs",
+        ),
+    ));
+    assert_eq!(attachment_summary_text(&msg), None);
+
+    let theme = coco_tui_ui::theme::Theme::default();
+    let styles = coco_tui_ui::style::UiStyles::new(&theme);
+    assert!(mention_summary_lines(&msg, styles).is_none());
 }
 
 #[test]
