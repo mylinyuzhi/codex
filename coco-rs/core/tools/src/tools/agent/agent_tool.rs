@@ -257,6 +257,37 @@ impl Tool for AgentTool {
         // so a hook/permission rewrite could set it the way `mcp_servers` is; it
         // is simply not model-settable.
         drop.push("cwd");
+        // `team_name` / `mode` / `name` are model-facing only when AgentTeams is
+        // live. All three matter only to the team-spawn path: `team_name` selects
+        // it, `mode` is honored ONLY there (and only as `Plan` — see `execute`),
+        // and `name` is for team addressing (SendMessage, itself
+        // `Feature::AgentTeams`-gated) or as a fork label. Mirror TS's own
+        // "omit feature-gated optional fields when the feature is off" pattern
+        // (`AgentTool.tsx:104-124`, the same mechanism that gates `cwd` /
+        // `run_in_background`) and the local `cwd` precedent: hide them from the
+        // model-facing schema while keeping them in `runtime_validation_schema`
+        // so a hook/permission `updated_input` rewrite can still set them and
+        // the execute-time team gate stays reachable. TS keeps these in its
+        // literal schema because its primary audience (ant builds) always has
+        // teams on; coco-rs is multi-provider, and models that eagerly fill
+        // optional schema fields (e.g. OpenAI) otherwise invent
+        // `team_name: "default"` + `name`, which `execute` then classifies as a
+        // forbidden team spawn — killing an ordinary parallel/worktree subagent
+        // spawn. `features: None` (test / minimal embedding, never a prod path)
+        // is treated as "capability unknown" and keeps all three.
+        let teams_resolved_disabled = ctx
+            .features
+            .as_ref()
+            .is_some_and(|f| !f.enabled(coco_types::Feature::AgentTeams));
+        if teams_resolved_disabled {
+            drop.push("team_name");
+            drop.push("mode");
+            // `name` doubles as the fork label (the fork examples pass it), so
+            // keep it whenever fork mode is active even with teams off.
+            if !ctx.fork_mode_active {
+                drop.push("name");
+            }
+        }
         coco_tool_runtime::ToolSpec::Function(coco_tool_runtime::FunctionToolSpec {
             name: self.name().to_string(),
             description: self.prompt(prompt_opts).await,
@@ -269,19 +300,14 @@ impl Tool for AgentTool {
     }
 
     fn to_auto_classifier_input(&self, input: &AgentInput) -> Option<String> {
-        // The gate must see the security-relevant spawn parameters — which agent
-        // type runs and at what permission mode — not the cosmetic 3-5 word
-        // `description`.
+        // The gate must see the security-relevant spawn parameter — which agent
+        // type runs — not the cosmetic 3-5 word `description`. `mode` is NOT
+        // tagged: the only value `execute` honors is `Plan`, and only to RESTRICT
+        // a teammate (force plan approval) — it can never escalate the child's
+        // permission level, so it is irrelevant to the auto-approve risk gate.
         let mut tags: Vec<String> = Vec::new();
         if let Some(subagent_type) = input.subagent_type.as_deref().filter(|s| !s.is_empty()) {
             tags.push(subagent_type.to_string());
-        }
-        if let Some(mode) = input.mode
-            && let Some(wire) = serde_json::to_value(mode)
-                .ok()
-                .and_then(|v| v.as_str().map(str::to_string))
-        {
-            tags.push(format!("mode={wire}"));
         }
         let prefix = if tags.is_empty() {
             ": ".to_string()
@@ -631,35 +657,45 @@ impl Tool for AgentTool {
             .and_then(|(cat, name)| cat.find_active(name).cloned())
             .map(std::sync::Arc::new);
 
-        // Child permission mode, mirroring TS `runAgent.ts:415-433`:
+        // Child permission mode, mirroring TS `runAgent.ts:415-433` +
+        // `spawnMultiAgent.ts:215-218`:
         //   - FORK resolves like an agent declaring `permissionMode: "bubble"`
         //     (`FORK_AGENT.permissionMode = 'bubble'`, `forkSubagent.ts`): the
         //     fork child keeps no session rules and bubbles every permission
         //     decision to the parent terminal.
-        //   - TEAM is the ONLY path where TS threads the model's `mode`
-        //     (`spawnMode`) through — it drives `plan_mode_required: spawnMode
-        //     === 'plan'`, mirrored by the coordinator's `request.mode == Plan`
-        //     plan detection. Keep `input.mode` here, unchanged.
-        //   - NON-FORK, NON-TEAM: the child's mode comes from the resolved
-        //     `AgentDefinition.permissionMode`, NOT the model's `input.mode`. TS
-        //     never threads `spawnMode` into the non-team `runAgent` path, so an
-        //     agent declaring `permissionMode: "plan"` runs in plan mode no
-        //     matter what the model passed (and `input.mode` only ever reaches
-        //     the auto-mode classifier via `to_auto_classifier_input`).
-        // In every case parent trust modes (Bypass/AcceptEdits/Auto) take
-        // precedence inside `resolve_subagent_mode`, exactly as TS does.
-        let requested_mode = if is_fork_spawn {
-            Some(coco_types::PermissionMode::Bubble)
-        } else if is_team_spawn {
-            input.mode
+        //   - TEAM spawn + model `mode == Plan`: force the teammate into Plan,
+        //     OVERRIDING even a permissive trust parent. This is TS's
+        //     `plan_mode_required: spawnMode === 'plan'` → "don't inherit bypass
+        //     permissions; plan mode takes precedence over bypass for safety"
+        //     (`spawnMultiAgent.ts:215-218`). It is the ONLY model-honored `mode`
+        //     value, and ONLY in the restrictive direction — a leader running in
+        //     bypass/acceptEdits can deliberately spawn a cautious, approval-gated
+        //     teammate. Every OTHER `mode` value is ignored, so the model can
+        //     never escalate a teammate's permission level (closing the prior
+        //     coco bug where `resolve_subagent_mode(Default, Some(Bypass))` handed
+        //     a teammate bypass).
+        //   - Otherwise (ordinary subagent, or team spawn without `mode:"plan"`):
+        //     the child mode comes from `AgentDefinition.permissionMode` (config)
+        //     + parent-trust inheritance; `input.mode` is NOT threaded. Parent
+        //     trust modes (Bypass/AcceptEdits/Auto) take precedence inside
+        //     `resolve_subagent_mode`, exactly as TS does.
+        let config_mode = resolved_definition
+            .as_ref()
+            .and_then(|def| def.permission_mode.as_deref())
+            .and_then(|wire| wire.parse::<coco_types::PermissionMode>().ok());
+        let effective_mode = if is_fork_spawn {
+            coco_permissions::resolve_subagent_mode(
+                ctx.permission_context.mode,
+                Some(coco_types::PermissionMode::Bubble),
+            )
+        } else if is_team_spawn && input.mode == Some(coco_types::PermissionMode::Plan) {
+            // Restrictive override — bypasses `resolve_subagent_mode`'s
+            // parent-trust precedence on purpose (plan must win over a bypass
+            // parent for safety).
+            coco_types::PermissionMode::Plan
         } else {
-            resolved_definition
-                .as_ref()
-                .and_then(|def| def.permission_mode.as_deref())
-                .and_then(|wire| wire.parse::<coco_types::PermissionMode>().ok())
+            coco_permissions::resolve_subagent_mode(ctx.permission_context.mode, config_mode)
         };
-        let effective_mode =
-            coco_permissions::resolve_subagent_mode(ctx.permission_context.mode, requested_mode);
 
         // Latent-bug fix: an explicit `subagent_type` that doesn't resolve
         // to a catalog entry would silently degrade — no system prompt,
