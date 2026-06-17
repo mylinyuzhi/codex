@@ -861,9 +861,14 @@ pub async fn run_chat_with_options(
     // fork dispatcher), unconditional like TUI/SDK. Best-effort: a transient
     // task-dir / worktree-discovery failure must NOT kill a print run that
     // never spawns anything — degrade to NoOp handles instead.
-    if let Err(e) =
-        crate::session_bootstrap::install_session_late_binds(runtime.clone(), &cwd, None, None)
-            .await
+    if let Err(e) = crate::session_bootstrap::install_session_late_binds(
+        runtime.clone(),
+        &cwd,
+        None,
+        None,
+        None,
+    )
+    .await
     {
         tracing::warn!(error = %e, "agent/task infrastructure unavailable in headless; spawns degrade");
     }

@@ -391,11 +391,20 @@ pub(crate) fn resolve_skill_load_gates_with_add_dirs(
 /// `None`, the runtime's LSP slot stays unset and
 /// `LspTool::is_enabled()` reports `false` (via `NoOpLspHandle`), so
 /// the tool is hidden from the model's tool list.
+///
+/// `event_sink` is the long-lived `CoreEvent` sender the surface
+/// consumes. Wired into the `TaskManager` so background-task and
+/// subagent lifecycle events (`TaskStarted` / `TaskProgress` /
+/// `TaskCompleted`) reach the TUI — without it the manager drops them
+/// silently and the subagent activity panel never populates. TUI passes
+/// `Some(notification_tx.clone())`; SDK/headless pass `None` (they build
+/// their `CoreEvent` channel per-turn after this point).
 pub async fn install_session_late_binds(
     runtime: Arc<SessionRuntime>,
     cwd: &Path,
     mcp_handle: Option<coco_tool_runtime::McpHandleRef>,
     lsp_handle: Option<coco_tool_runtime::LspHandleRef>,
+    event_sink: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
 ) -> Result<()> {
     // Background task runtime — owns the `TaskManager` and per-task
     // disk output; shared with `SwarmAgentHandle` so AgentTool
@@ -422,9 +431,17 @@ pub async fn install_session_late_binds(
             runtime.command_queue().clone(),
         ),
     );
+    // Wire the surface's long-lived `CoreEvent` sink into the manager so
+    // `TaskStarted` / `TaskProgress` / `TaskCompleted` reach the TUI. Absent
+    // a sink the manager short-circuits every emit (`emit_progress` bails at
+    // the no-sink branch), starving the subagent activity panel.
+    let mut task_manager = coco_tasks::TaskManager::new();
+    if let Some(event_sink) = event_sink {
+        task_manager = task_manager.with_event_sink(event_sink);
+    }
     let task_runtime = Arc::new(
         crate::task_runtime::TaskRuntime::with_session_dir(
-            Arc::new(coco_tasks::TaskManager::new()),
+            Arc::new(task_manager),
             task_session_dir,
         )
         .with_notification_sink(sink),
