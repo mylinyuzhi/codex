@@ -16,7 +16,7 @@ async fn empty_sources_materializes_all_defaults() {
             just_compacted: false,
             per_source_timeout: Duration::from_millis(1000),
             skill_overrides: &coco_config::SkillOverrideTiers::default(),
-            skill_listing_enabled: true,
+            skill_tool_loaded: true,
         })
         .await;
     assert!(out.hook_events.is_empty());
@@ -49,7 +49,7 @@ async fn noop_bundle_also_materializes_defaults_through_trait_dispatch() {
             just_compacted: false,
             per_source_timeout: Duration::from_millis(1000),
             skill_overrides: &coco_config::SkillOverrideTiers::default(),
-            skill_listing_enabled: true,
+            skill_tool_loaded: true,
         })
         .await;
     // Every field should still be default — NoOps return empty/None.
@@ -103,7 +103,7 @@ async fn disabled_config_skips_sources_even_when_present() {
             just_compacted: false,
             per_source_timeout: Duration::from_millis(1000),
             skill_overrides: &coco_config::SkillOverrideTiers::default(),
-            skill_listing_enabled: true,
+            skill_tool_loaded: true,
         })
         .await;
 
@@ -165,7 +165,7 @@ async fn skill_listing_gate_skips_listing_source_when_skill_tool_unavailable() {
             just_compacted: false,
             per_source_timeout: Duration::from_millis(1000),
             skill_overrides: &coco_config::SkillOverrideTiers::default(),
-            skill_listing_enabled: false,
+            skill_tool_loaded: false,
         })
         .await;
 
@@ -174,4 +174,80 @@ async fn skill_listing_gate_skips_listing_source_when_skill_tool_unavailable() {
         spy.listing_calls.load(std::sync::atomic::Ordering::Relaxed),
         0
     );
+}
+
+#[tokio::test]
+async fn skill_discovery_gate_skips_discovery_source_when_skill_tool_unavailable() {
+    use async_trait::async_trait;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
+    #[derive(Debug, Default)]
+    struct SpySkillsSource {
+        discovery_calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl SkillsSource for SpySkillsSource {
+        async fn listing(
+            &self,
+            _agent_id: Option<&str>,
+            _tiers: &coco_config::SkillOverrideTiers,
+        ) -> Option<String> {
+            None
+        }
+
+        async fn invoked(&self, _agent_id: Option<&str>) -> Vec<crate::InvokedSkillEntry> {
+            Vec::new()
+        }
+
+        async fn skill_discovery(
+            &self,
+            _user_input: &str,
+            _tiers: &coco_config::SkillOverrideTiers,
+        ) -> Option<coco_types::SkillDiscoveryPayload> {
+            self.discovery_calls.fetch_add(1, Ordering::Relaxed);
+            None
+        }
+
+        async fn activate_skills_for_paths(
+            &self,
+            _file_paths: &[std::path::PathBuf],
+            _cwd: &std::path::Path,
+        ) -> Vec<String> {
+            Vec::new()
+        }
+    }
+
+    // `skill_discovery` is off by default and gated on the Skill tool being
+    // loaded (like `skill_listing`): the reminder tells the model to invoke
+    // `Skill(...)`, which is unactionable when the tool is filtered out.
+    for (skill_tool_loaded, expected_calls) in [(false, 0usize), (true, 1usize)] {
+        let spy = Arc::new(SpySkillsSource::default());
+        let sources = ReminderSources {
+            skills: Some(spy.clone()),
+            ..Default::default()
+        };
+        let mut cfg = SystemReminderConfig::default();
+        cfg.attachments.skill_discovery = true; // off by default
+        let _ = sources
+            .materialize(MaterializeContext {
+                config: &cfg,
+                agent_id: None,
+                user_input: Some("help me refactor this module"),
+                mentioned_paths: &[],
+                recent_tools: &[],
+                just_compacted: false,
+                per_source_timeout: Duration::from_millis(1000),
+                skill_overrides: &coco_config::SkillOverrideTiers::default(),
+                skill_tool_loaded,
+            })
+            .await;
+        assert_eq!(
+            spy.discovery_calls.load(Ordering::Relaxed),
+            expected_calls,
+            "skill_discovery call count wrong for skill_tool_loaded={skill_tool_loaded}"
+        );
+    }
 }

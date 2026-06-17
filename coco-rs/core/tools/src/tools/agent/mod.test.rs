@@ -231,27 +231,33 @@ impl AgentHandle for CapturingAgentHandle {
 }
 
 /// Test helper: resolve `AgentTool`'s model-facing parameters schema via
-/// `tool_spec()` (the `Function` variant's `parameters`) for a given context.
+/// `tool_spec()` (the `Function` variant's `parameters`) for a given context,
+/// with default [`PromptOptions`] (a 3p build — `ant_build = false`).
 async fn agent_model_params(ctx: &coco_tool_runtime::SchemaContext) -> serde_json::Value {
-    match <AgentTool as DynTool>::tool_spec(
-        &AgentTool,
-        ctx,
-        &coco_tool_runtime::PromptOptions::default(),
-    )
-    .await
-    {
+    agent_model_params_with_opts(ctx, &coco_tool_runtime::PromptOptions::default()).await
+}
+
+/// Same as [`agent_model_params`] but with explicit [`PromptOptions`] so tests
+/// can flip prompt-side gates (e.g. `ant_build`, which controls `cwd`).
+async fn agent_model_params_with_opts(
+    ctx: &coco_tool_runtime::SchemaContext,
+    opts: &coco_tool_runtime::PromptOptions,
+) -> serde_json::Value {
+    match <AgentTool as DynTool>::tool_spec(&AgentTool, ctx, opts).await {
         coco_tool_runtime::ToolSpec::Function(spec) => spec.parameters,
         coco_tool_runtime::ToolSpec::Freeform(_) => panic!("AgentTool must be a Function tool"),
     }
 }
 
 /// Verifies the AgentTool model-facing schema exposes exactly the
-/// nine user fields. The five PR11 "internal-only knobs"
-/// (`effort`, `use_exact_tools`, `mcp_servers`, `disallowed_tools`,
-/// `max_turns`, `initial_prompt`) were intentionally removed — the
-/// coordinator now reads them off the resolved `AgentDefinition` only.
+/// eight user fields. `cwd` (a ninth runtime field) is never offered to
+/// the model — see `test_agent_tool_never_exposes_cwd_to_model`.
+/// The five PR11 "internal-only knobs" (`effort`, `use_exact_tools`,
+/// `mcp_servers`, `disallowed_tools`, `max_turns`, `initial_prompt`)
+/// were intentionally removed — the coordinator now reads them off the
+/// resolved `AgentDefinition` only.
 #[tokio::test]
-async fn test_agent_tool_input_schema_exposes_nine_user_fields() {
+async fn test_agent_tool_input_schema_exposes_eight_user_fields_by_default() {
     let schema = agent_model_params(&coco_tool_runtime::SchemaContext::default()).await;
     let p = schema["properties"].as_object().unwrap();
     let mut keys: Vec<&str> = p.keys().map(String::as_str).collect();
@@ -265,19 +271,17 @@ async fn test_agent_tool_input_schema_exposes_nine_user_fields() {
         "name",
         "team_name",
         "mode",
-        "cwd",
     ];
     expected.sort();
     assert_eq!(
         keys, expected,
-        "schema must expose exactly the 9 user fields"
+        "schema must expose exactly the 8 user fields (cwd is never model-facing)"
     );
 
-    // `mode` enum carries the PermissionMode wire variants: the 5 external
-    // modes + `bubble` + feature-gated `auto`. `ask`/`deny` are
-    // `PermissionBehavior` values, NOT modes, and must be absent (they fail
-    // to parse and are silently dropped to the parent mode by
-    // `resolve_subagent_mode`).
+    // `mode` enum = the model-pickable teammate modes: the 5 external modes
+    // plus `auto` (coco-rs ships auto mode). `bubble` is an INTERNAL mode (set
+    // by the fork/coordinator machinery, not the model) and `ask`/`deny` are
+    // `PermissionBehavior` values, not modes — all three must be absent.
     let mode_enum = p["mode"].get("enum").unwrap().as_array().unwrap();
     let mode_values: Vec<&str> = mode_enum.iter().filter_map(|v| v.as_str()).collect();
     for expected in [
@@ -285,7 +289,6 @@ async fn test_agent_tool_input_schema_exposes_nine_user_fields() {
         "plan",
         "dontAsk",
         "acceptEdits",
-        "bubble",
         "bypassPermissions",
         "auto",
     ] {
@@ -294,10 +297,12 @@ async fn test_agent_tool_input_schema_exposes_nine_user_fields() {
             "mode enum missing {expected}; got {mode_values:?}"
         );
     }
-    for behavior in ["ask", "deny"] {
+    // `bubble` is internal-only (fork/coordinator-set); `ask`/`deny` are
+    // PermissionBehavior values. None may appear in the model-facing enum.
+    for absent in ["ask", "deny", "bubble"] {
         assert!(
-            !mode_values.contains(&behavior),
-            "mode enum must not contain PermissionBehavior value {behavior}; got {mode_values:?}"
+            !mode_values.contains(&absent),
+            "mode enum must not contain non-model-pickable value {absent}; got {mode_values:?}"
         );
     }
     // Isolation accepts only "worktree" — remote isolation is
@@ -376,6 +381,56 @@ async fn test_agent_tool_session_schema_drops_run_in_background_when_disabled() 
     assert!(
         session_props_default.contains_key("run_in_background"),
         "default session must keep run_in_background"
+    );
+}
+
+/// `cwd` is never offered to the model. TS exposes it only behind
+/// `feature('KAIROS')` (`AgentTool.tsx:111`); coco-rs has no KAIROS surface, so
+/// the field is hidden unconditionally — and deliberately NOT tied to
+/// `ant_build` (that flag maps to TS's ant gate for `isolation:"remote"`). It
+/// stays in the runtime validation schema (the coordinator applies a supplied
+/// `cwd` as the child's `cwd_override`), so hiding it from the model leaves the
+/// `cwd` × `isolation:"worktree"` mutual-exclusivity rejection reachable ONLY
+/// via hook/permission `updated_input` injection (the same path that can set
+/// `mcp_servers`) — never via a model-supplied `cwd`. The validation must stay.
+#[tokio::test]
+async fn test_agent_tool_never_exposes_cwd_to_model() {
+    // Runtime validation schema always carries cwd (consumed by the coordinator
+    // spawn path; injectable by a future hook/permission rewrite).
+    let static_schema = <AgentTool as DynTool>::runtime_validation_schema(&AgentTool).as_value();
+    assert!(
+        static_schema["properties"]
+            .as_object()
+            .expect("static schema has properties")
+            .contains_key("cwd"),
+        "runtime schema must keep cwd for the spawn path / hook injection"
+    );
+
+    let ctx = coco_tool_runtime::SchemaContext::default();
+
+    // Default 3p build → cwd hidden from the model.
+    let default_schema = agent_model_params(&ctx).await;
+    assert!(
+        !default_schema["properties"]
+            .as_object()
+            .expect("schema has properties")
+            .contains_key("cwd"),
+        "default build must omit cwd from the model-facing schema"
+    );
+
+    // `ant_build = true` must NOT re-expose cwd — it is decoupled from the ant
+    // gate (which only governs `isolation:"remote"`).
+    let ant_opts = coco_tool_runtime::PromptOptions {
+        ant_build: true,
+        ..Default::default()
+    };
+    let ant_schema = agent_model_params_with_opts(&ctx, &ant_opts).await;
+    assert!(
+        !ant_schema["properties"]
+            .as_object()
+            .expect("schema has properties")
+            .contains_key("cwd"),
+        "ant_build must not expose cwd (cwd is decoupled from the ant gate)"
     );
 }
 
@@ -1745,6 +1800,101 @@ async fn test_agent_tool_threads_definition_from_catalog_to_spawn_request() {
     assert_eq!(def.name, "Explore");
     assert_eq!(def.model.as_deref(), Some("anthropic/claude-haiku-4-5"));
     assert_eq!(def.model_role, Some(ModelRole::Explore));
+}
+
+/// Parity with TS `runAgent.ts:415-433`: for a non-fork, non-team spawn the
+/// child's permission mode comes from `AgentDefinition.permissionMode` — the
+/// model's `mode` input is IGNORED (TS threads `spawnMode` only into team
+/// spawns). Parent trust modes still take precedence via `resolve_subagent_mode`.
+#[tokio::test]
+async fn test_agent_tool_permission_mode_from_definition_ignores_model_mode() {
+    use coco_subagent::AgentCatalogSnapshot;
+    use coco_types::{AgentDefinition, AgentSource, AgentTypeId, PermissionMode, SubagentType};
+    use std::collections::BTreeMap;
+
+    fn catalog_with_plan_agent() -> Arc<AgentCatalogSnapshot> {
+        let mut active = BTreeMap::new();
+        active.insert(
+            "Explore".to_string(),
+            AgentDefinition {
+                agent_type: AgentTypeId::Builtin(SubagentType::Explore),
+                name: "Explore".into(),
+                when_to_use: Some("desc".into()),
+                description: Some("desc".into()),
+                source: AgentSource::BuiltIn,
+                permission_mode: Some("plan".into()),
+                ..Default::default()
+            },
+        );
+        Arc::new(AgentCatalogSnapshot::new(active, Vec::new()))
+    }
+
+    // Parent in a non-trust mode (Default): the definition's `plan` wins, and
+    // the model's contradictory `mode: "acceptEdits"` is ignored.
+    let capturing = Arc::new(CapturingAgentHandle::default());
+    let mut ctx = ToolUseContext::test_default();
+    ctx.agent = capturing.clone();
+    ctx.agent_catalog = Some(catalog_with_plan_agent());
+    ctx.permission_context.mode = PermissionMode::Default;
+
+    <AgentTool as DynTool>::execute(
+        &AgentTool,
+        serde_json::json!({
+            "prompt": "find files",
+            "description": "search code",
+            "subagent_type": "Explore",
+            "mode": "acceptEdits",
+        }),
+        &ctx,
+    )
+    .await
+    .expect("AgentTool exec must succeed");
+
+    assert_eq!(
+        capturing
+            .last_request
+            .lock()
+            .await
+            .as_ref()
+            .expect("spawn request captured")
+            .mode,
+        Some(PermissionMode::Plan),
+        "non-fork child mode must come from AgentDefinition.permissionMode (plan), \
+         not the model's mode input (acceptEdits)"
+    );
+
+    // Parent in a trust mode (AcceptEdits) takes precedence over the
+    // definition's `plan` — `resolve_subagent_mode` keeps the parent mode.
+    let capturing = Arc::new(CapturingAgentHandle::default());
+    let mut ctx = ToolUseContext::test_default();
+    ctx.agent = capturing.clone();
+    ctx.agent_catalog = Some(catalog_with_plan_agent());
+    ctx.permission_context.mode = PermissionMode::AcceptEdits;
+
+    <AgentTool as DynTool>::execute(
+        &AgentTool,
+        serde_json::json!({
+            "prompt": "find files",
+            "description": "search code",
+            "subagent_type": "Explore",
+        }),
+        &ctx,
+    )
+    .await
+    .expect("AgentTool exec must succeed");
+
+    assert_eq!(
+        capturing
+            .last_request
+            .lock()
+            .await
+            .as_ref()
+            .expect("spawn request captured")
+            .mode,
+        Some(PermissionMode::AcceptEdits),
+        "parent trust mode (AcceptEdits) must take precedence over the \
+         definition's plan mode"
+    );
 }
 
 #[tokio::test]

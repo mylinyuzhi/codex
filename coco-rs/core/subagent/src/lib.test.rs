@@ -982,3 +982,28 @@ fn prompt_filters_by_allowed_agent_types() {
     assert_eq!(listing.lines().count(), 1);
     assert!(listing.starts_with("- Explore: "));
 }
+
+#[test]
+fn prompt_filters_by_denied_agent_types() {
+    let mut store = AgentDefinitionStore::new(
+        BuiltinAgentCatalog::all_enabled(),
+        AgentSearchPaths::empty(),
+    );
+    store.load();
+    let snap = store.snapshot();
+    let renderer = AgentToolPromptRenderer::new(&snap);
+    // Mirror TS `filterDeniedAgents`: an `Agent(general-purpose)` deny rule
+    // removes that agent from the listing; non-denied agents remain.
+    let listing = renderer.agent_list(&PromptOptions {
+        denied_agent_types: vec!["general-purpose".to_owned()],
+        ..Default::default()
+    });
+    assert!(
+        !listing.contains("- general-purpose:"),
+        "denied agent must be dropped from the listing: {listing}"
+    );
+    assert!(
+        listing.contains("- statusline-setup:"),
+        "non-denied agents must remain in the listing: {listing}"
+    );
+}

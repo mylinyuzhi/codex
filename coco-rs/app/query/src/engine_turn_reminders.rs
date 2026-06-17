@@ -185,25 +185,33 @@ impl QueryEngine {
         // `reminder_tools` is the model-visible (loaded) tool list —
         // used by `TurnReminderInput::tools` and unchanged consumers below.
         let reminder_tools = reminder_loaded_tools.clone();
+        // Current active agent types from the wired catalog (see
+        // `current_agent_types` — NOT the dead `session_bootstrap.agents`).
+        // Cache-shared forks (`fork_label.is_some()`) are EXCLUDED, exactly like
+        // `current_date` below: they reuse the parent's byte-for-byte prompt
+        // prefix, so injecting an agent-listing-delta / agent-mention reminder
+        // would break cache parity (PR #18143). Main loop + real subagents
+        // (`fork_label` None) get the catalog-derived agent reminders.
+        let reminder_current_agents = if self.config.fork_label.is_none() {
+            self.current_agent_types()
+        } else {
+            Vec::new()
+        };
         let reminder_explore_plan_agents_available = reminder_tools
             .iter()
             .any(|name| name == ToolName::Agent.as_str())
-            && self.session_bootstrap.as_ref().is_some_and(|bootstrap| {
-                bootstrap
-                    .agents
-                    .iter()
-                    .any(|name| name == SubagentType::Explore.as_str())
-                    && bootstrap
-                        .agents
-                        .iter()
-                        .any(|name| name == SubagentType::Plan.as_str())
-            });
-        let reminder_skill_listing_enabled = reminder_loaded_tools
+            && reminder_current_agents
+                .iter()
+                .any(|name| name == SubagentType::Explore.as_str())
+            && reminder_current_agents
+                .iter()
+                .any(|name| name == SubagentType::Plan.as_str());
+        let reminder_skill_tool_loaded = reminder_loaded_tools
             .iter()
             .any(|name| name == ToolName::Skill.as_str());
         tracing::debug!(
             loaded_tools = ?reminder_loaded_tools,
-            skill_listing_enabled = reminder_skill_listing_enabled,
+            skill_tool_loaded = reminder_skill_tool_loaded,
             "turn reminder loaded tool set resolved"
         );
         let pm_settings = &self.config.plan_mode_settings;
@@ -319,13 +327,8 @@ impl QueryEngine {
         // `announced` with the current deferred set after emission. Moved
         // (last use): the delta above already read it by reference.
         let reminder_deferred_tools_clone = reminder_deferred_tools;
-        // Diff the current agent-type set (from `SessionBootstrap`)
-        // against the last-announced set on app_state.
-        let reminder_current_agents: Vec<String> = self
-            .session_bootstrap
-            .as_ref()
-            .map(|b| b.agents.clone())
-            .unwrap_or_default();
+        // Diff the current agent-type set (resolved above from the wired
+        // catalog) against the last-announced set on app_state.
         let reminder_agent_listing_delta = compute_agents_delta(
             &reminder_current_agents,
             &app_state_snapshot.last_announced_agents,
@@ -386,14 +389,8 @@ impl QueryEngine {
                     display_path: m.text.clone(),
                 })
                 .collect();
-        let reminder_agent_mentions: Vec<coco_system_reminder::AgentMentionEntry> =
-            reminder_mentions
-                .iter()
-                .filter(|m| matches!(m.mention_type, coco_context::user_input::MentionType::Agent))
-                .map(|m| coco_system_reminder::AgentMentionEntry {
-                    agent_type: m.text.clone(),
-                })
-                .collect();
+        let reminder_agent_mentions =
+            active_agent_mentions(&reminder_mentions, &reminder_current_agents);
 
         // Fan-out to every per-subsystem source (hooks / LSP / tasks /
         // skills / MCP / swarm / IDE / memory) in parallel, with
@@ -452,7 +449,7 @@ impl QueryEngine {
                 just_compacted,
                 per_source_timeout: reminder_source_timeout,
                 skill_overrides: &self.config.skill_overrides,
-                skill_listing_enabled: reminder_skill_listing_enabled,
+                skill_tool_loaded: reminder_skill_tool_loaded,
             })
             .await;
 
@@ -612,7 +609,7 @@ impl QueryEngine {
             task_statuses: materialized.task_statuses,
             // SkillsSource wins when present; else fall back to
             // SessionBootstrap names-only listing.
-            skill_listing: if reminder_skill_listing_enabled {
+            skill_listing: if reminder_skill_tool_loaded {
                 materialized.skill_listing.or_else(|| {
                     self.session_bootstrap
                         .as_ref()
@@ -798,6 +795,36 @@ impl QueryEngine {
 
         app_state_snapshot
     }
+}
+
+/// Resolve the `@agent-…` mentions in this turn's user input into
+/// `agent_mention` reminder entries, mirroring TS `processAgentMentions`:
+///
+/// - strip the `agent-` prefix via first-occurrence replace (TS
+///   `mention.replace('agent-', '')`) so the unquoted form (`@agent-Explore` →
+///   `"Explore"`) and the quoted form (`@"Explore (agent)"`, already
+///   suffix-stripped by `process_user_input` → `"Explore"`) both normalize to
+///   the bare type, and
+/// - drop any mention that doesn't resolve to an active agent type
+///   (`active_agents` = the wired catalog's `def.name`s, the same set
+///   `AgentTool::execute` validates `subagent_type` against), so the reminder
+///   never tells the model to invoke an agent the spawn would reject as an
+///   unknown `subagent_type`. The runtime guard stays as a backstop.
+fn active_agent_mentions(
+    mentions: &[coco_context::user_input::Mention],
+    active_agents: &[String],
+) -> Vec<coco_system_reminder::AgentMentionEntry> {
+    mentions
+        .iter()
+        .filter(|m| matches!(m.mention_type, coco_context::user_input::MentionType::Agent))
+        .filter_map(|m| {
+            let agent_type = m.text.replacen("agent-", "", 1);
+            active_agents
+                .iter()
+                .any(|a| a == &agent_type)
+                .then_some(coco_system_reminder::AgentMentionEntry { agent_type })
+        })
+        .collect()
 }
 
 /// Tool names the assistant successfully invoked since the previous

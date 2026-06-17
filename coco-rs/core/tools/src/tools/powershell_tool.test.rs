@@ -16,6 +16,51 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+/// Mirror BashTool: `run_in_background` is dropped from the model-facing
+/// schema when background tasks are disabled, so the model never sets a field
+/// whose background execution path would then fail for lack of a task handle.
+#[tokio::test]
+async fn test_powershell_tool_spec_drops_run_in_background_when_disabled() {
+    async fn ps_params(ctx: &coco_tool_runtime::SchemaContext) -> serde_json::Value {
+        match <PowerShellTool as DynTool>::tool_spec(
+            &PowerShellTool,
+            ctx,
+            &coco_tool_runtime::PromptOptions::default(),
+        )
+        .await
+        {
+            coco_tool_runtime::ToolSpec::Function(spec) => spec.parameters,
+            coco_tool_runtime::ToolSpec::Freeform(_) => {
+                panic!("PowerShellTool must be a Function tool")
+            }
+        }
+    }
+
+    // Default session: run_in_background exposed.
+    let default_params = ps_params(&coco_tool_runtime::SchemaContext::default()).await;
+    assert!(
+        default_params["properties"]
+            .as_object()
+            .expect("schema has properties")
+            .contains_key("run_in_background"),
+        "default session must expose run_in_background"
+    );
+
+    // Background tasks disabled: run_in_background omitted.
+    let ctx = coco_tool_runtime::SchemaContext {
+        background_tasks_disabled: true,
+        ..Default::default()
+    };
+    let disabled_params = ps_params(&ctx).await;
+    assert!(
+        !disabled_params["properties"]
+            .as_object()
+            .expect("schema has properties")
+            .contains_key("run_in_background"),
+        "background_tasks_disabled session must omit run_in_background"
+    );
+}
+
 /// Unsafe CLM type reference must be blocked before pwsh is spawned.
 /// Rejects types outside the allowlist.
 #[tokio::test]

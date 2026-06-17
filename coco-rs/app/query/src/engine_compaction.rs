@@ -880,11 +880,7 @@ impl QueryEngine {
         let (current_loaded_tools, current_deferred_tools) = self
             .current_tool_search_partitions(&app_state_snapshot)
             .await;
-        let current_agents = self
-            .session_bootstrap
-            .as_ref()
-            .map(|b| b.agents.clone())
-            .unwrap_or_default();
+        let current_agents = self.current_agent_types();
         let source_timeout =
             std::time::Duration::from_millis(if self.config.system_reminder.timeout_ms > 0 {
                 self.config.system_reminder.timeout_ms as u64
@@ -902,7 +898,7 @@ impl QueryEngine {
                 just_compacted: true,
                 per_source_timeout: source_timeout,
                 skill_overrides: &self.config.skill_overrides,
-                skill_listing_enabled: false,
+                skill_tool_loaded: false,
             })
             .await;
         let current_mcp_instructions = materialized.mcp_instructions_current;
@@ -1060,17 +1056,14 @@ impl QueryEngine {
         coco_compact::create_plan_attachment_if_needed(&plan_path, plan_content.as_deref())
     }
 
-    fn explore_plan_agents_available_from_bootstrap(&self) -> bool {
-        self.session_bootstrap.as_ref().is_some_and(|bootstrap| {
-            bootstrap
-                .agents
+    fn explore_plan_agents_available(&self) -> bool {
+        let agents = self.current_agent_types();
+        agents
+            .iter()
+            .any(|name| name == coco_types::SubagentType::Explore.as_str())
+            && agents
                 .iter()
-                .any(|name| name == coco_types::SubagentType::Explore.as_str())
-                && bootstrap
-                    .agents
-                    .iter()
-                    .any(|name| name == coco_types::SubagentType::Plan.as_str())
-        })
+                .any(|name| name == coco_types::SubagentType::Plan.as_str())
     }
 
     async fn snapshot_plan_mode_attachment(&self) -> Option<coco_compact::PlanModeAttachment> {
@@ -1127,7 +1120,7 @@ impl QueryEngine {
             phase4_variant: phase4,
             explore_agent_count: self.config.plan_mode_settings.explore_agent_count,
             plan_agent_count: self.config.plan_mode_settings.plan_agent_count,
-            explore_plan_agents_available: self.explore_plan_agents_available_from_bootstrap(),
+            explore_plan_agents_available: self.explore_plan_agents_available(),
             is_sub_agent: self.config.agent_id.is_some(),
             plan_file_path,
             plan_exists,
@@ -1343,8 +1336,7 @@ impl QueryEngine {
                     phase4_variant: phase4,
                     explore_agent_count: pm.explore_agent_count,
                     plan_agent_count: pm.plan_agent_count,
-                    explore_plan_agents_available: self
-                        .explore_plan_agents_available_from_bootstrap(),
+                    explore_plan_agents_available: self.explore_plan_agents_available(),
                     is_sub_agent: agent_id_for_attachments.is_some(),
                     plan_file_path: plan_path,
                     plan_exists: plan_exists_flag,

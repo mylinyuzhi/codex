@@ -287,3 +287,89 @@ async fn skill_listing_tool_filter_excluding_skill_suppresses() {
         "skill listing should not reach the model when Skill is filtered out"
     );
 }
+
+/// `active_agent_mentions` mirrors TS `processAgentMentions`: it strips the
+/// `agent-` prefix from the unquoted form and drops mentions that don't
+/// resolve to an active agent type, so the reminder never tells the model to
+/// invoke an agent `AgentTool` would reject as an unknown `subagent_type`.
+#[test]
+fn test_active_agent_mentions_strips_prefix_and_filters_unknown() {
+    use coco_context::user_input::process_user_input;
+
+    let input = process_user_input("Try @agent-Explore then @agent-bogus then @\"Plan (agent)\"");
+    let active = vec!["Explore".to_string(), "Plan".to_string()];
+
+    let entries = super::active_agent_mentions(&input.mentions, &active);
+    let types: Vec<&str> = entries.iter().map(|e| e.agent_type.as_str()).collect();
+
+    // `agent-Explore` → `Explore` (prefix stripped, known → kept);
+    // `agent-bogus` → dropped (not in catalog);
+    // `"Plan (agent)"` → `Plan` (suffix-stripped form, known → kept).
+    assert_eq!(types, vec!["Explore", "Plan"]);
+}
+
+/// With no active agents, every `@agent-…` mention is dropped (fail-closed).
+#[test]
+fn test_active_agent_mentions_empty_catalog_drops_all() {
+    use coco_context::user_input::process_user_input;
+
+    let input = process_user_input("Use @agent-Explore please");
+    let entries = super::active_agent_mentions(&input.mentions, &[]);
+    assert!(entries.is_empty());
+}
+
+/// Regression guard (the headline fix): the `@agent-…` mention filter must read
+/// the WIRED `agent_catalog` — the same catalog `AgentTool::execute` validates
+/// `subagent_type` against — and NOT `session_bootstrap.agents`, which is
+/// `None` in every production path (TUI/SDK/headless). Sourcing from the dead
+/// field dropped every `@agent-…` mention before it reached the model,
+/// defeating the reminder's entire purpose.
+///
+/// Drives a real `QueryEngine` turn end-to-end with a built-in catalog (which
+/// includes `Explore`) and asserts the agent-mention reminder reaches the
+/// model. The unit tests above exercise the helper in isolation; only an
+/// engine-level test catches the wrong *source* being wired in.
+#[tokio::test]
+async fn agent_mentions_reminder_sources_from_wired_catalog() {
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let model = Arc::new(CapturingTextModel {
+        captured_prompts: captured.clone(),
+    });
+    let client = crate::test_support::model_runtime_registry(model);
+
+    // Built-in catalog with Explore/Plan enabled — the production source.
+    let mut store = coco_subagent::AgentDefinitionStore::new(
+        coco_subagent::BuiltinAgentCatalog::all_enabled(),
+        coco_subagent::AgentSearchPaths::empty(),
+    );
+    store.load();
+    let catalog = store.snapshot();
+
+    let config = QueryEngineConfig {
+        model_id: "skill-listing-mock".into(),
+        permission_mode: PermissionMode::Default,
+        max_turns: Some(1),
+        ..Default::default()
+    };
+    let engine = QueryEngine::new(
+        config,
+        client,
+        skill_tools(),
+        CancellationToken::new(),
+        None,
+    )
+    .with_agent_catalog(catalog);
+
+    engine
+        .run("Please use @agent-Explore on this")
+        .await
+        .expect("engine run");
+
+    let prompts = captured.lock().expect("captured prompts lock").clone();
+    assert!(
+        prompt_text(&prompts[0]).contains("invoke the agent \"Explore\""),
+        "the @agent-Explore mention reminder must reach the model when Explore \
+         is active in the wired catalog (regression: it was sourced from the \
+         dead session_bootstrap.agents and silently dropped in production)"
+    );
+}

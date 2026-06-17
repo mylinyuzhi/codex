@@ -195,16 +195,23 @@ impl Tool for AgentTool {
                     },
                     "mode": {
                         "type": "string",
-                        // The `PermissionMode` wire values (camelCase) — these are
-                        // the modes that round-trip through
-                        // `serde_json::from_value::<PermissionMode>`.
-                        // The INTERNAL set: the 5 external modes + `bubble`, plus
-                        // `auto` under a feature gate. `ask`/`deny` are NOT modes —
-                        // they are `PermissionBehavior` values and must not appear
-                        // here (they fail to parse and are silently dropped to the
-                        // parent mode by `resolve_subagent_mode`).
+                        // Model-pickable permission modes for a spawned teammate
+                        // (camelCase `PermissionMode` wire values). This is the
+                        // SUBSET a teammate may be launched in by the model:
+                        //   - `auto` IS offered — coco-rs ships auto mode (TS
+                        //     feature-gates it; coco supports it, so it stays).
+                        //   - `bubble` is NOT offered: it is an internal mode
+                        //     (the child keeps no session rules and escalates
+                        //     every permission decision to the parent), set by
+                        //     the fork/coordinator machinery, never chosen by the
+                        //     model. TS likewise omits it from the schema and sets
+                        //     it via forkSubagent. `PermissionMode::Bubble` stays
+                        //     in the type for that internal path.
+                        //   - `ask`/`deny` are `PermissionBehavior` values, NOT
+                        //     modes; they would fail to parse and be dropped to
+                        //     the parent mode by `resolve_subagent_mode`.
                         "enum": [
-                            "default", "plan", "dontAsk", "acceptEdits", "bubble",
+                            "default", "plan", "dontAsk", "acceptEdits",
                             "bypassPermissions", "auto"
                         ],
                         "description": "Permission mode for spawned teammate (e.g., \"plan\" to require plan approval)."
@@ -237,6 +244,19 @@ impl Tool for AgentTool {
         if ctx.background_tasks_disabled || ctx.fork_mode_active {
             drop.push("run_in_background");
         }
+        // `cwd` is never offered to the model. TS exposes it only behind
+        // `feature('KAIROS')` (`AgentTool.tsx:111`); coco-rs has no KAIROS
+        // surface and no product need for the model to choose a spawn cwd —
+        // exposing it only enabled the `cwd` × `isolation:"worktree"`
+        // mutual-exclusivity rejection (the original failure). Unlike TS's
+        // gate, this is unconditional: it is deliberately NOT tied to
+        // `ant_build` (that flag maps to TS's ant gate for `isolation:"remote"`,
+        // a different capability). The field stays in
+        // `runtime_validation_schema` — the coordinator still applies a supplied
+        // `cwd` as the child's `cwd_override` (`coordinator/agent_handle/spawn.rs`),
+        // so a hook/permission rewrite could set it the way `mcp_servers` is; it
+        // is simply not model-settable.
+        drop.push("cwd");
         coco_tool_runtime::ToolSpec::Function(coco_tool_runtime::FunctionToolSpec {
             name: self.name().to_string(),
             description: self.prompt(prompt_opts).await,
@@ -315,9 +335,27 @@ impl Tool for AgentTool {
                 &options.as_description_options(),
             );
         };
+        // Agent types forbidden by an `Agent(<type>)` deny rule. Mirrors TS
+        // `filterDeniedAgents`: the central evaluator defers these content
+        // denies to `AgentTool::execute` (see `find_agent_deny_rule`), so the
+        // listing must drop them too — otherwise the model is shown an agent
+        // the spawn then rejects.
+        let denied_agent_types: Vec<String> = options
+            .permission_context
+            .as_ref()
+            .map(|pc| {
+                pc.deny_rules
+                    .values()
+                    .flatten()
+                    .filter(|r| r.value.tool_pattern == ToolName::Agent.as_str())
+                    .filter_map(|r| r.value.rule_content.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
         let renderer = coco_subagent::AgentToolPromptRenderer::new(catalog);
         let render_opts = coco_subagent::PromptOptions {
             allowed_agent_types: options.allowed_agent_types.clone(),
+            denied_agent_types,
             ready_mcp_servers: options.ready_mcp_servers.clone(),
             coordinator_mode: options.coordinator_mode,
             fork_enabled: options.fork_enabled,
@@ -463,12 +501,6 @@ impl Tool for AgentTool {
             check_mcp_ready(&names, ctx).await?;
         }
 
-        // `input.mode` is already typed as `PermissionMode` (invalid values
-        // were rejected at deserialize), so no string re-parse / silent
-        // fallback is needed.
-        let effective_mode =
-            coco_permissions::resolve_subagent_mode(ctx.permission_context.mode, input.mode);
-
         let explicit_subagent_type = input.subagent_type.clone();
         let resolved_team_name = input
             .team_name
@@ -513,10 +545,13 @@ impl Tool for AgentTool {
         // addressable agent, not a cache-shared fork. TS routes the team
         // branch before fork (`AgentTool.tsx:284-316`); mirror that here
         // so a `Fork{..} + team_name` shape can never be constructed.
-        let spawn_mode = if explicit_subagent_type.is_none()
+        // Fork eligibility — the single predicate consumed both by the
+        // permission-mode resolution and the `spawn_mode` construction below.
+        let is_fork_spawn = explicit_subagent_type.is_none()
             && !is_team_spawn
-            && coco_subagent::is_fork_subagent_active(&ctx.features, ctx.is_non_interactive)
-        {
+            && coco_subagent::is_fork_subagent_active(&ctx.features, ctx.is_non_interactive);
+
+        let spawn_mode = if is_fork_spawn {
             let Some(rendered_system_prompt) = ctx.rendered_system_prompt.clone() else {
                 return Err(ToolError::ExecutionFailed {
                     message: "Fork mode requested but parent's rendered system prompt is \
@@ -596,6 +631,36 @@ impl Tool for AgentTool {
             .and_then(|(cat, name)| cat.find_active(name).cloned())
             .map(std::sync::Arc::new);
 
+        // Child permission mode, mirroring TS `runAgent.ts:415-433`:
+        //   - FORK resolves like an agent declaring `permissionMode: "bubble"`
+        //     (`FORK_AGENT.permissionMode = 'bubble'`, `forkSubagent.ts`): the
+        //     fork child keeps no session rules and bubbles every permission
+        //     decision to the parent terminal.
+        //   - TEAM is the ONLY path where TS threads the model's `mode`
+        //     (`spawnMode`) through — it drives `plan_mode_required: spawnMode
+        //     === 'plan'`, mirrored by the coordinator's `request.mode == Plan`
+        //     plan detection. Keep `input.mode` here, unchanged.
+        //   - NON-FORK, NON-TEAM: the child's mode comes from the resolved
+        //     `AgentDefinition.permissionMode`, NOT the model's `input.mode`. TS
+        //     never threads `spawnMode` into the non-team `runAgent` path, so an
+        //     agent declaring `permissionMode: "plan"` runs in plan mode no
+        //     matter what the model passed (and `input.mode` only ever reaches
+        //     the auto-mode classifier via `to_auto_classifier_input`).
+        // In every case parent trust modes (Bypass/AcceptEdits/Auto) take
+        // precedence inside `resolve_subagent_mode`, exactly as TS does.
+        let requested_mode = if is_fork_spawn {
+            Some(coco_types::PermissionMode::Bubble)
+        } else if is_team_spawn {
+            input.mode
+        } else {
+            resolved_definition
+                .as_ref()
+                .and_then(|def| def.permission_mode.as_deref())
+                .and_then(|wire| wire.parse::<coco_types::PermissionMode>().ok())
+        };
+        let effective_mode =
+            coco_permissions::resolve_subagent_mode(ctx.permission_context.mode, requested_mode);
+
         // Latent-bug fix: an explicit `subagent_type` that doesn't resolve
         // to a catalog entry would silently degrade — no system prompt,
         // no tool filter, no model_role, no `required_mcp_servers` check.
@@ -614,8 +679,11 @@ impl Tool for AgentTool {
             explicit_subagent_type.as_deref(),
         ) && resolved_definition.is_none()
         {
-            let mut available: Vec<String> =
-                catalog.active().map(|d| d.agent_type.to_string()).collect();
+            // List `def.name` (= TS `agentType` = what the model saw in the
+            // listing and what `find_active` keys on), NOT the canonicalized
+            // `def.agent_type` — else an aliased custom agent (`name: explore`)
+            // is told to retry with `Explore`, the value that just failed.
+            let mut available: Vec<String> = catalog.active().map(|d| d.name.clone()).collect();
             available.sort();
             available.dedup();
             return Err(ToolError::InvalidInput {
@@ -665,7 +733,7 @@ impl Tool for AgentTool {
                 return Err(ToolError::ExecutionFailed {
                     message: format!(
                         "Agent '{}' requires MCP server(s) {:?}, but MCP servers with tools are: {}",
-                        def.agent_type,
+                        def.name,
                         def.required_mcp_servers,
                         if servers_with_tools.is_empty() {
                             "none".to_string()

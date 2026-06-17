@@ -18,7 +18,13 @@ use crate::definition_store::LoadedAgentDefinition;
 
 #[derive(Debug, Clone)]
 pub struct AgentCatalogSnapshot {
-    /// Active definitions keyed by canonical `agent_type`.
+    /// Active definitions keyed by `def.name` (the agent's display name = TS
+    /// `agentType`, which is `frontmatter['name']` verbatim). For built-ins
+    /// `def.name` equals the canonical `agent_type`; for a custom `.md` whose
+    /// `name` is a non-canonical alias they differ — the map and every
+    /// model-facing string (listing, deny filter, `find_active` lookup) key on
+    /// `def.name`, so they stay mutually consistent. Do NOT switch this to
+    /// `agent_type`: that would desync the lookup from the advertised listing.
     /// Alphabetically ordered via `BTreeMap` keying — deterministic across
     /// platforms and reload cycles. Note byte-wise lex order means
     /// PascalCase entries (`Explore`, `Plan`) sort before lowercase
@@ -65,9 +71,11 @@ impl AgentCatalogSnapshot {
         self.active.len()
     }
 
-    /// Look up an active agent by its canonical `agent_type`.
-    pub fn find_active(&self, agent_type: &str) -> Option<&AgentDefinition> {
-        self.active.get(agent_type)
+    /// Look up an active agent by its `name` (= TS `agentType`; the value the
+    /// model picks from the advertised listing). Keyed on `def.name`, not the
+    /// canonicalized `agent_type` — see the `active` field docs.
+    pub fn find_active(&self, name: &str) -> Option<&AgentDefinition> {
+        self.active.get(name)
     }
 
     /// Every loaded definition (including overridden ones), in load order.
