@@ -250,8 +250,11 @@ async fn agent_model_params_with_opts(
 }
 
 /// Verifies the AgentTool model-facing schema exposes exactly the
-/// eight user fields. `cwd` (a ninth runtime field) is never offered to
-/// the model — see `test_agent_tool_never_exposes_cwd_to_model`.
+/// eight user fields when capability is unknown (`SchemaContext::default()`,
+/// `features: None`). `cwd` (a ninth runtime field) is never offered to the
+/// model — see `test_agent_tool_never_exposes_cwd_to_model`. `mode` / `team_name`
+/// / `name` are team-gated in a resolved session — see
+/// `test_agent_tool_schema_drops_team_params_when_agent_teams_disabled`.
 /// The five PR11 "internal-only knobs" (`effort`, `use_exact_tools`,
 /// `mcp_servers`, `disallowed_tools`, `max_turns`, `initial_prompt`)
 /// were intentionally removed — the coordinator now reads them off the
@@ -279,9 +282,10 @@ async fn test_agent_tool_input_schema_exposes_eight_user_fields_by_default() {
     );
 
     // `mode` enum = the model-pickable teammate modes: the 5 external modes
-    // plus `auto` (coco-rs ships auto mode). `bubble` is an INTERNAL mode (set
-    // by the fork/coordinator machinery, not the model) and `ask`/`deny` are
-    // `PermissionBehavior` values, not modes — all three must be absent.
+    // plus `auto`. `bubble` (internal fork/coordinator mode) and `ask`/`deny`
+    // (`PermissionBehavior` values) must be absent. NB: only `plan` has a
+    // runtime effect — `execute` honors it as a restrictive override; every
+    // other value is accepted but ignored (the model can never escalate).
     let mode_enum = p["mode"].get("enum").unwrap().as_array().unwrap();
     let mode_values: Vec<&str> = mode_enum.iter().filter_map(|v| v.as_str()).collect();
     for expected in [
@@ -297,14 +301,13 @@ async fn test_agent_tool_input_schema_exposes_eight_user_fields_by_default() {
             "mode enum missing {expected}; got {mode_values:?}"
         );
     }
-    // `bubble` is internal-only (fork/coordinator-set); `ask`/`deny` are
-    // PermissionBehavior values. None may appear in the model-facing enum.
     for absent in ["ask", "deny", "bubble"] {
         assert!(
             !mode_values.contains(&absent),
             "mode enum must not contain non-model-pickable value {absent}; got {mode_values:?}"
         );
     }
+
     // Isolation accepts only "worktree" — remote isolation is
     // explicitly unsupported in this build (see `execute()`'s
     // early gate).
@@ -324,6 +327,75 @@ async fn test_agent_tool_input_schema_exposes_eight_user_fields_by_default() {
         required,
         vec!["description".to_string(), "prompt".to_string()]
     );
+}
+
+/// Schema-honesty gate for the team parameters. `team_name` / `mode` / `name`
+/// are model-facing only when `Feature::AgentTeams` is live (all three matter
+/// only to the team-spawn path): when resolvably disabled they drop (so a
+/// multi-provider model can't invent `team_name`/`name` and trip the
+/// execute-time team gate), except `name` survives under fork mode as the fork
+/// label.
+#[tokio::test]
+async fn test_agent_tool_schema_drops_team_params_when_agent_teams_disabled() {
+    let mut features = coco_types::Features::with_defaults();
+    features.disable(coco_types::Feature::AgentTeams);
+    let features = Arc::new(features);
+
+    // Teams off, no fork → team_name / mode / name all hidden.
+    let ctx = coco_tool_runtime::SchemaContext {
+        features: Some(features.clone()),
+        ..coco_tool_runtime::SchemaContext::default()
+    };
+    let props = agent_model_params(&ctx).await;
+    let keys = props["properties"].as_object().unwrap();
+    for absent in ["team_name", "mode", "name"] {
+        assert!(
+            !keys.contains_key(absent),
+            "teams-off schema must drop {absent}; got {:?}",
+            keys.keys().collect::<Vec<_>>()
+        );
+    }
+    // Non-team fields stay.
+    for present in ["prompt", "description", "subagent_type", "isolation"] {
+        assert!(keys.contains_key(present), "must keep {present}");
+    }
+
+    // Teams off but fork active → `name` survives (fork label); team_name /
+    // mode still drop.
+    let ctx_fork = coco_tool_runtime::SchemaContext {
+        features: Some(features.clone()),
+        fork_mode_active: true,
+        ..coco_tool_runtime::SchemaContext::default()
+    };
+    let props_fork = agent_model_params(&ctx_fork).await;
+    let keys_fork = props_fork["properties"].as_object().unwrap();
+    assert!(
+        keys_fork.contains_key("name"),
+        "fork mode must keep name as the fork label"
+    );
+    for absent in ["team_name", "mode"] {
+        assert!(
+            !keys_fork.contains_key(absent),
+            "fork mode with teams off must still drop {absent}"
+        );
+    }
+
+    // Teams ON → team_name / mode / name all return (the model may set
+    // `mode:"plan"` to spawn an approval-gated teammate).
+    let mut on = coco_types::Features::with_defaults();
+    on.enable(coco_types::Feature::AgentTeams);
+    let ctx_on = coco_tool_runtime::SchemaContext {
+        features: Some(Arc::new(on)),
+        ..coco_tool_runtime::SchemaContext::default()
+    };
+    let props_on = agent_model_params(&ctx_on).await;
+    let keys_on = props_on["properties"].as_object().unwrap();
+    for present in ["team_name", "name", "mode"] {
+        assert!(
+            keys_on.contains_key(present),
+            "teams-on schema must keep {present}"
+        );
+    }
 }
 
 /// Step-4 schema-honesty gate: when the session can't actually
@@ -478,9 +550,12 @@ fn test_agent_tool_enabled_without_agent_teams_feature() {
 }
 
 #[test]
-fn test_agent_classifier_input_surfaces_subagent_type_and_mode() {
-    // The gate sees which agent type runs and at what permission mode —
-    // `(subagent_type, mode=…): prompt` — NOT the cosmetic `description`.
+fn test_agent_classifier_input_surfaces_subagent_type_only() {
+    // The gate sees which agent type runs — `(subagent_type): prompt` — NOT the
+    // cosmetic `description`. `mode` is NOT surfaced: the only value `execute`
+    // honors is `Plan`, and only to RESTRICT a teammate — it can never escalate
+    // permissions, so it is irrelevant to the auto-approve risk gate and must
+    // not leak into the classifier input.
     assert_eq!(
         <AgentTool as DynTool>::to_auto_classifier_input(
             &AgentTool,
@@ -491,7 +566,7 @@ fn test_agent_classifier_input_surfaces_subagent_type_and_mode() {
                 "mode": "acceptEdits"
             }),
         ),
-        Some("(general-purpose, mode=acceptEdits): delete the repo".to_string())
+        Some("(general-purpose): delete the repo".to_string())
     );
 }
 
@@ -757,6 +832,97 @@ async fn test_agent_tool_omitted_subagent_type_for_team_spawn_stays_untyped() {
     assert_eq!(request.subagent_type, None);
     assert_eq!(request.team_name.as_deref(), Some("alpha"));
     assert_eq!(request.name.as_deref(), Some("helper"));
+}
+
+/// A model-supplied non-`plan` `mode` must NOT escalate a team spawn's
+/// permission level. Only `mode:"plan"` is honored (restrictive); every other
+/// value is ignored, so a teammate's mode comes from its config + parent-trust
+/// inheritance — a Default parent plus `mode:"bypassPermissions"` resolves to
+/// the inherited (Default) mode, never bypass/acceptEdits.
+#[tokio::test]
+async fn test_agent_tool_team_spawn_model_mode_does_not_escalate() {
+    let handle = Arc::new(CapturingAgentHandle::default());
+    let mut ctx = ToolUseContext::test_default();
+    ctx.agent = handle.clone();
+    enable_agent_teams(&mut ctx);
+    // Pin a NON-trust parent: `test_default` runs in a permissive mode, where an
+    // inherited bypass would be indistinguishable from an escalated one. With a
+    // Default parent, a `mode:"bypassPermissions"` that leaked through would show
+    // up as bypass; the fix ignores it, so the child stays Default.
+    ctx.permission_context.mode = coco_types::PermissionMode::Default;
+
+    let parent_mode = ctx.permission_context.mode;
+    let result = <AgentTool as DynTool>::execute(
+        &AgentTool,
+        serde_json::json!({
+            "prompt": "Help the team",
+            "description": "team help",
+            "team_name": "alpha",
+            "name": "helper",
+            "mode": "bypassPermissions",
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.data["status"], "completed");
+
+    let request = handle
+        .last_request
+        .lock()
+        .await
+        .clone()
+        .expect("captured request");
+    // The model asked for bypass; the resolved child mode must instead be the
+    // inherited parent mode — and in no case an escalation.
+    assert_eq!(request.mode, Some(parent_mode));
+    assert_ne!(
+        request.mode,
+        Some(coco_types::PermissionMode::BypassPermissions)
+    );
+    assert_ne!(request.mode, Some(coco_types::PermissionMode::AcceptEdits));
+}
+
+/// `mode:"plan"` IS honored for a team spawn, and as a RESTRICTION: it forces
+/// the teammate into Plan even when the parent runs in a permissive trust mode
+/// (AcceptEdits), mirroring TS `plan_mode_required` ("plan takes precedence over
+/// bypass for safety", `spawnMultiAgent.ts:215-218`). This is the one
+/// model-settable mode value, and it can only down-shift a teammate's perms.
+#[tokio::test]
+async fn test_agent_tool_team_spawn_plan_mode_forced_over_permissive_parent() {
+    let handle = Arc::new(CapturingAgentHandle::default());
+    let mut ctx = ToolUseContext::test_default();
+    ctx.agent = handle.clone();
+    enable_agent_teams(&mut ctx);
+    // Permissive (trust) parent — would normally win in `resolve_subagent_mode`.
+    ctx.permission_context.mode = coco_types::PermissionMode::AcceptEdits;
+
+    <AgentTool as DynTool>::execute(
+        &AgentTool,
+        serde_json::json!({
+            "prompt": "Migrate the schema",
+            "description": "risky migration",
+            "team_name": "alpha",
+            "name": "migrator",
+            "mode": "plan",
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
+
+    let request = handle
+        .last_request
+        .lock()
+        .await
+        .clone()
+        .expect("captured request");
+    assert_eq!(
+        request.mode,
+        Some(coco_types::PermissionMode::Plan),
+        "mode:\"plan\" must force the teammate into Plan, overriding the \
+         permissive parent mode"
+    );
 }
 
 #[tokio::test]
