@@ -432,7 +432,15 @@ async fn resolve_permission_decision<M: std::borrow::Borrow<Message>>(
         None => evaluate_with_rules(tool, effective_input, ctx).await,
     };
 
+    // Mirror TS `permissions.ts:549`: a tool that *requires* user interaction
+    // (AskUserQuestion) returns `Ask` because the prompt IS the tool's function,
+    // not a security gate. Auto mode exists to skip security confirmations, so it
+    // must not run the classifier / safe-tool allowlist over such an `Ask` —
+    // doing so rewrites it to `Allow`, the permission bridge never fires, and the
+    // interactive overlay is silently dropped (the model just sees the questions
+    // echoed back). Skip the overlay here so the `Ask` reaches the bridge.
     if matches!(decision, PermissionDecision::Ask { .. })
+        && !tool.requires_user_interaction()
         && let (Some(state), Some(tracker)) = (auto_mode_state, chosen_tracker.as_ref())
         && state.is_active()
     {
