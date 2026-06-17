@@ -135,23 +135,27 @@ pub fn validate_providers(settings: &Settings) -> Vec<ValidationError> {
             && !key.is_empty()
         {
             let env_key = partial.env_key.as_deref().unwrap_or("");
+            // A provider with no configured `env_key` would otherwise render
+            // an empty-backtick placeholder ("move it to the `` environment
+            // variable"). Fall back to a descriptive token in BOTH the message
+            // and the suggestion so neither emits the malformed form.
+            let env_key_display = if env_key.is_empty() {
+                "<provider env_key>"
+            } else {
+                env_key
+            };
             errors.push(ValidationError {
                 file: None,
                 path: format!("providers.{name}.api_key"),
                 message: format!(
                     "Provider '{name}' stores api_key in plaintext — \
-                     move it to the `{env_key}` environment variable instead."
+                     move it to the `{env_key_display}` environment variable instead."
                 ),
                 expected: Some("api_key unset; use env var".into()),
                 invalid_value: Some("<redacted>".into()),
                 suggestion: Some(format!(
                     "Unset `providers.{name}.api_key` and export the key \
-                     via `{}=...` in your shell.",
-                    if env_key.is_empty() {
-                        "<provider env_key>"
-                    } else {
-                        env_key
-                    }
+                     via `{env_key_display}=...` in your shell."
                 )),
             });
         }

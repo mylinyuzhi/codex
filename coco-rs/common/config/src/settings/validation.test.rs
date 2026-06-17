@@ -490,3 +490,57 @@ fn test_hooks_none_returns_empty() {
     let errors = validate_hooks(&settings);
     assert!(errors.is_empty());
 }
+
+// ── validate_providers ──
+
+#[test]
+fn test_validate_providers_plaintext_key_with_env_key() {
+    let mut settings = Settings::default();
+    settings.providers.insert(
+        "acme".into(),
+        crate::provider::PartialProviderConfig {
+            env_key: Some("ACME_API_KEY".into()),
+            api_key: Some(crate::secret::RedactedSecret::new("sk-secret")),
+            ..Default::default()
+        },
+    );
+    let errors = validate_providers(&settings);
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].message.contains("`ACME_API_KEY`"));
+    assert!(
+        errors[0]
+            .suggestion
+            .as_deref()
+            .unwrap()
+            .contains("ACME_API_KEY=...")
+    );
+}
+
+#[test]
+fn test_validate_providers_plaintext_key_without_env_key_no_empty_backticks() {
+    let mut settings = Settings::default();
+    settings.providers.insert(
+        "acme".into(),
+        crate::provider::PartialProviderConfig {
+            env_key: None,
+            api_key: Some(crate::secret::RedactedSecret::new("sk-secret")),
+            ..Default::default()
+        },
+    );
+    let errors = validate_providers(&settings);
+    assert_eq!(errors.len(), 1);
+    // The malformed empty-backtick form must never appear in EITHER field.
+    assert!(
+        !errors[0].message.contains("``"),
+        "message must not render empty backticks: {}",
+        errors[0].message
+    );
+    assert!(errors[0].message.contains("<provider env_key>"));
+    assert!(
+        errors[0]
+            .suggestion
+            .as_deref()
+            .unwrap()
+            .contains("<provider env_key>")
+    );
+}
