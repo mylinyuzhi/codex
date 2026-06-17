@@ -562,12 +562,86 @@ pub(crate) fn attachment_summary_text(source: &coco_messages::Message) -> Option
     let coco_messages::Message::Attachment(att) = source else {
         return None;
     };
-    if att.kind == AttachmentKind::CompactFileReference {
+    // `CompactFileReference` renders as a chip; `File` is the `@`-mention
+    // carrier — its generator listing ("The user @-mentioned the following
+    // file(s)…") is model-only metadata that must not leak into the
+    // transcript, and the display summary rides `mention_summary_lines` from
+    // typed `extras` instead of this raw-body path.
+    if matches!(
+        att.kind,
+        AttachmentKind::CompactFileReference | AttachmentKind::File
+    ) {
         return None;
     }
     let body = strip_system_reminder_wrapper(&att.as_text_for_display());
     let first = body.lines().map(str::trim).find(|line| !line.is_empty())?;
     Some(first.to_string())
+}
+
+/// Compact transcript rows for a resolved `@`-mention summary attachment
+/// (`AttachmentExtras::MentionSummary`), or `None` for any other message.
+///
+/// One `  └ ` row per item: `Read <path> (N lines)` for files,
+/// `Listed directory <path>/` for directories — mirroring the reference TUIs.
+/// Returns owned `Line`s so the caller (`user::try_render`) just extends.
+pub(crate) fn mention_summary_lines(
+    source: &coco_messages::Message,
+    styles: UiStyles<'_>,
+) -> Option<Vec<Line<'static>>> {
+    use coco_types::MentionItemKind;
+
+    let coco_messages::Message::Attachment(att) = source else {
+        return None;
+    };
+    let Some(coco_messages::AttachmentExtras::MentionSummary(payload)) = att.extras.as_ref() else {
+        return None;
+    };
+
+    let lines = payload
+        .items
+        .iter()
+        .map(|item| {
+            let path = item.display_path.clone();
+            let text = match item.kind {
+                MentionItemKind::File => match item.count {
+                    Some(n) => {
+                        let count = if item.truncated {
+                            format!("{n}+")
+                        } else {
+                            n.to_string()
+                        };
+                        t!("chat.mention_read_lines", path = path, count = count).to_string()
+                    }
+                    None => t!("chat.mention_read", path = path).to_string(),
+                },
+                MentionItemKind::AlreadyRead | MentionItemKind::Image => {
+                    t!("chat.mention_read", path = path).to_string()
+                }
+                MentionItemKind::Pdf => match item.count {
+                    Some(n) => t!(
+                        "chat.mention_read_pages",
+                        path = path,
+                        count = n.to_string()
+                    )
+                    .to_string(),
+                    None => t!("chat.mention_read", path = path).to_string(),
+                },
+                MentionItemKind::Directory => {
+                    let p = if path.ends_with('/') {
+                        path
+                    } else {
+                        format!("{path}/")
+                    };
+                    t!("chat.mention_listed_dir", path = p).to_string()
+                }
+            };
+            Line::from(vec![
+                Span::raw("  └ ").fg(styles.dim()),
+                Span::raw(text).fg(styles.dim()),
+            ])
+        })
+        .collect();
+    Some(lines)
 }
 
 /// Path for a post-compact file-reference chip, or `None` for other

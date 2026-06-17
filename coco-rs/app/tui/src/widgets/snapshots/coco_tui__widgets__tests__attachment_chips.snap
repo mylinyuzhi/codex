@@ -15,7 +15,7 @@ expression: output
                                                                                 
 ◆ memory · utils/foo/CLAUDE.md                                                  
                                                                                 
-◇ utils/foo/bar.rs                                                              
+  └ Read utils/foo/bar.rs (3 lines)                                             
                                                                                 
 ⏺ Here is the file.                                                             
                                                                                 

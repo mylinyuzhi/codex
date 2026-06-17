@@ -80,7 +80,14 @@ pub(super) fn try_render(
             // column-2 gutter, distinct from tool/assistant dots by shape + dim
             // styling. Other attachments show the body's first line;
             // silent / structured payloads render nothing.
-            if let Some(path) = super::compact_file_reference_chip_path(cell.source.as_ref(), w.cwd)
+            if let Some(rows) = super::mention_summary_lines(cell.source.as_ref(), w.styles) {
+                // Resolved `@`-mention summary: one compact `└ Read …` /
+                // `└ Listed directory …` row per file/dir, hanging under the
+                // user prompt. The raw `@-mentioned files` system-reminder is
+                // suppressed in `attachment_summary_text`.
+                lines.extend(rows);
+            } else if let Some(path) =
+                super::compact_file_reference_chip_path(cell.source.as_ref(), w.cwd)
             {
                 lines.push(Line::from(vec![
                     Span::raw("◇ ").fg(w.styles.accent()).dim(),

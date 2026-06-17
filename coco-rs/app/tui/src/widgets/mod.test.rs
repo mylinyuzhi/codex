@@ -203,14 +203,22 @@ fn test_snapshot_attachment_chips() {
                 "<system-reminder>\nContents of /repo/utils/foo/CLAUDE.md:\n\n# foo rules\n</system-reminder>",
             ),
         ))));
-    // Generic (@-mentioned file) attachment → `◇ <first body line>`.
+    // Resolved @-mention summary → compact `└ Read <path> (N lines)` row.
+    // (The raw `@-mentioned files` system-reminder is suppressed; the display
+    // rides the typed `MentionSummary` extras.)
     state
         .session
         .transcript
-        .on_message_appended(Arc::new(Message::Attachment(AttachmentMessage::api(
-            AttachmentKind::File,
-            LlmMessage::user_text("utils/foo/bar.rs"),
-        ))));
+        .on_message_appended(Arc::new(Message::Attachment(
+            AttachmentMessage::mention_summary(coco_messages::MentionSummaryPayload {
+                items: vec![coco_messages::MentionSummaryItem {
+                    display_path: "utils/foo/bar.rs".to_string(),
+                    kind: coco_messages::MentionItemKind::File,
+                    count: Some(3),
+                    truncated: false,
+                }],
+            }),
+        )));
     test_helpers::push_assistant_text(&mut state.session, "Here is the file.");
 
     let output = render_to_string(&state, 80, 24);

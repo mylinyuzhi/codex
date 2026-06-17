@@ -137,7 +137,7 @@ fn ask_user_question_tool_is_hidden_from_activity() {
 }
 
 #[test]
-fn ordinary_running_tool_still_shows_in_activity() {
+fn ordinary_running_tool_renders_inline_not_in_panel() {
     let _locale = crate::i18n::locale_test_guard("en");
     let mut state = AppState::default();
     state.session.start_tool(
@@ -146,20 +146,15 @@ fn ordinary_running_tool_still_shows_in_activity() {
         &serde_json::json!({ "command": "ls -la" }),
     );
 
+    // The tool is still tracked (live elapsed feeds the inline transcript
+    // header `● Bash(ls -la) (Ns)`), but it no longer opens a separate
+    // "Activity / Tools:" panel — codex / claude-code parity. With no
+    // subagents and no stall, the activity surface is empty.
     assert_eq!(state.session.tool_executions.len(), 1);
-    let view = surface(turn_activity_view(&state, 160));
-
-    assert_eq!(view.title, ActivityTitle::Activity);
-    // The row carries both the tool name and its argument preview
-    // (`Bash(ls -la)`), not just the bare name.
-    let row_text: String = view
-        .lines
-        .iter()
-        .flat_map(|line| &line.spans)
-        .map(|span| span.text.as_ref())
-        .collect();
-    assert!(row_text.contains("Bash"));
-    assert!(row_text.contains("ls -la"));
+    assert!(matches!(
+        turn_activity_view(&state, 160),
+        TurnActivityView::None
+    ));
 }
 
 #[test]

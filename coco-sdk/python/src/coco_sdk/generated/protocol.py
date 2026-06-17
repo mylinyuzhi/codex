@@ -347,6 +347,13 @@ class MemoryType(str, Enum):
     Local = 'Local'
     Managed = 'Managed'
 
+class MentionItemKind(str, Enum):
+    file = 'file'
+    already_read = 'already_read'
+    directory = 'directory'
+    image = 'image'
+    pdf = 'pdf'
+
 class MessageKind(str, Enum):
     user = 'user'
     assistant = 'assistant'
@@ -539,7 +546,7 @@ AssistantContentPart = Union["TextPart", "FilePart", "ReasoningPart", "Reasoning
 AttachmentBody = Union["LanguageModelV4Message", "SilentPayload", "dict[str, Any]"]
 
 # Typed structured extras carried alongside an [`AttachmentBody::Api`] body.
-AttachmentExtras = Union["SkillDiscoveryPayload", "CompactFileReferencePayload"]
+AttachmentExtras = Union["SkillDiscoveryPayload", "CompactFileReferencePayload", "MentionSummaryPayload"]
 
 # Top-level wire message. SDK clients send these over stdin; coco-rs
 JsonRpcMessage = Union["JsonRpcRequest", "JsonRpcResponse", "JsonRpcNotification", "JsonRpcError"]
@@ -3374,6 +3381,15 @@ class MemoryDialogEntry(BaseModel):
     path: str
     scope: MemoryDialogScope
     row_kind: MemoryDialogRowKind = {}
+
+class MentionSummaryItem(BaseModel):
+    display_path: str
+    kind: MentionItemKind
+    count: int | None = None
+    truncated: bool = False
+
+class MentionSummaryPayload(BaseModel):
+    items: list[MentionSummaryItem]
 
 class MessageBreakdown(BaseModel):
     assistant_message_tokens: int

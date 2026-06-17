@@ -17,6 +17,17 @@ fn read_tool_name() -> &'static str {
     coco_types::ToolName::Read.as_str()
 }
 
+/// Extract the typed `MentionSummary` items from a display-summary attachment.
+fn summary_items(msg: &Message) -> Vec<coco_messages::MentionSummaryItem> {
+    match msg {
+        Message::Attachment(a) => match a.extras.as_ref() {
+            Some(coco_messages::AttachmentExtras::MentionSummary(p)) => p.items.clone(),
+            other => panic!("expected MentionSummary extras, got {other:?}"),
+        },
+        other => panic!("expected attachment message, got {other:?}"),
+    }
+}
+
 fn bash_tool_name() -> &'static str {
     coco_types::ToolName::Bash.as_str()
 }
@@ -183,12 +194,20 @@ async fn resolve_turn_inputs_loads_at_mentioned_file_content() {
 
     assert_eq!(
         inputs.attachment_messages.len(),
-        2,
-        "single file mention -> tool_use + tool_result"
+        3,
+        "display summary + tool_use + tool_result"
     );
-    let call = extract_text_from_message(&inputs.attachment_messages[0]);
+    // [0] is the display-only summary: a single File item, no API text.
+    let items = summary_items(&inputs.attachment_messages[0]);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].kind, coco_messages::MentionItemKind::File);
+    assert!(
+        extract_text_from_message(&inputs.attachment_messages[0]).is_empty(),
+        "display summary carries no API content"
+    );
+    let call = extract_text_from_message(&inputs.attachment_messages[1]);
     assert!(call.contains(&format!("Called the {} tool", read_tool_name())));
-    let result = extract_text_from_message(&inputs.attachment_messages[1]);
+    let result = extract_text_from_message(&inputs.attachment_messages[2]);
     assert!(result.contains(&format!("Result of calling the {} tool:", read_tool_name())));
     assert!(
         result.contains("file body bytes"),
@@ -217,13 +236,19 @@ async fn resolve_turn_inputs_dedups_same_file_across_calls() {
     let prompt = format!("look at @{}", file.display());
 
     let first = resolve_turn_inputs_text_only(&prompt, dir.path(), &frs).await;
-    assert_eq!(first.attachment_messages.len(), 2);
+    assert_eq!(
+        first.attachment_messages.len(),
+        3,
+        "summary + tool_use + tool_result"
+    );
 
     let second = resolve_turn_inputs_text_only(&prompt, dir.path(), &frs).await;
-    assert!(
-        second.attachment_messages.is_empty(),
-        "second mention dedups via FileReadState (AlreadyReadFile produces no message)"
-    );
+    // Dedup: no fresh model-visible content reminders, but the re-mention
+    // still shows a compact summary row (an `AlreadyRead` item).
+    assert_eq!(second.attachment_messages.len(), 1);
+    let items = summary_items(&second.attachment_messages[0]);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].kind, coco_messages::MentionItemKind::AlreadyRead);
     // The path is still reported on `mentioned_paths` so callers can
     // refresh post-compact restoration.
     assert_eq!(second.mentioned_paths.len(), 1);
@@ -243,12 +268,53 @@ async fn resolve_turn_inputs_emits_user_first_then_attachments() {
     let inputs = resolve_turn_inputs_text_only(&prompt, dir.path(), &frs).await;
 
     let messages = build_messages_for_turn(&inputs);
-    assert!(messages.len() >= 3);
-    // First message must be the user prompt, then the two attachment
-    // messages (tool_use + tool_result).
+    assert!(messages.len() >= 4);
+    // user prompt → display summary → tool_use → tool_result.
     assert!(matches!(messages[0], Message::User(_)));
     assert!(matches!(messages[1], Message::Attachment(_)));
+    let items = summary_items(&messages[1]);
+    assert_eq!(items.len(), 1, "summary row directly under the user prompt");
     assert!(matches!(messages[2], Message::Attachment(_)));
+    assert!(matches!(messages[3], Message::Attachment(_)));
+}
+
+#[test]
+fn mention_summary_message_builds_file_and_dir_items() {
+    let atts = vec![
+        Attachment::File(FileAttachment {
+            filename: "/a/foo.rs".to_string(),
+            content: "a\nb\nc".to_string(),
+            truncated: false,
+            display_path: "foo.rs".to_string(),
+            offset: None,
+            limit: None,
+        }),
+        Attachment::Directory(DirectoryAttachment {
+            path: "/a/dir".to_string(),
+            content: "x\ny".to_string(),
+            display_path: "dir".to_string(),
+        }),
+    ];
+
+    let msg = mention_summary_message(&atts).expect("summary message");
+    assert!(
+        extract_text_from_message(&msg).is_empty(),
+        "display-only: no API content"
+    );
+    let items = summary_items(&msg);
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0].kind, coco_messages::MentionItemKind::File);
+    assert_eq!(items[0].count, Some(3));
+    assert_eq!(items[1].kind, coco_messages::MentionItemKind::Directory);
+}
+
+#[test]
+fn mention_summary_message_none_when_nothing_displayable() {
+    assert!(mention_summary_message(&[]).is_none());
+    let agent = Attachment::AgentMention(coco_context::attachment::AgentMentionAttachment {
+        agent_type: "explore".to_string(),
+    });
+    assert!(mention_summary_message(&[agent]).is_none());
 }
 
 #[tokio::test]

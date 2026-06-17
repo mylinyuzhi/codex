@@ -97,10 +97,17 @@ pub async fn resolve_turn_inputs(
 
     let user_message = build_user_message(user_uuid, content, images);
 
-    let attachment_messages: Vec<Message> = file_attachments
+    let mut attachment_messages: Vec<Message> = file_attachments
         .iter()
         .flat_map(attachment_to_messages)
         .collect();
+    // Display-only summary first so the transcript shows a compact
+    // `⎿ Read <path> (N lines)` / `⎿ Listed directory <path>/` row directly
+    // under the user prompt. Carries no API tokens (the model-visible content
+    // rides the `<system-reminder>` messages above); never reaches the model.
+    if let Some(summary) = mention_summary_message(&file_attachments) {
+        attachment_messages.insert(0, summary);
+    }
 
     let changed_file_messages: Vec<Message> = changed_file_attachments
         .iter()
@@ -199,6 +206,64 @@ pub fn attachment_to_messages(att: &Attachment) -> Vec<Message> {
         Attachment::AlreadyReadFile(_) | Attachment::AgentMention(_) => Vec::new(),
         _ => Vec::new(),
     }
+}
+
+/// Build the display-only `@`-mention summary attachment — one compact row
+/// per resolved file / directory / image / PDF.
+///
+/// Returns `None` when nothing displayable resolved. The model-visible content
+/// is injected separately by [`attachment_to_messages`]; this attachment has a
+/// `Unit` body and is dropped from the API request, existing purely so the
+/// transcript can render a tidy summary in place of the raw
+/// `@-mentioned files` system-reminder.
+fn mention_summary_message(atts: &[Attachment]) -> Option<Message> {
+    use coco_messages::MentionItemKind;
+    use coco_messages::MentionSummaryItem;
+    use coco_messages::MentionSummaryPayload;
+
+    let items: Vec<MentionSummaryItem> = atts
+        .iter()
+        .filter_map(|att| match att {
+            Attachment::File(f) => Some(MentionSummaryItem {
+                display_path: f.display_path.clone(),
+                kind: MentionItemKind::File,
+                count: Some(f.content.lines().count() as i32),
+                truncated: f.truncated,
+            }),
+            Attachment::AlreadyReadFile(f) => Some(MentionSummaryItem {
+                display_path: f.display_path.clone(),
+                kind: MentionItemKind::AlreadyRead,
+                count: None,
+                truncated: false,
+            }),
+            Attachment::Directory(d) => Some(MentionSummaryItem {
+                display_path: d.display_path.clone(),
+                kind: MentionItemKind::Directory,
+                count: None,
+                truncated: false,
+            }),
+            Attachment::Image(img) => Some(MentionSummaryItem {
+                display_path: img.display_path.clone(),
+                kind: MentionItemKind::Image,
+                count: None,
+                truncated: false,
+            }),
+            Attachment::PdfReference(p) => Some(MentionSummaryItem {
+                display_path: p.display_path.clone(),
+                kind: MentionItemKind::Pdf,
+                count: Some(p.page_count),
+                truncated: false,
+            }),
+            _ => None,
+        })
+        .collect();
+
+    if items.is_empty() {
+        return None;
+    }
+    Some(Message::Attachment(
+        coco_messages::AttachmentMessage::mention_summary(MentionSummaryPayload { items }),
+    ))
 }
 
 /// Convert a `detect_changed_files` attachment into the externally-modified
