@@ -14,6 +14,7 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use anyhow::Result;
 use coco_hooks::HookRegistry;
+use coco_inference::ModelRuntimeSource;
 use coco_query::CommandQueue;
 use coco_query::QueryEngine;
 use coco_query::QueryEngineConfig;
@@ -40,6 +41,12 @@ fn register_suite_tools(registry: &ToolRegistry) {
     registry.register(Arc::new(coco_tools::WriteTool));
     registry.register(Arc::new(coco_tools::EditTool));
     registry.register(Arc::new(coco_tools::GlobTool));
+    // `SkillTool` is statically typed (`SkillInput` has a required
+    // `skill` field), so its schema is a well-formed `type: object` —
+    // not the empty `type: null` shape DeepSeek rejects. It must be
+    // loaded for the `skill_listing` reminder to fire: the reminder is
+    // gated behind `reminder_skill_tool_loaded` (engine_turn_reminders.rs).
+    registry.register(Arc::new(coco_tools::SkillTool));
 }
 use tempfile::TempDir;
 use tokio::sync::mpsc;
@@ -215,13 +222,23 @@ pub async fn run_session(
     };
 
     let model_runtimes = api_client.registry();
+    // Route the engine's Main turn to the resolved target — the provider
+    // whose credentials `require_live!` actually checked. Without this the
+    // engine keeps its default `Role(Main)` source, which resolves against
+    // the shared runtime's placeholder `model_override` (anthropic) and
+    // calls the wrong provider regardless of the test's `(provider, model)`.
+    let main_source = ModelRuntimeSource::Explicit(coco_types::ProviderModelSelection {
+        provider: provider_name.to_string(),
+        model_id: model_id.to_string(),
+    });
     let mut engine = QueryEngine::new(
         config,
         model_runtimes,
         tools,
         cancel,
         session_cfg.hooks.clone(),
-    );
+    )
+    .with_model_runtime_source(main_source);
     if let Some(bootstrap) = session_cfg.session_bootstrap.clone() {
         engine = engine.with_session_bootstrap(bootstrap);
     }
@@ -328,13 +345,23 @@ pub async fn run_session_with_steering(
     };
 
     let model_runtimes = api_client.registry();
+    // Route the engine's Main turn to the resolved target — the provider
+    // whose credentials `require_live!` actually checked. Without this the
+    // engine keeps its default `Role(Main)` source, which resolves against
+    // the shared runtime's placeholder `model_override` (anthropic) and
+    // calls the wrong provider regardless of the test's `(provider, model)`.
+    let main_source = ModelRuntimeSource::Explicit(coco_types::ProviderModelSelection {
+        provider: provider_name.to_string(),
+        model_id: model_id.to_string(),
+    });
     let mut engine = QueryEngine::new(
         config,
         model_runtimes,
         tools,
         cancel,
         session_cfg.hooks.clone(),
-    );
+    )
+    .with_model_runtime_source(main_source);
     if let Some(bootstrap) = session_cfg.session_bootstrap.clone() {
         engine = engine.with_session_bootstrap(bootstrap);
     }
