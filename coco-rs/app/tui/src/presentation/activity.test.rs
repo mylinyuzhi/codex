@@ -28,6 +28,8 @@ fn subagent() -> SubagentInstance {
         is_backgrounded: false,
         recent_activities: Vec::new(),
         final_message: None,
+        completed_at_ms: None,
+        cost_usd: 0.0,
     }
 }
 
@@ -174,18 +176,17 @@ fn turn_activity_view_keeps_stale_teammates_view_empty_without_agents() {
 
 #[test]
 fn inline_activity_height_caps_narrow_rows() {
+    // Eight lines exceed the narrow budget (6), so the height caps at
+    // budget + 1 border row = 7.
     let view = TurnActivityView::Surface(ActivitySurfaceView {
         title: ActivityTitle::Activity,
         border: ActivityBorder::Activity,
-        lines: vec![
-            ActivityLine::text("one", ActivityTone::Text),
-            ActivityLine::text("two", ActivityTone::Text),
-            ActivityLine::text("three", ActivityTone::Text),
-            ActivityLine::text("four", ActivityTone::Text),
-        ],
+        lines: (0..8)
+            .map(|i| ActivityLine::text(format!("row {i}"), ActivityTone::Text))
+            .collect(),
     });
 
-    assert_eq!(inline_activity_height(&view, 20, 60), 4);
+    assert_eq!(inline_activity_height(&view, 20, 60), 7);
 }
 
 #[test]

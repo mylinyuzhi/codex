@@ -225,6 +225,29 @@ impl TaskManager {
         }
     }
 
+    /// Stamp authoritative terminal tokens + cost onto the progress slot
+    /// immediately before a terminal transition. `cost_usd` is stored as
+    /// micro-USD (integer, to keep `TaskProgress: Eq`). Emits nothing —
+    /// the imminent `transition_terminal` → `emit_task_completed` reads
+    /// the slot and forwards these to the TUI.
+    pub async fn record_terminal_usage(
+        &self,
+        id: &str,
+        total_tokens: i64,
+        tool_uses: i32,
+        cost_usd: f64,
+    ) {
+        let mut rows = self.rows.write().await;
+        let Some(row) = rows.get_mut(id) else { return };
+        let Some(slot) = row.extras.progress_slot_mut() else {
+            return;
+        };
+        let progress = slot.get_or_insert_with(TaskProgress::default);
+        progress.total_tokens = progress.total_tokens.max(total_tokens);
+        progress.tool_use_count = progress.tool_use_count.max(tool_uses);
+        progress.cost_micro_usd = (cost_usd * 1_000_000.0) as i64;
+    }
+
     async fn emit_progress(&self, task_id: &str, progress: TaskProgress) {
         let Some(tx) = &self.event_tx else {
             tracing::trace!(
@@ -258,6 +281,7 @@ impl TaskManager {
                 total_tokens: progress.total_tokens,
                 tool_uses: progress.tool_use_count,
                 duration_ms,
+                cost_usd: progress.cost_micro_usd as f64 / 1_000_000.0,
             },
             last_tool_name: progress.last_tool_name,
             summary: progress.summary,
@@ -878,6 +902,7 @@ impl TaskManager {
                 total_tokens: 0,
                 tool_uses: 0,
                 duration_ms,
+                cost_usd: 0.0,
             },
             last_tool_name: None,
             summary: None,
@@ -899,17 +924,25 @@ impl TaskManager {
             .unwrap_or_else(current_time_ms)
             .saturating_sub(state.start_time);
         let output_file = state.output_file.clone().unwrap_or_default();
+        // Final tokens + cost are stamped onto the progress slot by
+        // `record_terminal_usage` just before the terminal transition,
+        // so the snapshot carries authoritative values here.
+        let progress = state.progress();
+        let usage = TaskUsage {
+            total_tokens: progress.map(|p| p.total_tokens).unwrap_or(0),
+            tool_uses: progress.map(|p| p.tool_use_count).unwrap_or(0),
+            duration_ms,
+            cost_usd: progress
+                .map(|p| p.cost_micro_usd as f64 / 1_000_000.0)
+                .unwrap_or(0.0),
+        };
         let params = TaskCompletedParams {
             task_id: task_id.to_string(),
             tool_use_id: state.tool_use_id.clone(),
             status,
             output_file,
             summary: state.description.clone(),
-            usage: Some(TaskUsage {
-                total_tokens: 0,
-                tool_uses: 0,
-                duration_ms,
-            }),
+            usage: Some(usage),
         };
         let _ = tx
             .send(CoreEvent::Protocol(ServerNotification::TaskCompleted(

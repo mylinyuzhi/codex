@@ -197,6 +197,7 @@ async fn mark_completed_pushes_rich_agent_notification() {
                 total_tokens: 500,
                 tool_uses: 3,
                 duration_ms: 6000,
+                cost_usd: 0.0,
             }),
             worktree: Some(AgentWorktree {
                 path: "/tmp/wt".into(),

@@ -392,6 +392,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
             input_tokens: result.total_usage.input_tokens.total,
             output_tokens: result.total_usage.output_tokens.total,
             tool_use_count,
+            cost_usd: result.cost_tracker.total_cost_usd(),
             cancelled: result.cancelled,
         })
     }

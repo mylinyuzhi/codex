@@ -713,6 +713,8 @@ fn test_snapshot_subagent_panel_populated() {
             is_backgrounded: false,
             recent_activities: Vec::new(),
             final_message: None,
+            completed_at_ms: None,
+            cost_usd: 0.0,
         },
         SubagentInstance {
             kind: crate::state::session::SubagentKind::Subagent,
@@ -729,6 +731,8 @@ fn test_snapshot_subagent_panel_populated() {
             is_backgrounded: false,
             recent_activities: Vec::new(),
             final_message: None,
+            completed_at_ms: None,
+            cost_usd: 0.0,
         },
         SubagentInstance {
             kind: crate::state::session::SubagentKind::Subagent,
@@ -745,6 +749,8 @@ fn test_snapshot_subagent_panel_populated() {
             is_backgrounded: false,
             recent_activities: Vec::new(),
             final_message: None,
+            completed_at_ms: None,
+            cost_usd: 0.0,
         },
     ];
     state.session.focused_subagent_index = Some(0);

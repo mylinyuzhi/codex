@@ -471,6 +471,8 @@ fn test_ctrl_shift_t_opens_team_roster_when_teammate_present() {
             is_backgrounded: false,
             recent_activities: Vec::new(),
             final_message: None,
+            completed_at_ms: None,
+            cost_usd: 0.0,
         });
     let cmd = map_key(&state, ctrl_shift(KeyCode::Char('t')));
     assert!(

@@ -232,6 +232,9 @@ pub struct AgentUsage {
     pub total_tokens: i64,
     pub tool_uses: i32,
     pub duration_ms: i64,
+    /// Real USD cost of the completed subagent run. `0.0` when pricing
+    /// is unavailable.
+    pub cost_usd: f64,
 }
 
 #[derive(Debug, Clone)]

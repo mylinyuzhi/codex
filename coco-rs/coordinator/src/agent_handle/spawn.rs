@@ -629,6 +629,21 @@ fn spawn_task_event_drain(
                     );
                     registry.set_progress(&task_id, tracker.clone()).await;
                 }
+                // Per-turn usage roll-up so the activity panel shows live
+                // token counts while the subagent runs (cost stays unknown
+                // until completion — `AgentStreamEvent` carries no cost).
+                coco_types::CoreEvent::Protocol(coco_types::ServerNotification::TurnEnded(p)) => {
+                    if let Some(usage) = &p.usage {
+                        let total = usage
+                            .input_tokens
+                            .total
+                            .saturating_add(usage.output_tokens.total);
+                        if total > tracker.total_tokens {
+                            tracker.total_tokens = total;
+                            registry.set_progress(&task_id, tracker.clone()).await;
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -1662,6 +1677,14 @@ impl SwarmAgentHandle {
             };
 
             // ── Build AgentSpawnResponse ──────────────────────────
+            // Capture the real USD cost before the match consumes
+            // `query_result`; the bg/detach completion path below only
+            // has `response` in scope, not `qr`.
+            let cost_usd = query_result
+                .as_ref()
+                .ok()
+                .map(|qr| qr.cost_usd)
+                .unwrap_or(0.0);
             let response = match query_result {
                 Ok(qr) => {
                     tracing::info!(
@@ -1750,6 +1773,7 @@ impl SwarmAgentHandle {
                                     total_tokens: response.total_tokens,
                                     tool_uses: response.total_tool_use_count as i32,
                                     duration_ms,
+                                    cost_usd,
                                 }),
                                 worktree: response.worktree_path.clone().map(|path| {
                                     coco_tool_runtime::AgentWorktree {
@@ -2128,6 +2152,7 @@ impl SwarmAgentHandle {
                         total_tokens: qr.input_tokens + qr.output_tokens,
                         tool_uses: qr.tool_use_count as i32,
                         duration_ms,
+                        cost_usd: qr.cost_usd,
                     });
                     let worktree = worktree_session_for_task.as_ref().map(|s| {
                         coco_tool_runtime::AgentWorktree {

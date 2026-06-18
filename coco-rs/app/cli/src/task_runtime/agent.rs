@@ -173,6 +173,14 @@ impl TaskRuntime {
         {
             self.append_output(task_id, text).await;
         }
+        // Stamp authoritative final tokens + cost onto the progress slot
+        // BEFORE the terminal transition so `emit_task_completed`'s
+        // snapshot carries them to the TUI subagent panel.
+        if let Some(u) = &payload.usage {
+            self.manager
+                .record_terminal_usage(task_id, u.total_tokens, u.tool_uses, u.cost_usd)
+                .await;
+        }
         self.transition_terminal(task_id, TaskStatus::Completed)
             .await;
         self.push_agent_notification(task_id, TerminalStatus::Completed, payload, None)

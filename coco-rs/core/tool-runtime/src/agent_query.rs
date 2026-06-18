@@ -392,6 +392,10 @@ pub struct AgentQueryResult {
     pub output_tokens: i64,
     /// Number of tool invocations.
     pub tool_use_count: i64,
+    /// Real USD cost of this query, summed across models from the
+    /// engine's `CostTracker`. `0.0` when pricing is unavailable.
+    #[serde(default)]
+    pub cost_usd: f64,
     /// Whether the agent was cancelled.
     #[serde(default)]
     pub cancelled: bool,

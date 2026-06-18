@@ -74,6 +74,8 @@ fn running_tab_elapsed_uses_injected_now_not_wall_clock() {
         is_backgrounded: false,
         recent_activities: Vec::new(),
         final_message: None,
+        completed_at_ms: None,
+        cost_usd: 0.0,
     };
     let body = body_only_at(&state, std::slice::from_ref(&sub), TEST_NOW_MS);
     assert!(
@@ -224,6 +226,8 @@ fn render_running_tab_with_active_and_completed() {
         is_backgrounded: false,
         recent_activities: vec![],
         final_message: None,
+        completed_at_ms: None,
+        cost_usd: 0.0,
     };
     let done = SubagentInstance {
         agent_id: "task-2".into(),

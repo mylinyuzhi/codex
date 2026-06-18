@@ -13,9 +13,14 @@ use crate::state::session::ToolStatus;
 use coco_tui_ui::constants;
 
 const MAX_TOOL_ACTIVITY_DISPLAY: usize = 5;
-const INLINE_ACTIVITY_ROWS_NARROW: u16 = 3;
-const INLINE_ACTIVITY_ROWS_NORMAL: u16 = 5;
-const INLINE_ACTIVITY_ROWS_WIDE: u16 = 7;
+// Row budgets for the inline activity panel. Raised from 3/5/7 so the
+// subagent panel renders every agent (one line each now) instead of
+// folding the tail behind `…more in activity`. `inline_activity_height`
+// still clamps to the actual available screen height, so a large agent
+// count can't overrun the viewport.
+const INLINE_ACTIVITY_ROWS_NARROW: u16 = 6;
+const INLINE_ACTIVITY_ROWS_NORMAL: u16 = 10;
+const INLINE_ACTIVITY_ROWS_WIDE: u16 = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ActivityTitle {
@@ -319,13 +324,37 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
         state.session.expanded_view,
         coco_types::ExpandedView::Teammates
     );
+    let now = state.clock.now_ms();
+    // Aggregate token + cost across all subagents — the dedicated
+    // subagent counter. Cost is only known for completed agents
+    // (mid-flight runs contribute tokens but $0 until they return their
+    // `CostTracker`).
+    let total_tokens: i64 = state.session.subagents.iter().map(|a| a.total_tokens).sum();
+    let total_cost: f64 = state.session.subagents.iter().map(|a| a.cost_usd).sum();
+    let summary = subagent_summary_text(total_tokens, total_cost);
+
     if tree_mode && !state.session.subagents.is_empty() {
+        let mut leader = vec![
+            ActivitySpan::tone("● ", ActivityTone::Accent),
+            ActivitySpan::bold("Leader", ActivityTone::Text),
+            ActivitySpan::tone(" (lead)", ActivityTone::Dim),
+        ];
+        if let Some(summary) = &summary {
+            leader.push(ActivitySpan::tone(
+                format!("   {summary}"),
+                ActivityTone::Dim,
+            ));
+        }
+        lines.push(ActivityLine { spans: leader });
+    } else if let Some(summary) = &summary {
+        // Flat (compact inline) view has no leader row — surface the
+        // aggregate as a one-line header so the subagent cost stays
+        // visible without expanding the Teammates view.
         lines.push(ActivityLine {
-            spans: vec![
-                ActivitySpan::tone("● ", ActivityTone::Accent),
-                ActivitySpan::bold("Leader", ActivityTone::Text),
-                ActivitySpan::tone(" (lead)", ActivityTone::Dim),
-            ],
+            spans: vec![ActivitySpan::tone(
+                format!("  {summary}"),
+                ActivityTone::Dim,
+            )],
         });
     }
     let total = state.session.subagents.len();
@@ -379,78 +408,48 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
             // `AgentProgressLine` parity); falls back to Dim when unset.
             ActivitySpan::tone(format!(" ({label})"), ActivityTone::Dim).with_color(agent.color),
         ];
+
+        // One line per agent: tool count · (frozen) elapsed · tokens ·
+        // live action / terminal verb, joined by " · ". Collapsing the
+        // former status-row + progress-subline + completion-summary into
+        // a single row drops the duplicate duration field and keeps each
+        // subagent to exactly one line.
+        let mut stats: Vec<String> = Vec::new();
+        if agent.tool_count > 0 {
+            stats.push(format!("{} tools", agent.tool_count));
+        }
         if let Some(started_ms) = agent.started_at_ms {
-            let elapsed_ms = (state.clock.now_ms() - started_ms).max(0);
-            spans.push(ActivitySpan::tone(
-                format!(" {}", format_short_elapsed(elapsed_ms)),
-                ActivityTone::Dim,
-            ));
+            // Terminal agents freeze at `completed_at_ms` so a finished
+            // subagent's timer stops instead of tracking `now()` with its
+            // still-running siblings.
+            let end_ms = if matches!(agent.status, SubagentStatus::Running) {
+                now
+            } else {
+                agent.completed_at_ms.unwrap_or(now)
+            };
+            stats.push(format_short_elapsed((end_ms - started_ms).max(0)));
         }
         if agent.total_tokens > 0 {
+            stats.push(format!("↕{}", format_short_tokens(agent.total_tokens)));
+        }
+        let tail = match agent.status {
+            SubagentStatus::Running => {
+                crate::widgets::activity_summary::summarize_trailing(&agent.recent_activities)
+                    .or_else(|| agent.last_tool_name.clone())
+            }
+            SubagentStatus::Completed => Some("Done".to_string()),
+            SubagentStatus::Failed => Some("Failed".to_string()),
+        };
+        if let Some(tail) = tail {
+            stats.push(tail);
+        }
+        if !stats.is_empty() {
             spans.push(ActivitySpan::tone(
-                format!(" ↕{}", format_short_tokens(agent.total_tokens)),
+                format!("  {}", stats.join(" · ")),
                 ActivityTone::Dim,
             ));
         }
         lines.push(ActivityLine { spans });
-
-        // Active-text builder: collapse trailing search/read tools into
-        // a single line; otherwise fall back to the most recent activity
-        // description. Append the `· N tools` stats segment in the same
-        // line so the user gets both the action and the count without
-        // expanding the transcript.
-        let has_tool_subline = agent.tool_count > 0 || agent.last_tool_name.is_some();
-        if has_tool_subline && matches!(agent.status, SubagentStatus::Running) {
-            let active_text =
-                crate::widgets::activity_summary::summarize_trailing(&agent.recent_activities)
-                    .or_else(|| agent.last_tool_name.clone());
-            let mut subline = vec![ActivitySpan::raw("      ")];
-            if let Some(text) = active_text {
-                subline.push(ActivitySpan::tone(text, ActivityTone::Dim));
-                subline.push(ActivitySpan::tone(" · ", ActivityTone::Dim));
-            }
-            subline.push(ActivitySpan::tone(
-                format!("{} tools", agent.tool_count),
-                ActivityTone::Dim,
-            ));
-            lines.push(ActivityLine { spans: subline });
-        }
-
-        // Completion summary: `Done (N tools · ... · duration)` plus the
-        // final assistant message preview when one was captured.
-        if matches!(
-            agent.status,
-            SubagentStatus::Completed | SubagentStatus::Failed
-        ) {
-            let elapsed_ms = agent
-                .started_at_ms
-                .map(|s| (state.clock.now_ms() - s).max(0));
-            let duration = elapsed_ms
-                .map(|ms| format!(" · {}", format_short_elapsed(ms)))
-                .unwrap_or_default();
-            let done_label = if matches!(agent.status, SubagentStatus::Failed) {
-                "Failed"
-            } else {
-                "Done"
-            };
-            lines.push(ActivityLine {
-                spans: vec![
-                    ActivitySpan::raw("      "),
-                    ActivitySpan::tone(
-                        format!("{done_label} ({} tools{duration})", agent.tool_count),
-                        ActivityTone::Dim,
-                    ),
-                ],
-            });
-            if let Some(msg) = &agent.final_message {
-                lines.push(ActivityLine {
-                    spans: vec![
-                        ActivitySpan::raw("      "),
-                        ActivitySpan::tone(format!("“{msg}”"), ActivityTone::Dim),
-                    ],
-                });
-            }
-        }
 
         // Backgrounded but still alive — hint the user how to bring it back.
         // After the underlying task terminates the flag stays set but the
@@ -481,6 +480,23 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
             }
         }
     }
+}
+
+/// `Subagents · 128k tok · $0.42` — the aggregate token + cost segment
+/// shown on the panel's leader (tree mode) or header (flat mode) row.
+/// `None` when there's nothing to report yet.
+fn subagent_summary_text(total_tokens: i64, total_cost: f64) -> Option<String> {
+    if total_tokens <= 0 && total_cost <= 0.0 {
+        return None;
+    }
+    let mut parts = vec!["Subagents".to_string()];
+    if total_tokens > 0 {
+        parts.push(format!("{} tok", format_short_tokens(total_tokens)));
+    }
+    if total_cost > 0.0 {
+        parts.push(format!("${total_cost:.2}"));
+    }
+    Some(parts.join(" · "))
 }
 
 fn append_coordinator_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {

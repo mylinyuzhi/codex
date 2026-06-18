@@ -22,6 +22,8 @@ fn running_subagent() -> SubagentInstance {
         is_backgrounded: false,
         recent_activities: Vec::new(),
         final_message: None,
+        completed_at_ms: None,
+        cost_usd: 0.0,
     }
 }
 

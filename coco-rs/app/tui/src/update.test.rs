@@ -1198,6 +1198,8 @@ async fn escape_in_teammates_view_interrupts_focused_teammate_current_work() {
             is_backgrounded: false,
             recent_activities: Vec::new(),
             final_message: None,
+            completed_at_ms: None,
+            cost_usd: 0.0,
         });
     let (tx, mut rx) = drained_channel();
 
@@ -1237,6 +1239,8 @@ async fn background_all_tasks_optimistically_flips_running_subagents() {
             is_backgrounded: false,
             recent_activities: Vec::new(),
             final_message: None,
+            completed_at_ms: None,
+            cost_usd: 0.0,
         });
     // A teammate row must NOT flip (only BgAgent subagents background).
     state
@@ -1257,6 +1261,8 @@ async fn background_all_tasks_optimistically_flips_running_subagents() {
             is_backgrounded: false,
             recent_activities: Vec::new(),
             final_message: None,
+            completed_at_ms: None,
+            cost_usd: 0.0,
         });
     let (tx, mut rx) = drained_channel();
 

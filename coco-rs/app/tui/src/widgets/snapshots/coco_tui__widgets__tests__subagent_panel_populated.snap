@@ -8,10 +8,8 @@ expression: output
                                                                                                     
  Agents ────────────────────────────────────────────────────────────────────────────────────────────
 ▸ ● Search for auth handlers (Explore)                                                              
-  ✓ Design refactor plan (Plan)                                                                     
-      Done (0 tools)                                                                                
-  ✗ Run tests + verify (verification)                                                               
-      Failed (0 tools)                                                                              
+  ✓ Design refactor plan (Plan)  Done                                                               
+  ✗ Run tests + verify (verification)  Failed                                                       
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 ❯                                                                                                   
 ────────────────────────────────────────────────────────────────────────────────────────────────────

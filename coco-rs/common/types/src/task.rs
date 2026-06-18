@@ -158,6 +158,14 @@ pub struct TaskProgress {
     pub output_tokens: i64,
     #[serde(default)]
     pub total_tokens: i64,
+    /// Real cost in micro-USD (USD × 1_000_000), stamped onto the
+    /// progress slot at terminal transition so `emit_task_completed`
+    /// can forward it to the TUI. Integer to keep `TaskProgress: Eq`
+    /// (and the `TaskStateBase` chain that embeds it). `0` mid-flight —
+    /// cost is only known once the subagent's engine returns its
+    /// `CostTracker`.
+    #[serde(default)]
+    pub cost_micro_usd: i64,
     #[serde(default)]
     pub tool_use_count: i32,
     #[serde(default)]

@@ -1400,6 +1400,11 @@ pub struct TaskUsage {
     pub total_tokens: i64,
     pub tool_uses: i32,
     pub duration_ms: i64,
+    /// Real USD cost for completed subagent runs. `#[serde(default)]`
+    /// keeps older transcripts / mid-flight progress (which carry no
+    /// cost) deserializing to `0.0`.
+    #[serde(default)]
+    pub cost_usd: f64,
 }
 
 /// A teammate's plan-approval request, surfaced to the team lead's

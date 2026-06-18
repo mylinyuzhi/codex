@@ -354,6 +354,7 @@ pub(super) fn handle(
             // perspective; the orthogonal `is_backgrounded` flag is owned
             // by the optimistic Ctrl+B flip in `update.rs`, never by a
             // terminal status.
+            let now = state.clock.now_ms();
             if let Some(agent) = state
                 .session
                 .subagents
@@ -366,6 +367,21 @@ pub(super) fn handle(
                     coco_types::TaskCompletionStatus::Failed
                     | coco_types::TaskCompletionStatus::Stopped => SubagentStatus::Failed,
                 };
+                // Freeze the timer at completion so the row stops ticking
+                // with its still-running siblings. Stamp once (gate on the
+                // Running→terminal edge) so a duplicate TaskCompleted can't
+                // move the frozen time.
+                if matches!(prev_status, SubagentStatus::Running) {
+                    agent.completed_at_ms = Some(now);
+                }
+                // Authoritative final tokens + cost (TUI panel + the
+                // `Subagents · N tok · $X` aggregate line).
+                if let Some(usage) = &p.usage {
+                    agent.total_tokens = agent.total_tokens.max(usage.total_tokens);
+                    if usage.cost_usd > 0.0 {
+                        agent.cost_usd = usage.cost_usd;
+                    }
+                }
                 if !p.summary.is_empty() {
                     agent.final_message = Some(preview_summary(&p.summary, 80));
                 }
@@ -1118,6 +1134,8 @@ fn ensure_subagent_row(state: &mut AppState, kind: SubagentKind, p: &TaskStarted
         is_backgrounded: false,
         recent_activities: Vec::new(),
         final_message: None,
+        completed_at_ms: None,
+        cost_usd: 0.0,
     });
 }
 

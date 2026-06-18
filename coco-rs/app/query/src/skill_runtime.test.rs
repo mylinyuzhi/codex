@@ -268,6 +268,7 @@ impl AgentQueryEngine for StubEngine {
         _config: AgentQueryConfig,
     ) -> Result<AgentQueryResult, coco_error::BoxedError> {
         Ok(AgentQueryResult {
+            cost_usd: 0.0,
             response_text: Some(format!("child got: {prompt}")),
             messages: Vec::new(),
             turns: 1,
@@ -432,6 +433,7 @@ async fn test_fork_skill_with_allowed_tools_does_not_narrow_registry() {
         ) -> Result<AgentQueryResult, coco_error::BoxedError> {
             *self.captured.lock().unwrap() = Some(config);
             Ok(AgentQueryResult {
+                cost_usd: 0.0,
                 response_text: Some("ok".into()),
                 messages: Vec::new(),
                 turns: 1,

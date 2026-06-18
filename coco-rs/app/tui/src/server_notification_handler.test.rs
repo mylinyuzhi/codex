@@ -972,5 +972,7 @@ fn subagent(
         is_backgrounded,
         recent_activities: Vec::new(),
         final_message: None,
+        completed_at_ms: None,
+        cost_usd: 0.0,
     }
 }

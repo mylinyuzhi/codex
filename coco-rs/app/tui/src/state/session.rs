@@ -796,6 +796,16 @@ pub struct SubagentInstance {
     /// 80 chars rendered inline so the user sees the closing statement
     /// without expanding the transcript.
     pub final_message: Option<String>,
+    /// Unix-epoch ms when the subagent reached a terminal state. `None`
+    /// while running. Renderers freeze elapsed at `completed_at_ms -
+    /// started_at_ms` for terminal agents so a finished subagent's timer
+    /// stops ticking instead of tracking `now()` with its still-running
+    /// siblings.
+    pub completed_at_ms: Option<i64>,
+    /// Real USD cost of this subagent's run, forwarded on `TaskCompleted`
+    /// (`TaskUsage.cost_usd`). `0.0` until the agent completes. Summed
+    /// across agents for the panel's `Subagents · N tok · $X` line.
+    pub cost_usd: f64,
 }
 
 /// Subagent lifecycle status. Covers what the TUI displays. The orthogonal

@@ -329,6 +329,8 @@ fn running_subagent(agent_id: &str) -> crate::state::SubagentInstance {
         is_backgrounded: false,
         recent_activities: Vec::new(),
         final_message: None,
+        completed_at_ms: None,
+        cost_usd: 0.0,
     }
 }
 
@@ -345,6 +347,7 @@ fn progress_params(
             total_tokens: 0,
             tool_uses: activities.len() as i32,
             duration_ms: 1_000,
+            cost_usd: 0.0,
         },
         last_tool_name: last_tool.map(str::to_string),
         summary: None,
