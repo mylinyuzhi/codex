@@ -65,6 +65,10 @@ pub struct UiState {
     pub scroll_offset: i32,
     /// Current focus target.
     pub focus: FocusTarget,
+    /// Selected row in the agent-switcher rail. `0` = `◯ main`; `1..` index
+    /// the running subagents in rail order. Only meaningful while
+    /// `focus == FocusTarget::AgentSwitcher`.
+    pub agent_switcher_selected: usize,
     /// Bottom interaction pane: composer popups and prompt-class surfaces.
     pub interaction: InteractionPaneState,
     /// Active full-screen modal.
@@ -205,6 +209,7 @@ impl UiState {
             paste_manager: coco_tui_ui::paste::PasteManager::new(),
             scroll_offset: 0,
             focus: FocusTarget::Input,
+            agent_switcher_selected: 0,
             interaction: InteractionPaneState::new(),
             modal: None,
             modal_queue: ModalQueue::default(),
@@ -530,6 +535,11 @@ pub enum FocusTarget {
     /// Down at the bottom of the composer history; Enter opens the
     /// background-tasks dialog, Up/Esc returns focus to the input.
     FooterShells,
+    /// The inline agent-switcher rail above the composer (`◯ main` + running
+    /// subagents). Reached with `Shift+↑`; `↑/↓` move the selection, `Enter`
+    /// views the selected agent (or returns to main), `x` stops it, and
+    /// `Esc` / `Shift+↓` / typing returns focus to the input.
+    AgentSwitcher,
 }
 
 /// A single composer history entry.

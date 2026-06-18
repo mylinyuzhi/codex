@@ -377,10 +377,10 @@ impl<'a> TranscriptCellRenderer<'a> {
                         ));
                     }
                 }
-                crate::presentation::transcript::ActiveTranscriptCell::BusySpinner => {
-                    lines.push(Line::from(
-                        Span::raw(format!("  {}", t!("chat.processing")))
-                            .fg(self.styles.thinking()),
+                crate::presentation::transcript::ActiveTranscriptCell::InFlightTools => {
+                    lines.extend(crate::transcript::render::in_flight_tool_lines(
+                        self.tool_executions,
+                        self.styles,
                     ));
                 }
             },

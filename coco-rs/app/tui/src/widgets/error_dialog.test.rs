@@ -1,10 +1,7 @@
-use coco_types::ErrorCode;
 use coco_types::ErrorParams;
-use coco_types::ErrorPayload;
 
 use super::error_body;
 use super::format_error_body;
-use super::turn_failed_body;
 
 #[test]
 fn format_includes_category_and_retryable_hint() {
@@ -26,17 +23,6 @@ fn format_without_category_drops_category_line() {
 fn format_drops_empty_category() {
     let body = format_error_body("boom", Some(""), false);
     assert!(!body.contains("Category:"));
-}
-
-#[test]
-fn turn_failed_body_uses_error_code_category_and_non_retryable() {
-    let body = turn_failed_body(&ErrorPayload {
-        message: "upstream 503".into(),
-        code: ErrorCode::Provider,
-    });
-    assert!(body.starts_with("upstream 503"));
-    assert!(body.contains("Category: provider"));
-    assert!(body.contains("Non-retryable"));
 }
 
 #[test]

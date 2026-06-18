@@ -5,6 +5,7 @@ use crate::LlmMessage;
 use crate::Message;
 use crate::MessageOrigin;
 use crate::ProgressMessage;
+use crate::SystemApiErrorMessage;
 use crate::SystemCompactBoundaryMessage;
 use crate::SystemInformationalMessage;
 use crate::SystemMessage;
@@ -107,6 +108,20 @@ pub fn create_info_message(title: &str, message: &str) -> Message {
         level: SystemMessageLevel::Info,
         title: title.to_string(),
         message: message.to_string(),
+    }))
+}
+
+/// Create a display-only API/stream error row for the transcript.
+///
+/// Rendered inline by the TUI as a `⚠ <error>` row (mirrors TS Claude Code's
+/// `SystemAPIErrorMessage`). `normalize_messages_for_api` drops every
+/// `SystemMessage` variant except `LocalCommand`, so this never reaches the
+/// model — it is pure transcript provenance for a failed turn.
+pub fn create_api_error_message(error: &str, status_code: Option<i32>) -> Message {
+    Message::System(SystemMessage::ApiError(SystemApiErrorMessage {
+        uuid: Uuid::new_v4(),
+        error: error.to_string(),
+        status_code,
     }))
 }
 

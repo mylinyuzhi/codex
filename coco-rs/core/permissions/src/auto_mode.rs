@@ -41,7 +41,10 @@ pub struct AutoModeInput<'a> {
 /// - All read-only tools: allow
 /// - Bash: allow if command is read-only, otherwise prompt
 /// - Task/Todo/Plan tools: allow (session-local side effects)
-/// - Unknown / network / agent / scheduling / MCP / file tools: prompt
+/// - Agent: allow — `AgentTool::is_read_only` is `true` (TS parity), so the
+///   read-only fast path above handles it; the subagent's own tool calls are
+///   gated under the inherited mode
+/// - Unknown / network / team / scheduling / MCP / file tools: prompt
 pub fn classify_for_auto_mode(
     tool_name: &str,
     input: &serde_json::Value,
@@ -106,16 +109,20 @@ pub fn classify_auto_mode_extended(ctx: &AutoModeInput<'_>) -> AutoModeDecision 
         return AutoModeDecision::Allow;
     }
 
-    // Agent spawning — prompt (creates sub-processes)
-    const AGENT_TOOLS: &[&str] = &[
-        ToolName::Agent.as_str(),
+    // Team management — prompt (shared team-file / mailbox side effects).
+    // `Agent` itself is intentionally NOT here: mirroring TS
+    // `AgentTool.isReadOnly() => true`, an Agent spawn is treated as
+    // read-only (it delegates permission checks to the subagent's own tool
+    // calls), so it is auto-allowed before this list via the read-only fast
+    // path in `classify_auto_mode_extended`.
+    const TEAM_TOOLS: &[&str] = &[
         ToolName::SendMessage.as_str(),
         ToolName::TeamCreate.as_str(),
         ToolName::TeamDelete.as_str(),
     ];
-    if AGENT_TOOLS.contains(&name) {
+    if TEAM_TOOLS.contains(&name) {
         return AutoModeDecision::NeedsPrompt {
-            reason: format!("{name} creates sub-agents"),
+            reason: format!("{name} mutates shared team state"),
         };
     }
 

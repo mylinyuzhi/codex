@@ -359,9 +359,15 @@ impl RealTuiHarness {
 
         // Stage 4: late-binds shared with TUI/SDK runners (task runtime,
         // transcript store, fork dispatcher, agent-team).
-        install_session_late_binds(runtime.clone(), &cwd, /*mcp*/ None, /*lsp*/ None)
-            .await
-            .with_context(|| "install_session_late_binds")?;
+        install_session_late_binds(
+            runtime.clone(),
+            &cwd,
+            /*mcp*/ None,
+            /*lsp*/ None,
+            /*event_sink*/ Some(event_tx.clone()),
+        )
+        .await
+        .with_context(|| "install_session_late_binds")?;
         // Fire SessionStart hooks to mirror `tui_runner::run_tui` so
         // settings.json hook entries surface as `hook_*` reminders on
         // the first turn.

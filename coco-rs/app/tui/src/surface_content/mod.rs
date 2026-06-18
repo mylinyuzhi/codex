@@ -39,7 +39,6 @@ pub(crate) enum TextSurfaceContent<'a> {
     Trust(&'a crate::state::TrustState),
     BypassPermissions(&'a crate::state::BypassPermissionsState),
     TaskDetail(&'a crate::state::TaskDetailState),
-    BackgroundTasks(&'a crate::state::BackgroundTasksState),
     Feedback(&'a crate::state::FeedbackState),
     PluginHint(&'a crate::state::PluginHintState),
     McpServerSelect(&'a crate::state::McpServerSelectState),
@@ -97,7 +96,8 @@ pub(crate) fn modal_text_surface(modal: &ModalState) -> Option<TextSurfaceConten
         ModalState::Trust(tr) => TextSurfaceContent::Trust(tr),
         ModalState::BypassPermissions(bp) => TextSurfaceContent::BypassPermissions(bp),
         ModalState::TaskDetail(td) => TextSurfaceContent::TaskDetail(td),
-        ModalState::BackgroundTasks(bt) => TextSurfaceContent::BackgroundTasks(bt),
+        // Styled render path (see `picker_styled::background_tasks_lines`).
+        ModalState::BackgroundTasks(_) => return None,
         ModalState::Feedback(f) => TextSurfaceContent::Feedback(f),
         ModalState::McpServerSelect(ms) => TextSurfaceContent::McpServerSelect(ms),
         ModalState::PluginHint(ph) => TextSurfaceContent::PluginHint(ph),
@@ -115,7 +115,7 @@ pub(crate) fn modal_text_surface(modal: &ModalState) -> Option<TextSurfaceConten
 /// (box minus border + padding).
 pub(crate) fn modal_styled_surface(
     modal: &ModalState,
-    _state: &AppState,
+    state: &AppState,
     styles: UiStyles<'_>,
     list_budget: usize,
 ) -> Option<(String, Vec<Line<'static>>, Color)> {
@@ -128,6 +128,9 @@ pub(crate) fn modal_styled_surface(
         ModalState::GlobalSearch(g) => ps::global_search_lines(g, styles, list_budget),
         ModalState::CopyPicker(cp) => ps::copy_picker_lines(cp, styles, list_budget),
         ModalState::TeamRoster(r) => ps::team_roster_lines(r, styles, list_budget),
+        ModalState::BackgroundTasks(bt) => {
+            ps::background_tasks_lines(bt, state, styles, list_budget)
+        }
         _ => return None,
     })
 }
@@ -164,9 +167,6 @@ pub(crate) fn surface_content(
             confirm::bypass_permissions_content(bp, styles)
         }
         TextSurfaceContent::TaskDetail(td) => confirm::task_detail_content(td, styles),
-        TextSurfaceContent::BackgroundTasks(bt) => {
-            confirm::background_tasks_content(bt, state, state.clock.now_ms(), styles)
-        }
         TextSurfaceContent::Feedback(f) => confirm::feedback_content(f, styles),
         TextSurfaceContent::PluginHint(ph) => confirm::plugin_hint_content(ph, styles),
         TextSurfaceContent::McpServerSelect(ms) => pickers::mcp_server_select_content(ms, styles),

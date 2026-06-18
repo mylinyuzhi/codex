@@ -8,6 +8,7 @@
 
 mod activity_panel;
 pub(crate) mod activity_summary;
+mod agent_switcher;
 mod background_pills;
 pub mod error_dialog;
 mod input;
@@ -24,6 +25,8 @@ mod transcript_modal;
 mod tests;
 
 pub(crate) use activity_panel::ActivityPanel;
+pub(crate) use agent_switcher::AgentSwitcher;
+pub(crate) use agent_switcher::build_view as build_agent_switcher_view;
 pub(crate) use background_pills::BackgroundPills;
 pub(crate) use background_pills::build_view as build_background_pills_view;
 pub(crate) use input::HistorySearchView;

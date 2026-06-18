@@ -141,11 +141,26 @@ fn test_plan_mode_tools_allowed() {
     );
 }
 
-// ── Agent tools need prompt ──
+// ── Agent spawn mirrors TS isReadOnly=true → auto-allowed ──
 
 #[test]
-fn test_agent_tools_need_prompt() {
-    let decision = classify_for_auto_mode("Agent", &serde_json::json!({}), false);
+fn test_agent_spawn_is_read_only_allowed_in_auto_mode() {
+    // Real spawns carry a prompt and resolve `is_read_only = true` via
+    // `AgentTool::is_read_only`, so the gate auto-allows the spawn; the
+    // child subagent's own tool calls are checked under the inherited mode.
+    let decision = classify_for_auto_mode(
+        "Agent",
+        &serde_json::json!({"prompt": "survey crates"}),
+        true,
+    );
+    assert_eq!(decision, AutoModeDecision::Allow);
+}
+
+// ── Team-management tools still need prompt ──
+
+#[test]
+fn test_team_tools_need_prompt() {
+    let decision = classify_for_auto_mode("SendMessage", &serde_json::json!({}), false);
     assert!(matches!(decision, AutoModeDecision::NeedsPrompt { .. }));
 }
 

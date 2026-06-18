@@ -1073,6 +1073,7 @@ fn options(theme: &Theme, width: u16) -> HistoryLineRenderOptions<'_> {
         kb_handle: None,
         replay_cache_policy: HistoryReplayCachePolicy::default(),
         reasoning_metadata: None,
+        subagent_summaries: None,
     }
 }
 

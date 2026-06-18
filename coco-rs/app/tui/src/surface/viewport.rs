@@ -59,6 +59,13 @@ pub(crate) fn render_interactive_viewport(
         precomputed_live,
     );
 
+    // Read-only agent-view overlay paints over the live viewport (composer
+    // included → suppressed) when a subagent's conversation is open. Drawn
+    // before toasts/modals so those still layer on top.
+    if state.session.viewing_agent_id.is_some() {
+        crate::surface::agent_view::render_agent_view_overlay(frame, area, state, styles);
+    }
+
     if state.ui.has_toasts() {
         render_toasts(frame, area, &state.ui.toasts, styles);
     }
@@ -215,6 +222,21 @@ fn show_status_indicator(state: &AppState) -> bool {
         || state.session.is_compacting
 }
 
+/// Input-token count for the running turn's `↑` segment in the status spinner.
+///
+/// This is the CURRENT turn's prompt size, not the session total: `↓` is this
+/// turn's live output estimate, so `↑` must match per-turn semantics. Input
+/// isn't streamed (no chars/4-style estimate), but the prompt *is* the current
+/// context, so we read the live context fill (`render_context_usage().used`)
+/// rather than `session.token_usage.input_tokens` — the latter is the summed
+/// session total (the bottom status bar's `↑23.8K`) and would wrongly grow
+/// across turns. `None` (→ `…`) when the context window is unknown.
+fn live_input_tokens(state: &AppState) -> Option<i64> {
+    crate::presentation::context_usage::render_context_usage(state)
+        .map(|usage| usage.used)
+        .filter(|used| *used > 0)
+}
+
 fn render_live_viewport(
     frame: &mut SurfaceFrame<'_>,
     area: Rect,
@@ -255,9 +277,10 @@ fn render_live_viewport(
     // + tokens) above the activity panel — visible only while a turn
     // is running.
     let status_indicator_rows: u16 = if show_status_indicator(state) { 1 } else { 0 };
-    // Background pills bar — shown when any subagent is backgrounded.
-    // The row stays populated for the lifetime of the backgrounded task
-    // (completed teammates render with `is_idle = true`); no completion-flash window.
+    // Background pills bar — shown when any subagent is backgrounded. The
+    // agent SWITCHER is not a separate rail here; it is merged into the
+    // "Agents" activity panel (a `◯ main` row + cursor when the rail holds
+    // focus), so this slot stays the single-row pills bar.
     let pills_view = crate::widgets::build_background_pills_view(state);
     let background_pills_rows: u16 = if pills_view.is_empty() { 0 } else { 1 };
     let other_fixed_rows = status_indicator_rows
@@ -338,7 +361,12 @@ fn render_live_viewport(
             coco_tui_ui::widgets::StatusIndicatorView {
                 verb: state.ui.ephemeral.current_verb().unwrap_or("Working"),
                 elapsed_ms,
-                input_tokens: None,
+                // Input doesn't stream, so there's no live estimate (unlike
+                // output). Surface the known prompt-token count from the
+                // session usage — the same source the bottom status bar shows
+                // as `↑23.8K` — so the spinner reads `↑23.8K ↓28` instead of
+                // a perpetual `↑…`.
+                input_tokens: live_input_tokens(state),
                 output_tokens: state
                     .ui
                     .ephemeral

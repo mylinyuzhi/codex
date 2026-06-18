@@ -10,7 +10,6 @@
 //! we only need to format the body string.
 
 use coco_types::ErrorParams;
-use coco_types::ErrorPayload;
 
 use crate::i18n::t;
 
@@ -32,32 +31,6 @@ pub fn format_error_body(message: &str, category: Option<&str>, retryable: bool)
     });
     body.push_str(&t!("error_dialog.dismiss"));
     body
-}
-
-/// Body for a `TurnEnded(Failed)` outcome. Turn failures are always
-/// treated as non-retryable at the UI level (retry happens inside the
-/// agent loop; if it reached this event, retry was exhausted). The
-/// `code` field is mapped to a category label for the modal so users
-/// can distinguish `network` vs `provider` vs `auth` etc.
-pub fn turn_failed_body(error: &ErrorPayload) -> String {
-    let category = error_code_label(error.code);
-    format_error_body(&error.message, Some(category), false)
-}
-
-fn error_code_label(code: coco_types::ErrorCode) -> &'static str {
-    match code {
-        coco_types::ErrorCode::Common => "common",
-        coco_types::ErrorCode::Input => "input",
-        coco_types::ErrorCode::Io => "io",
-        coco_types::ErrorCode::Network => "network",
-        coco_types::ErrorCode::Auth => "auth",
-        coco_types::ErrorCode::Config => "config",
-        coco_types::ErrorCode::Provider => "provider",
-        coco_types::ErrorCode::Resource => "resource",
-        coco_types::ErrorCode::SystemReminder => "system_reminder",
-        coco_types::ErrorCode::HookBlocked => "hook_blocked",
-        coco_types::ErrorCode::Unknown => "unknown",
-    }
 }
 
 /// Body for an `Error` notification. Uses the event's `category` and

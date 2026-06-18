@@ -6,6 +6,21 @@ use coco_tool_runtime::AgentQueryConfig;
 use coco_tool_runtime::AgentQueryEngine;
 
 #[test]
+fn inherited_read_dirs_map_to_session_additional_dirs() {
+    // TS `createSubagentContext` parity: the parent's read-scope dirs become
+    // the child's permission `additional_dirs`, so an isolated-worktree
+    // subagent reads the parent project without a prompt.
+    let dirs = vec!["/repo".to_string(), "/repo/extra".to_string()];
+    let map = super::inherited_read_dirs_to_additional_dirs(&dirs);
+    assert_eq!(map.len(), 2);
+    let entry = map.get("/repo").expect("parent cwd present");
+    assert_eq!(entry.path, "/repo");
+    assert_eq!(entry.source, coco_types::WorkingDirectorySource::Session);
+    // Empty in → empty out (non-worktree / fork spawns add nothing).
+    assert!(super::inherited_read_dirs_to_additional_dirs(&[]).is_empty());
+}
+
+#[test]
 fn test_agent_query_config_fork_context_messages_field_round_trips() {
     // Lock in that fork_context_messages serializes through the
     // boundary — `Vec<Arc<Message>>` round-trips via the serde `rc`

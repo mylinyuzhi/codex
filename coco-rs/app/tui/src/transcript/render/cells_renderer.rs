@@ -65,6 +65,11 @@ pub struct CellsRenderer<'a> {
     /// `None` ⇒ no reasoning badges (renderer falls back to header without metrics).
     pub(crate) reasoning_metadata:
         Option<&'a HashMap<uuid::Uuid, crate::state::session::ReasoningMetadata>>,
+    /// Side-cache lookup for completed-subagent run summaries, keyed by the
+    /// spawning Agent tool_use_id. `None` ⇒ Agent tool-result cells render
+    /// without the `✓ Explore · …` summary row.
+    pub(crate) subagent_summaries:
+        Option<&'a HashMap<String, crate::state::session::SubagentRunSummary>>,
     pub(crate) styles: UiStyles<'a>,
     pub(crate) syntax_highlighting: SyntaxHighlighting,
     pub(crate) width: u16,
@@ -90,6 +95,7 @@ impl<'a> CellsRenderer<'a> {
             tool_executions: &[],
             collapsed_tools: None,
             reasoning_metadata: None,
+            subagent_summaries: None,
             styles,
             syntax_highlighting: SyntaxHighlighting::Enabled,
             width: 80,
@@ -110,6 +116,14 @@ impl<'a> CellsRenderer<'a> {
         meta: &'a HashMap<uuid::Uuid, crate::state::session::ReasoningMetadata>,
     ) -> Self {
         self.reasoning_metadata = Some(meta);
+        self
+    }
+
+    pub fn subagent_summaries(
+        mut self,
+        summaries: &'a HashMap<String, crate::state::session::SubagentRunSummary>,
+    ) -> Self {
+        self.subagent_summaries = Some(summaries);
         self
     }
 
@@ -237,18 +251,8 @@ impl<'a> CellsRenderer<'a> {
             TranscriptSourceCell::Active(ActiveTranscriptCell::Streaming(view)) => {
                 self.render_streaming(view.clone(), lines);
             }
-            TranscriptSourceCell::Active(ActiveTranscriptCell::BusySpinner) => {
-                /// Static fallback glyph for the chat-cell busy spinner.
-                /// The animated status-indicator spinner lives in
-                /// [`coco_tui_ui::widgets::status_indicator`]; this widget
-                /// just needs a single character to anchor the
-                /// "processing…" line and never re-renders fast
-                /// enough to animate.
-                const BUSY_GLYPH: &str = "⠋";
-                lines.push(Line::from(vec![
-                    Span::raw(format!("{BUSY_GLYPH} ")).fg(self.styles.thinking()),
-                    Span::raw(t!("chat.processing").to_string()).fg(self.styles.thinking()),
-                ]));
+            TranscriptSourceCell::Active(ActiveTranscriptCell::InFlightTools) => {
+                lines.extend(in_flight_tool_lines(self.tool_executions, self.styles));
             }
         }
         if selected {
@@ -357,9 +361,25 @@ impl<'a> CellsRenderer<'a> {
             .map(|tool| format!(" ({})", format_duration_seconds(tool.elapsed())))
             .unwrap_or_default();
         let tone = tool_tone_color(tool_name_tone(tool_name), self.styles);
+        // Agent (subagent) headers lead with the subagent TYPE
+        // (`Explore` / `Plan` / custom) rather than the generic "Agent" — the
+        // type is the meaningful operation, and it no longer repeats in the
+        // run-summary line below. Pulled from the call's `subagent_type`
+        // input; falls back to the tool name when absent.
+        let header_name = if tool_name == coco_types::ToolName::Agent.as_str() {
+            crate::transcript::derive::extract_tool_call_input(source, call_id)
+                .as_ref()
+                .and_then(|input| input.get("subagent_type"))
+                .and_then(serde_json::Value::as_str)
+                .filter(|ty| !ty.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| tool_name.to_string())
+        } else {
+            tool_name.to_string()
+        };
         let mut spans = vec![
             Span::raw("● ").fg(tone),
-            Span::raw(tool_name.to_string()).fg(tone).bold(),
+            Span::raw(header_name).fg(tone).bold(),
         ];
         if !preview_spans.is_empty() {
             spans.push(Span::raw("(").fg(self.styles.text()));
@@ -390,6 +410,16 @@ impl<'a> CellsRenderer<'a> {
         else {
             return;
         };
+        // Subagent run summary on the Agent tool-result cell: the transient
+        // panel drops a subagent the instant it finishes, so its final
+        // stats (`✓ 37 tools · 1m11s · ↑68.1k ↓468 · cache 95% · $0.18`)
+        // surface here as the committed transcript record. The type lives in
+        // the `● Explore(...)` header above, not in this line.
+        if projection.tool_name == coco_types::ToolName::Agent.as_str()
+            && let Some(summary) = self.subagent_summaries.and_then(|m| m.get(&tr.tool_use_id))
+        {
+            lines.push(self.agent_summary_line(summary));
+        }
         super::tool_result::render_tool_result_body(
             &self.tool_result_ctx(),
             &projection.tool_name,
@@ -399,6 +429,48 @@ impl<'a> CellsRenderer<'a> {
             tr.is_error,
             lines,
         );
+    }
+
+    /// `  └ ✓ 37 tools · 1m11s · ↑68.1k ↓468 · cache 95% · $0.18` — the
+    /// committed run summary for a finished subagent (type is in the header).
+    fn agent_summary_line(&self, s: &crate::state::session::SubagentRunSummary) -> Line<'static> {
+        use crate::presentation::activity::format_short_tokens;
+        let (glyph, tone) = if s.succeeded {
+            ("✓", self.styles.success())
+        } else {
+            ("✗", self.styles.error())
+        };
+        // The subagent type now leads the invocation header
+        // (`● Explore(...)`), so it's intentionally omitted here to avoid
+        // repeating it one line below.
+        let mut parts: Vec<String> = Vec::new();
+        if s.tool_count > 0 {
+            parts.push(format!("{} tools", s.tool_count));
+        }
+        if s.duration_ms > 0 {
+            parts.push(format_duration_seconds(std::time::Duration::from_millis(
+                s.duration_ms.max(0) as u64,
+            )));
+        }
+        if s.input_tokens > 0 || s.output_tokens > 0 {
+            parts.push(format!(
+                "↑{} ↓{}",
+                format_short_tokens(s.input_tokens),
+                format_short_tokens(s.output_tokens)
+            ));
+            if s.input_tokens > 0 && s.cache_read_tokens > 0 {
+                let pct = (s.cache_read_tokens * 100 / s.input_tokens).clamp(0, 100);
+                parts.push(format!("cache {pct}%"));
+            }
+        }
+        if s.cost_usd > 0.0 {
+            parts.push(format!("${:.2}", s.cost_usd));
+        }
+        Line::from(vec![
+            Span::raw("  └ ").fg(tone),
+            Span::raw(format!("{glyph} ")).fg(tone),
+            Span::raw(parts.join(" · ")).fg(self.styles.dim()),
+        ])
     }
 
     /// Build the surface context the per-tool renderers paint into. Inline chat
@@ -780,6 +852,51 @@ pub(super) fn result_line(text: String, color: ratatui::style::Color) -> Line<'s
     Line::from(vec![Span::raw("  └ ").fg(color), Span::raw(text).fg(color)])
 }
 
+/// Synthesize the live `● Tool(args) (Ns)` progress rows for mid-stream tools
+/// that have no committed `CellKind::ToolUse` header yet (filtered by
+/// [`is_uncommitted_in_flight`]). Shared by the chat renderer and the Ctrl+O
+/// transcript reader so both surfaces format in-flight tools identically — and
+/// identically to the committed [`CellsRenderer::render_tool_call_header`], so
+/// the row doesn't visually jump when the owning message commits. Reads
+/// `elapsed()` live, so the timer ticks on each frame.
+pub(crate) fn in_flight_tool_lines(
+    tools: &[ToolExecution],
+    styles: UiStyles<'_>,
+) -> Vec<Line<'static>> {
+    tools
+        .iter()
+        .filter(|t| crate::presentation::transcript::is_tool_in_flight(t))
+        // Agent (subagent) spawns render in the dedicated Agents panel
+        // (`agent_surface`); suppressing them here avoids duplicating the
+        // same work as both an inline `Agent(...)` row and a panel row
+        // (the two surfaces are independently keyed and drift out of sync).
+        .filter(|t| t.name != coco_types::ToolName::Agent.as_str())
+        .map(|tool| {
+            let tone = tool_tone_color(tool_name_tone(&tool.name), styles);
+            let mut spans = vec![
+                Span::raw("● ").fg(tone),
+                Span::raw(tool.name.clone()).fg(tone).bold(),
+            ];
+            if let Some(preview) = tool
+                .input_preview
+                .as_deref()
+                .or(tool.description.as_deref())
+                .filter(|preview| !preview.is_empty())
+            {
+                spans.push(Span::raw("(").fg(styles.text()));
+                spans.push(Span::raw(truncate_chars(preview, 96)).fg(styles.dim()));
+                spans.push(Span::raw(")").fg(styles.text()));
+            }
+            spans.push(
+                Span::raw(format!(" ({})", format_duration_seconds(tool.elapsed())))
+                    .fg(styles.dim())
+                    .dim(),
+            );
+            Line::from(spans)
+        })
+        .collect()
+}
+
 fn tool_tone_color(
     tone: ToolNameTone,
     styles: coco_tui_ui::style::UiStyles<'_>,
@@ -879,8 +996,8 @@ fn cell_perf_label(cells: &[RenderedCell], cell: &TranscriptSourceCell<'_>) -> S
         TranscriptSourceCell::Active(ActiveTranscriptCell::Streaming(_)) => {
             "streaming_tail".to_string()
         }
-        TranscriptSourceCell::Active(ActiveTranscriptCell::BusySpinner) => {
-            "busy_spinner".to_string()
+        TranscriptSourceCell::Active(ActiveTranscriptCell::InFlightTools) => {
+            "in_flight_tools".to_string()
         }
     }
 }

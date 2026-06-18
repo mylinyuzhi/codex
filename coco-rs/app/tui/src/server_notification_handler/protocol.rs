@@ -354,6 +354,11 @@ pub(super) fn handle(
             // perspective; the orthogonal `is_backgrounded` flag is owned
             // by the optimistic Ctrl+B flip in `update.rs`, never by a
             // terminal status.
+            let now = state.clock.now_ms();
+            // Captured inside the agent borrow, inserted after it drops —
+            // the completed subagent's run summary for the transcript cell.
+            let mut completed_summary: Option<(String, crate::state::session::SubagentRunSummary)> =
+                None;
             if let Some(agent) = state
                 .session
                 .subagents
@@ -366,8 +371,47 @@ pub(super) fn handle(
                     coco_types::TaskCompletionStatus::Failed
                     | coco_types::TaskCompletionStatus::Stopped => SubagentStatus::Failed,
                 };
+                // Freeze the timer at completion so the row stops ticking
+                // with its still-running siblings. Stamp once (gate on the
+                // Running→terminal edge) so a duplicate TaskCompleted can't
+                // move the frozen time.
+                if matches!(prev_status, SubagentStatus::Running) {
+                    agent.completed_at_ms = Some(now);
+                }
+                // Authoritative final tokens + cost (TUI panel + the
+                // `Subagents · N tok · $X` aggregate line).
+                if let Some(usage) = &p.usage {
+                    agent.total_tokens = agent.total_tokens.max(usage.total_tokens);
+                    agent.input_tokens = agent.input_tokens.max(usage.input_tokens);
+                    agent.output_tokens = agent.output_tokens.max(usage.output_tokens);
+                    agent.cache_read_tokens = agent.cache_read_tokens.max(usage.cache_read_tokens);
+                    if usage.cost_usd > 0.0 {
+                        agent.cost_usd = usage.cost_usd;
+                    }
+                }
                 if !p.summary.is_empty() {
                     agent.final_message = Some(preview_summary(&p.summary, 80));
+                }
+                // Capture the run summary on the Running→terminal edge so it
+                // lands on the spawning Agent tool-result cell once the agent
+                // drops out of the transient panel.
+                if matches!(prev_status, SubagentStatus::Running)
+                    && let Some(tuid) = p.tool_use_id.clone()
+                {
+                    let duration_ms = agent.started_at_ms.map(|s| (now - s).max(0)).unwrap_or(0);
+                    completed_summary = Some((
+                        tuid,
+                        crate::state::session::SubagentRunSummary {
+                            agent_type: agent.agent_type.clone(),
+                            tool_count: agent.tool_count,
+                            duration_ms,
+                            input_tokens: agent.input_tokens,
+                            output_tokens: agent.output_tokens,
+                            cache_read_tokens: agent.cache_read_tokens,
+                            cost_usd: agent.cost_usd,
+                            succeeded: matches!(agent.status, SubagentStatus::Completed),
+                        },
+                    ));
                 }
                 // Toast only when the agent was explicitly backgrounded
                 // (Ctrl+B) — foreground completions are already visible
@@ -388,6 +432,9 @@ pub(super) fn handle(
                     };
                     state.ui.add_toast(toast);
                 }
+            }
+            if let Some((tuid, summary)) = completed_summary {
+                state.session.insert_subagent_summary(tuid, summary);
             }
             true
         }
@@ -427,6 +474,24 @@ pub(super) fn handle(
                 }
                 agent.tool_count = agent.tool_count.max(p.usage.tool_uses);
                 agent.total_tokens = agent.total_tokens.max(p.usage.total_tokens);
+                agent.input_tokens = agent.input_tokens.max(p.usage.input_tokens);
+                agent.output_tokens = agent.output_tokens.max(p.usage.output_tokens);
+                agent.cache_read_tokens = agent.cache_read_tokens.max(p.usage.cache_read_tokens);
+                // Live spend from the child's per-round usage snapshot
+                // (`SessionUsageUpdated` → drain → `set_progress`). Monotonic:
+                // the engine total only grows, so the final completion payload
+                // and this can't disagree downward.
+                if p.usage.cost_usd > agent.cost_usd {
+                    agent.cost_usd = p.usage.cost_usd;
+                }
+                // Replace the `local_agent` wire fallback (all `TaskStarted`
+                // knows) with the real declared type once it arrives on the
+                // first progress.
+                if let Some(agent_type) = p.agent_type.as_deref()
+                    && !agent_type.is_empty()
+                {
+                    agent.agent_type = agent_type.to_string();
+                }
             }
             true
         }
@@ -1072,6 +1137,27 @@ pub(super) fn handle(
 /// [`TaskStartedParams`]. Teammate-only metadata (`agent_name`,
 /// `team_name`, `color`) is only consulted for [`SubagentKind::Teammate`];
 /// BgAgent rows leave those `None` because their wire payload does too.
+/// Recover a subagent's declared `subagent_type` (Explore / Plan / Review / …)
+/// from the spawning Agent tool call's input, located by `tool_use_id` across
+/// the committed transcript cells. Mirrors the lookup the transcript header
+/// uses (`cells_renderer::render_tool_call_header`) so the panel badge and the
+/// committed cell agree. `None` until the issuing assistant turn is committed.
+fn declared_subagent_type(state: &AppState, tool_use_id: &str) -> Option<String> {
+    state
+        .session
+        .transcript
+        .cells()
+        .iter()
+        .find_map(|cell| {
+            crate::transcript::derive::extract_tool_call_input(cell.source.as_ref(), tool_use_id)
+        })
+        .as_ref()
+        .and_then(|input| input.get("subagent_type"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|ty| !ty.is_empty())
+        .map(str::to_string)
+}
+
 fn ensure_subagent_row(state: &mut AppState, kind: SubagentKind, p: &TaskStartedParams) {
     if state
         .session
@@ -1083,11 +1169,24 @@ fn ensure_subagent_row(state: &mut AppState, kind: SubagentKind, p: &TaskStarted
     }
     let (agent_type, color, team_name) = match kind {
         SubagentKind::Subagent => {
-            // `TaskStartedParams` doesn't yet surface the BgAgent's
-            // declared agent_type (Explore / Plan / Review / …). Until
-            // a `SubagentTypeAttachment` event lands, fall back to the
-            // wire literal so the badge is at least non-empty.
-            (task_type_wire::LOCAL_AGENT.to_string(), None, None)
+            // `TaskStartedParams` doesn't surface the BgAgent's declared
+            // agent_type (Explore / Plan / Review / …) on the wire. Recover
+            // it from the spawning Agent tool call's `subagent_type` input
+            // (keyed by `tool_use_id`) — the same source the committed
+            // transcript header reads — so the badge is correct from the
+            // first frame instead of flipping `local_agent → Explore` only
+            // once the first `TaskProgress` lands. Falls back to the wire
+            // literal when the ToolUse cell isn't committed yet; the
+            // `TaskProgress` handler still corrects it in that race.
+            let declared = p
+                .tool_use_id
+                .as_deref()
+                .and_then(|tuid| declared_subagent_type(state, tuid));
+            (
+                declared.unwrap_or_else(|| task_type_wire::LOCAL_AGENT.to_string()),
+                None,
+                None,
+            )
         }
         SubagentKind::Teammate => {
             // `agent_name` is the bare name; fall back to the
@@ -1118,6 +1217,11 @@ fn ensure_subagent_row(state: &mut AppState, kind: SubagentKind, p: &TaskStarted
         is_backgrounded: false,
         recent_activities: Vec::new(),
         final_message: None,
+        completed_at_ms: None,
+        cost_usd: 0.0,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 0,
     });
 }
 

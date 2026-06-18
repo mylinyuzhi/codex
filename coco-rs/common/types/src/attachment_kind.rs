@@ -344,10 +344,13 @@ impl AttachmentKind {
             // Also treat silent-dedup / runtime-bookkeeping kinds as
             // non-rendering (not in TS NULL_RENDERING because TS doesn't
             // enumerate them there, but coco-rs intentionally hides them).
-            AlreadyReadFile | BagelConsole => false,
+            // `AgentListingDelta` is a model-only delta reminder (sibling of
+            // DeferredToolsDelta / McpInstructionsDelta); TS doesn't list it in
+            // NULL_RENDERING, but it must never leak into the transcript — it
+            // was rendering as a visible `◇ Available agent types…` row.
+            AlreadyReadFile | BagelConsole | AgentListingDelta => false,
             // Everything else renders.
-            AgentListingDelta
-            | AsyncHookResponse
+            AsyncHookResponse
             | HookBlockingError
             | HookStoppedContinuation
             | Diagnostics

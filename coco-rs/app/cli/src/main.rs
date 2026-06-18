@@ -583,7 +583,7 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
         &cwd,
     )
     .await;
-    install_session_late_binds(session_runtime.clone(), &cwd, None, lsp_handle).await?;
+    install_session_late_binds(session_runtime.clone(), &cwd, None, lsp_handle, None).await?;
     // Unified MCP bootstrap (shared with TUI/headless): registers config-file +
     // plugin MCP servers, attaches the manager + `McpManagerAdapter` handle, and
     // connects + registers tools in the background. Reuses the manager already

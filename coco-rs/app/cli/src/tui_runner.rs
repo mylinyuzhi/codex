@@ -293,7 +293,14 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
         &cwd,
     )
     .await;
-    install_session_late_binds(runtime.clone(), &cwd, None, lsp_handle).await?;
+    install_session_late_binds(
+        runtime.clone(),
+        &cwd,
+        None,
+        lsp_handle,
+        Some(notification_tx.clone()),
+    )
+    .await?;
     // Unified MCP bootstrap: load config-file + plugin MCP servers, attach the
     // manager/handle, and connect in the background. The TUI now grows its own
     // `McpConnectionManager` (was SDK-only) — `None` builds a fresh one.

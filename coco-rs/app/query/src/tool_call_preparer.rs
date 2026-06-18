@@ -489,6 +489,25 @@ async fn resolve_permission_decision<M: std::borrow::Borrow<Message>>(
         if let Some(d) = classifier_decision {
             decision = d;
         }
+    } else if matches!(decision, PermissionDecision::Ask { .. })
+        && !tool.requires_user_interaction()
+    {
+        // The decision is an Ask that auto-mode COULD have classified, but the
+        // override block was skipped. Record exactly why so a stray prompt in
+        // an Auto session (esp. a subagent, which shares the parent's
+        // `AutoModeState` via `wire_engine`) is diagnosable from the log rather
+        // than guessed at: `auto_mode_active=false` ⇒ the shared flag was
+        // inactive at eval; `has_auto_mode_state=false` ⇒ this engine was never
+        // wired (build path bypassed `wire_engine`).
+        tracing::debug!(
+            target: "coco_query::permission",
+            tool = %tool_call.tool_name,
+            has_auto_mode_state = auto_mode_state.is_some(),
+            auto_mode_active = auto_mode_state.is_some_and(|s| s.is_active()),
+            has_tracker = chosen_tracker.is_some(),
+            requires_user_interaction = tool.requires_user_interaction(),
+            "auto-mode override skipped on Ask — surfacing interactive prompt",
+        );
     }
 
     // Reset consecutive-denial counter on ANY auto-mode allow —

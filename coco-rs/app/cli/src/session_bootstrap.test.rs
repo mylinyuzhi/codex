@@ -96,7 +96,7 @@ async fn install_session_late_binds_populates_every_slot_without_mcp() {
     let runtime = build_runtime(&home).await;
     let cwd = home.path().to_path_buf();
 
-    install_session_late_binds(runtime.clone(), &cwd, None, None)
+    install_session_late_binds(runtime.clone(), &cwd, None, None, None)
         .await
         .expect("install_session_late_binds");
 
@@ -130,7 +130,7 @@ async fn install_session_late_binds_attaches_mcp_when_some() {
 
     let mcp_handle: coco_tool_runtime::McpHandleRef = Arc::new(coco_tool_runtime::NoOpMcpHandle);
 
-    install_session_late_binds(runtime.clone(), &cwd, Some(mcp_handle), None)
+    install_session_late_binds(runtime.clone(), &cwd, Some(mcp_handle), None, None)
         .await
         .expect("install_session_late_binds");
 
@@ -173,7 +173,7 @@ async fn install_session_late_binds_attaches_lsp_when_some() {
 
     let lsp_handle: coco_tool_runtime::LspHandleRef = Arc::new(coco_tool_runtime::NoOpLspHandle);
 
-    install_session_late_binds(runtime.clone(), &cwd, None, Some(lsp_handle))
+    install_session_late_binds(runtime.clone(), &cwd, None, Some(lsp_handle), None)
         .await
         .expect("install_session_late_binds");
 

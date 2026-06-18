@@ -42,6 +42,11 @@ fn teammate_row(name: &str, team: &str, agent_type: &str) -> crate::state::Subag
         is_backgrounded: false,
         recent_activities: Vec::new(),
         final_message: None,
+        completed_at_ms: None,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        cost_usd: 0.0,
     }
 }
 

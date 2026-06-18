@@ -1382,6 +1382,11 @@ pub struct TaskProgressParams {
     pub last_tool_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+    /// Declared subagent type (`Explore`/`Plan`/…), mirrored from the
+    /// progress slot so the TUI can correct the `local_agent` fallback
+    /// that `TaskStarted` emits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_type: Option<String>,
     /// Recent tool activities (cap-5 ring buffer). Coordinator-side
     /// owns push + eviction; the TUI just copies the slice into its
     /// `SubagentInstance` mirror. TS parity:
@@ -1398,8 +1403,22 @@ pub struct TaskProgressParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskUsage {
     pub total_tokens: i64,
+    /// Input / output split + cache-read (the `↑in ↓out` / cache-hit
+    /// dimensions the panel and transcript summary show). `#[serde(default)]`
+    /// for back-compat with payloads that only carried `total_tokens`.
+    #[serde(default)]
+    pub input_tokens: i64,
+    #[serde(default)]
+    pub output_tokens: i64,
+    #[serde(default)]
+    pub cache_read_tokens: i64,
     pub tool_uses: i32,
     pub duration_ms: i64,
+    /// Real USD cost for completed subagent runs. `#[serde(default)]`
+    /// keeps older transcripts / mid-flight progress (which carry no
+    /// cost) deserializing to `0.0`.
+    #[serde(default)]
+    pub cost_usd: f64,
 }
 
 /// A teammate's plan-approval request, surfaced to the team lead's

@@ -219,6 +219,12 @@ pub struct SessionState {
     pub reasoning_metadata: HashMap<uuid::Uuid, ReasoningMetadata>,
     /// Subagent instances.
     pub subagents: Vec<SubagentInstance>,
+    /// Per-completed-subagent run summary, keyed by the spawning Agent
+    /// tool_use_id. Side-cache (like [`Self::reasoning_metadata`]): the
+    /// transient panel drops a subagent the moment it finishes, so its
+    /// final stats live here and render on the committed Agent tool-result
+    /// cell in the transcript instead.
+    pub subagent_summaries: HashMap<String, SubagentRunSummary>,
     /// Token usage.
     pub token_usage: TokenUsage,
     /// Cumulative session usage and cost snapshot.
@@ -266,6 +272,11 @@ pub struct SessionState {
     pub lsp_active: bool,
     /// Focused subagent index for teammate/activity views.
     pub focused_subagent_index: Option<i32>,
+    /// `agent_id` of the subagent whose conversation is currently being
+    /// viewed in the read-only agent overlay (`None` = main view). Set by the
+    /// agent-switcher rail; the overlay reads the subagent's transcript
+    /// scoped to this id. See [`Self::viewing_agent`].
+    pub viewing_agent_id: Option<String>,
     /// Current turn number (within multi-turn loop).
     pub current_turn_number: Option<i32>,
     /// Queued commands for mid-turn injection — projection of the
@@ -602,6 +613,10 @@ impl SessionState {
     pub fn clear_reasoning_metadata(&mut self) {
         self.reasoning_metadata.clear();
     }
+
+    pub fn insert_subagent_summary(&mut self, tool_use_id: String, summary: SubagentRunSummary) {
+        self.subagent_summaries.insert(tool_use_id, summary);
+    }
 }
 
 impl Default for SessionState {
@@ -623,6 +638,7 @@ impl Default for SessionState {
             has_submit_interruptible_tool_in_progress: false,
             tool_group_summaries: HashMap::new(),
             reasoning_metadata: HashMap::new(),
+            subagent_summaries: HashMap::new(),
             subagents: Vec::new(),
             token_usage: TokenUsage::default(),
             session_usage: None,
@@ -642,6 +658,7 @@ impl Default for SessionState {
             mcp_servers: Vec::new(),
             lsp_active: false,
             focused_subagent_index: None,
+            viewing_agent_id: None,
             current_turn_number: None,
             queued_commands: VecDeque::new(),
             available_models: None,
@@ -781,6 +798,11 @@ pub struct SubagentInstance {
     /// `TaskProgress.usage.total_tokens` — monotonically maxed for the
     /// same reason as [`Self::tool_count`]. Zero means "not yet reported".
     pub total_tokens: i64,
+    /// Input / output split + cache-read hits (the `↑in ↓out` / cache-%
+    /// the panel renders). Mirrored from `TaskUsage`; `0` until reported.
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
     /// UI-only flag for the foreground→background transition (Ctrl+B).
     /// Not produced by any wire event — the optimistic flip lives in
     /// `update::handle_command(TuiCommand::BackgroundAllTasks)`.
@@ -796,6 +818,33 @@ pub struct SubagentInstance {
     /// 80 chars rendered inline so the user sees the closing statement
     /// without expanding the transcript.
     pub final_message: Option<String>,
+    /// Unix-epoch ms when the subagent reached a terminal state. `None`
+    /// while running. Renderers freeze elapsed at `completed_at_ms -
+    /// started_at_ms` for terminal agents so a finished subagent's timer
+    /// stops ticking instead of tracking `now()` with its still-running
+    /// siblings.
+    pub completed_at_ms: Option<i64>,
+    /// Real USD cost of this subagent's run, forwarded on `TaskCompleted`
+    /// (`TaskUsage.cost_usd`). `0.0` until the agent completes. Summed
+    /// across agents for the panel's `Subagents · N tok · $X` line.
+    pub cost_usd: f64,
+}
+
+/// Final run summary for a completed subagent, rendered on its Agent
+/// tool-result cell in the transcript (`✓ Explore · 37 tools · 1m11s ·
+/// ↑68.1k ↓468 · cache 95% · $0.18`). UI-only side-cache keyed by the
+/// spawning tool_use_id.
+#[derive(Debug, Clone)]
+pub struct SubagentRunSummary {
+    pub agent_type: String,
+    pub tool_count: i32,
+    pub duration_ms: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cost_usd: f64,
+    /// Terminal outcome — `false` drives the `✗`/`Failed` glyph.
+    pub succeeded: bool,
 }
 
 /// Subagent lifecycle status. Covers what the TUI displays. The orthogonal
@@ -924,10 +973,22 @@ impl SessionState {
     /// background-tasks dialog and counted by the footer pill. Shared by the
     /// renderer and the key-intercept so selection indices stay aligned.
     pub fn running_background_tasks(&self) -> Vec<&TaskEntry> {
-        self.active_tasks
+        let mut rows: Vec<&TaskEntry> = self
+            .active_tasks
             .iter()
             .filter(|t| t.is_running_background())
-            .collect()
+            .collect();
+        // Group by kind (agents, then shells) so the dialog can render section
+        // headers. The sort is STABLE, so start order is preserved within a
+        // kind — and because the key-intercept reads selection from this same
+        // ordered list, the flat selection index stays aligned with the
+        // rendered rows.
+        rows.sort_by_key(|t| match t.kind {
+            TaskEntryKind::Agent => 0,
+            TaskEntryKind::Shell => 1,
+            TaskEntryKind::Other => 2,
+        });
+        rows
     }
 
     /// Cheap (no allocation) existence check for the layout/height pass.
@@ -935,6 +996,41 @@ impl SessionState {
         self.active_tasks
             .iter()
             .any(TaskEntry::is_running_background)
+    }
+
+    /// Whether any subagent row is still running. Drives the spinner
+    /// self-schedule (`AppState::ui_animation`) so the Agents panel's elapsed
+    /// timers keep ticking while agents run *outside* an active foreground
+    /// turn (swarm teammates, `run_in_background`, the inter-turn gap) —
+    /// otherwise the frame scheduler sleeps and the clock freezes until the
+    /// next `CoreEvent` arrives, then jumps.
+    pub(crate) fn has_running_subagent(&self) -> bool {
+        self.subagents
+            .iter()
+            .any(|agent| matches!(agent.status, SubagentStatus::Running))
+    }
+
+    /// Subagents shown as switchable rows in the Agents panel switcher, in
+    /// FIFO spawn order. The switcher prepends a synthetic `◯ main` row, so its
+    /// selection index `0` is main and `1..` index this list. The predicate
+    /// MUST match `presentation::activity::is_live_agent` (persistent teammates
+    /// always, one-shot subagents only while running) so the selection index
+    /// stays aligned with the rendered rows.
+    pub(crate) fn switcher_agents(&self) -> Vec<&SubagentInstance> {
+        self.subagents
+            .iter()
+            .filter(|a| {
+                matches!(a.kind, SubagentKind::Teammate)
+                    || matches!(a.status, SubagentStatus::Running)
+            })
+            .collect()
+    }
+
+    /// The subagent whose conversation is currently open in the read-only
+    /// agent-view overlay, if any. Resolved from [`Self::viewing_agent_id`].
+    pub(crate) fn viewing_agent(&self) -> Option<&SubagentInstance> {
+        let id = self.viewing_agent_id.as_deref()?;
+        self.subagents.iter().find(|a| a.agent_id == id)
     }
 }
 

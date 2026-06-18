@@ -164,6 +164,46 @@ fn test_snapshot_with_tool_result() {
 }
 
 #[test]
+fn test_snapshot_subagent_result_summary() {
+    // A finished subagent drops out of the transient panel; its run summary
+    // surfaces on the committed Agent tool-result cell instead
+    // (`└ ✓ Explore · 37 tools · 1m11s · ↑68.1k ↓468 · cache 95% · $0.18`).
+    use crate::state::session::SubagentRunSummary;
+    let mut state = AppState::new();
+    state.session.model = "opus-4".to_string();
+    test_helpers::push_user_text(&mut state.session, "1", "explore the codebase");
+    test_helpers::push_tool_use_input(
+        &mut state.session,
+        "call-agent",
+        "Agent",
+        serde_json::json!({"description": "Map app/core crates", "subagent_type": "Explore"}),
+    );
+    test_helpers::push_tool_result(
+        &mut state.session,
+        "call-agent",
+        "Agent",
+        "Mapped the app/core crates and their responsibilities.",
+        false,
+    );
+    state.session.insert_subagent_summary(
+        "call-agent".into(),
+        SubagentRunSummary {
+            agent_type: "Explore".into(),
+            tool_count: 37,
+            duration_ms: 71_000,
+            input_tokens: 68_100,
+            output_tokens: 468,
+            cache_read_tokens: 64_695,
+            cost_usd: 0.18,
+            succeeded: true,
+        },
+    );
+
+    let output = render_to_string(&state, 100, 20);
+    insta::assert_snapshot!("subagent_result_summary", output);
+}
+
+#[test]
 fn test_snapshot_attachment_chips() {
     // Alignment reference: every leading marker is width-1 and content lands at
     // column 2 — user `❯`, tool `●`, result `└` (+ line-number gutter), memory
@@ -713,13 +753,21 @@ fn test_snapshot_subagent_panel_populated() {
             is_backgrounded: false,
             recent_activities: Vec::new(),
             final_message: None,
+            completed_at_ms: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cost_usd: 0.0,
         },
         SubagentInstance {
             kind: crate::state::session::SubagentKind::Subagent,
             agent_id: "agent-c1d3".into(),
             agent_type: "Plan".into(),
             description: "Design refactor plan".into(),
-            status: SubagentStatus::Completed,
+            // Running so the populated panel shows multiple live rows; the
+            // Failed agent below is terminal and must drop out (transient
+            // stage view — completed agents commit to the transcript).
+            status: SubagentStatus::Running,
             color: None,
             team_name: None,
             started_at_ms: None,
@@ -729,6 +777,11 @@ fn test_snapshot_subagent_panel_populated() {
             is_backgrounded: false,
             recent_activities: Vec::new(),
             final_message: None,
+            completed_at_ms: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cost_usd: 0.0,
         },
         SubagentInstance {
             kind: crate::state::session::SubagentKind::Subagent,
@@ -745,11 +798,106 @@ fn test_snapshot_subagent_panel_populated() {
             is_backgrounded: false,
             recent_activities: Vec::new(),
             final_message: None,
+            completed_at_ms: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cost_usd: 0.0,
         },
     ];
     state.session.focused_subagent_index = Some(0);
     let output = render_to_string(&state, 100, 24);
     insta::assert_snapshot!("subagent_panel_populated", output);
+}
+
+#[test]
+fn test_snapshot_subagent_panel_live_cost() {
+    // The header shows `completed/total` for the current wave (a finished
+    // sibling stays counted so the fraction climbs), and per-row + header
+    // carry live token + cost from the child's per-round usage snapshot.
+    use crate::state::session::SubagentInstance;
+    use crate::state::session::SubagentKind;
+    use crate::state::session::SubagentStatus;
+    const NOW: i64 = 1_000_000_000;
+    let mut state = AppState::with_clock(coco_tui_ui::clock::MockClock::arc(NOW));
+    state.session.model = "opus-4".to_string();
+    let row = |id: &str,
+               agent_type: &str,
+               description: &str,
+               status: SubagentStatus,
+               started_at_ms: Option<i64>,
+               completed_at_ms: Option<i64>,
+               tool_count: i32,
+               input_tokens: i64,
+               output_tokens: i64,
+               cache_read_tokens: i64,
+               cost_usd: f64| SubagentInstance {
+        kind: SubagentKind::Subagent,
+        agent_id: id.into(),
+        agent_type: agent_type.into(),
+        description: description.into(),
+        status,
+        color: None,
+        team_name: None,
+        started_at_ms,
+        last_tool_name: None,
+        tool_count,
+        total_tokens: input_tokens + output_tokens,
+        is_backgrounded: false,
+        recent_activities: Vec::new(),
+        final_message: None,
+        completed_at_ms,
+        input_tokens,
+        output_tokens,
+        cache_read_tokens,
+        cost_usd,
+    };
+    state.session.subagents = vec![
+        // Running, with live spend mid-run.
+        row(
+            "agent-a",
+            "Explore",
+            "Map app/root crates",
+            SubagentStatus::Running,
+            Some(NOW - 88_000),
+            None,
+            33,
+            68_100,
+            468,
+            64_000,
+            0.12,
+        ),
+        // Finished sibling — drops from the rows but stays in the wave count
+        // and the header token/cost aggregate.
+        row(
+            "agent-b",
+            "Explore",
+            "Map common crates",
+            SubagentStatus::Completed,
+            Some(NOW - 90_000),
+            Some(NOW - 5_000),
+            37,
+            70_000,
+            500,
+            66_000,
+            0.18,
+        ),
+        row(
+            "agent-c",
+            "Plan",
+            "Design refactor",
+            SubagentStatus::Running,
+            Some(NOW - 80_000),
+            None,
+            10,
+            12_000,
+            100,
+            0,
+            0.01,
+        ),
+    ];
+    let output = render_to_string(&state, 100, 24);
+    insta::assert_snapshot!("subagent_panel_live_cost", output);
 }
 
 #[test]
