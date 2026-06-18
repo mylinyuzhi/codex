@@ -545,6 +545,7 @@ fn task_progress_params_description_and_usage_required() {
         },
         last_tool_name: Some("Bash".into()),
         summary: None,
+        agent_type: Some("Explore".into()),
         recent_activities: vec![],
         workflow_progress: vec![],
     };

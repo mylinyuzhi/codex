@@ -166,6 +166,12 @@ pub struct TaskProgress {
     /// `CostTracker`.
     #[serde(default)]
     pub cost_micro_usd: i64,
+    /// Declared subagent type (`Explore` / `Plan` / …). Carried on
+    /// progress so the TUI can replace the `local_agent` wire fallback
+    /// (which is all `TaskStarted` knows) with the real type once the
+    /// first progress arrives. `None` for non-subagent tasks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_type: Option<String>,
     #[serde(default)]
     pub tool_use_count: i32,
     #[serde(default)]

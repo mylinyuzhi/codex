@@ -443,6 +443,14 @@ pub(super) fn handle(
                 }
                 agent.tool_count = agent.tool_count.max(p.usage.tool_uses);
                 agent.total_tokens = agent.total_tokens.max(p.usage.total_tokens);
+                // Replace the `local_agent` wire fallback (all `TaskStarted`
+                // knows) with the real declared type once it arrives on the
+                // first progress.
+                if let Some(agent_type) = p.agent_type.as_deref()
+                    && !agent_type.is_empty()
+                {
+                    agent.agent_type = agent_type.to_string();
+                }
             }
             true
         }

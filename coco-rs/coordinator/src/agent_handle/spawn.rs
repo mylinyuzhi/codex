@@ -571,13 +571,19 @@ fn resolve_engine_outcome(
 fn spawn_task_event_drain(
     registry: coco_tool_runtime::AgentTaskRegistryRef,
     task_id: String,
+    agent_type: String,
     mut event_rx: tokio::sync::mpsc::Receiver<coco_types::CoreEvent>,
 ) {
     tokio::spawn(async move {
         // ProgressTracker increments on every ToolUseStarted,
         // while TextDelta is appended so TaskOutput can read mid-flight
         // output.
-        let mut tracker = coco_types::TaskProgress::default();
+        let mut tracker = coco_types::TaskProgress {
+            // Carry the real declared type (Explore / Plan / …) so the TUI
+            // can replace the `local_agent` fallback from `TaskStarted`.
+            agent_type: Some(agent_type),
+            ..Default::default()
+        };
         tracing::debug!(task_id = %task_id, "subagent event drain started");
         // `ToolUseQueued` (carries the full input) fires before
         // `ToolUseStarted` (carries no input); stash the input-derived
@@ -1574,7 +1580,12 @@ impl SwarmAgentHandle {
         if let Some((tid, task_cancel)) = sync_task.as_ref() {
             let (event_tx, event_rx) = tokio::sync::mpsc::channel::<coco_types::CoreEvent>(64);
             query_config.event_tx = Some(event_tx);
-            spawn_task_event_drain(task_registry.clone(), tid.clone(), event_rx);
+            spawn_task_event_drain(
+                task_registry.clone(),
+                tid.clone(),
+                agent_type_for_engine.clone(),
+                event_rx,
+            );
             // `live_transcript` is `Some` iff `request.enable_summarization`,
             // so this gates the timer on the same condition while handing it
             // the reader half of the engine's snapshot sink.
@@ -1953,7 +1964,12 @@ impl SwarmAgentHandle {
         let (event_tx, event_rx) = tokio::sync::mpsc::channel::<coco_types::CoreEvent>(64);
         let mut query_config = query_config;
         query_config.event_tx = Some(event_tx);
-        spawn_task_event_drain(task_registry.clone(), task_id.clone(), event_rx);
+        spawn_task_event_drain(
+            task_registry.clone(),
+            task_id.clone(),
+            agent_type.to_string(),
+            event_rx,
+        );
 
         // Periodic AgentSummary timer: only run when the spawn requested it
         // via `enable_summarization`. Default-off keeps a saturated coordinator

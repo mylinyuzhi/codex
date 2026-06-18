@@ -351,6 +351,7 @@ fn progress_params(
         },
         last_tool_name: last_tool.map(str::to_string),
         summary: None,
+        agent_type: None,
         recent_activities: activities,
         workflow_progress: Vec::new(),
     }

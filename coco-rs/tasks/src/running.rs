@@ -285,6 +285,7 @@ impl TaskManager {
             },
             last_tool_name: progress.last_tool_name,
             summary: progress.summary,
+            agent_type: progress.agent_type,
             recent_activities: progress.recent_activities,
             workflow_progress: Vec::new(),
         };
@@ -906,6 +907,7 @@ impl TaskManager {
             },
             last_tool_name: None,
             summary: None,
+            agent_type: state.progress().and_then(|p| p.agent_type.clone()),
             recent_activities: Vec::new(),
             workflow_progress: Vec::new(),
         };

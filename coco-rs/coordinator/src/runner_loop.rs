@@ -949,6 +949,7 @@ async fn push_teammate_progress(
                 output_tokens,
                 total_tokens,
                 cost_micro_usd: 0,
+                agent_type: None,
                 tool_use_count,
                 turn_count,
                 last_tool_name,

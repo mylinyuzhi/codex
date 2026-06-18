@@ -1382,6 +1382,11 @@ pub struct TaskProgressParams {
     pub last_tool_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+    /// Declared subagent type (`Explore`/`Plan`/…), mirrored from the
+    /// progress slot so the TUI can correct the `local_agent` fallback
+    /// that `TaskStarted` emits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_type: Option<String>,
     /// Recent tool activities (cap-5 ring buffer). Coordinator-side
     /// owns push + eviction; the TUI just copies the slice into its
     /// `SubagentInstance` mirror. TS parity:
