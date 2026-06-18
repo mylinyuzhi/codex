@@ -378,9 +378,17 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
         .filter(|(_, agent)| is_live_agent(agent))
         .collect();
     let total = live.len();
+    // Merged agent switcher: while it holds focus (`Shift+↑/↓`), the panel
+    // doubles as the switcher — a `❯` cursor on the selected agent (index
+    // aligned with `SessionState::switcher_agents`, no `◯ main` row). The
+    // viewed agent carries a `◀` marker; a hint line lists the keys.
+    let switcher_active = state.ui.focus == crate::state::FocusTarget::AgentSwitcher;
+    let switcher_sel = state.ui.agent_switcher_selected;
     for (pos, (i, agent)) in live.iter().enumerate() {
         let i = *i;
         let is_focused = state.session.focused_subagent_index == Some(i as i32);
+        let is_switcher_sel = switcher_active && switcher_sel == pos;
+        let is_viewed = state.session.viewing_agent_id.as_deref() == Some(agent.agent_id.as_str());
         // Backgrounded is orthogonal to status — a Running agent flipped
         // to background renders with the dim half-circle so the user can
         // tell it's detached but still alive.
@@ -399,7 +407,10 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
         // return string literals, so we keep this as `&'static str`
         // and let `ActivitySpan::tone` do the single `String::from`
         // at the boundary instead of allocating twice.
-        let row_prefix: &'static str = if tree_mode {
+        let row_prefix: &'static str = if switcher_active {
+            // The switcher cursor overrides the passive focus/tree markers.
+            if is_switcher_sel { "❯ " } else { "  " }
+        } else if tree_mode {
             match (is_focused, pos + 1 == total) {
                 (true, true) => "╘═ ",
                 (true, false) => "╞═ ",
@@ -491,6 +502,18 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
                 ActivityTone::Dim,
             ));
         }
+        // Mark the agent whose conversation is open in the read-only overlay.
+        if is_viewed {
+            spans.push(ActivitySpan::tone(" ◀", ActivityTone::Accent));
+        }
+        // The switcher-selected row recolors its WHOLE line to accent (not just
+        // the `❯` cursor) so the selection reads at a glance.
+        if is_switcher_sel {
+            for span in &mut spans {
+                span.tone = ActivityTone::Accent;
+                span.color = None;
+            }
+        }
         lines.push(ActivityLine { spans });
 
         // Backgrounded but still alive — hint the user how to bring it back.
@@ -521,6 +544,25 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
                 });
             }
         }
+    }
+
+    // Switcher key hints. When focused, list the in-switcher keys; otherwise
+    // surface the entry affordance so `Shift+↑` is discoverable. Only shown
+    // when there's at least one switchable agent.
+    if switcher_active {
+        lines.push(ActivityLine {
+            spans: vec![ActivitySpan::tone(
+                t!("switcher.panel_hint").to_string(),
+                ActivityTone::Dim,
+            )],
+        });
+    } else if !live.is_empty() {
+        lines.push(ActivityLine {
+            spans: vec![ActivitySpan::tone(
+                format!("  {}", t!("switcher.hint_collapsed")),
+                ActivityTone::Dim,
+            )],
+        });
     }
 }
 

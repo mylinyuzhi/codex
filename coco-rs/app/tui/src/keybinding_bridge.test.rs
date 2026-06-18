@@ -357,6 +357,26 @@ fn background_tasks_state() -> AppState {
 }
 
 #[test]
+fn test_shift_up_maps_to_agent_switcher_nav() {
+    let state = AppState::new();
+    let key = KeyEvent {
+        code: KeyCode::Up,
+        modifiers: KeyModifiers::SHIFT,
+        kind: KeyEventKind::Press,
+        state: KeyEventState::NONE,
+    };
+    assert!(matches!(
+        map_key(&state, key),
+        Some(TuiCommand::AgentSwitcherNav(-1))
+    ));
+    // Plain Up stays history-recall, not the switcher.
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Up)),
+        Some(TuiCommand::CursorUp)
+    ));
+}
+
+#[test]
 fn test_background_tasks_uses_dedicated_context() {
     let state = background_tasks_state();
     assert_eq!(active_context(&state), KeybindingContext::BackgroundTasks);

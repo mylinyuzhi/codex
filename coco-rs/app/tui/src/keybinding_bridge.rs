@@ -496,9 +496,14 @@ fn map_input_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
         }
         // keymap = "input:cursor_right" (alternate combo)
         KeyCode::Right => Some(TuiCommand::CursorRight),
+        // Shift+↑/↓ enter and navigate the agent switcher (no-op when no
+        // subagents run — handled in the update layer). Plain ↑/↓ stay
+        // history-recall; Shift disambiguates without stealing them.
+        KeyCode::Up if shift => Some(TuiCommand::AgentSwitcherNav(-1)),
         KeyCode::Up if alt => Some(TuiCommand::ScrollUp),
         // keymap = "input:history"
         KeyCode::Up => Some(TuiCommand::CursorUp),
+        KeyCode::Down if shift => Some(TuiCommand::AgentSwitcherNav(1)),
         KeyCode::Down if alt => Some(TuiCommand::ScrollDown),
         // keymap = "input:history"
         KeyCode::Down => Some(TuiCommand::CursorDown),

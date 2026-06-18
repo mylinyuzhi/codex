@@ -173,6 +173,10 @@ pub enum TuiCommand {
     FocusNextAgent,
     /// Focus previous agent in the activity surface.
     FocusPrevAgent,
+    /// Enter / navigate the agent switcher with `Shift+↑` (`-1`) / `Shift+↓`
+    /// (`+1`). When the switcher isn't focused it parks focus there; when it
+    /// is, it moves the selection by the delta.
+    AgentSwitcherNav(i32),
 
     // ── Surface actions ──
     /// Approve (Y in permission dialog).

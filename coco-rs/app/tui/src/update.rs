@@ -135,6 +135,79 @@ pub async fn handle_command(
     // back to the input and falls through so the keystroke isn't lost. If the
     // pill vanished (all tasks finished) while parked here, release focus so
     // the user isn't stuck on an invisible target.
+    // When the agent switcher holds focus (Shift+↑/↓ parked it there), the
+    // switcher lists agents only — no `◯ main` row. Shift+↑/↓ (or plain ↑/↓)
+    // move the selection, Enter views the selected agent, `x` interrupts it,
+    // and `←` returns to main + input (a natural "back" gesture that can't
+    // interrupt the turn). Esc is a SAFE no-op: it's swallowed here so a stray
+    // press can't fall through to the input and interrupt the running turn.
+    // Any other key drops back to the input. If the list emptied (all agents
+    // finished) while focused, release focus.
+    if state.ui.focus == FocusTarget::AgentSwitcher {
+        let agents: Vec<String> = state
+            .session
+            .switcher_agents()
+            .iter()
+            .map(|a| a.agent_id.clone())
+            .collect();
+        // Release focus if the list emptied or we entered coordinator mode
+        // (its panel isn't switcher-wired) — the user isn't stuck on a target
+        // that no longer renders a cursor.
+        if agents.is_empty() || state.ui.coordinator_mode_active {
+            state.ui.focus = FocusTarget::Input;
+            state.session.viewing_agent_id = None;
+        } else {
+            let last = agents.len() - 1;
+            let sel = state.ui.agent_switcher_selected.min(last);
+            match &cmd {
+                TuiCommand::AgentSwitcherNav(delta) => {
+                    state.ui.agent_switcher_selected =
+                        (sel as i32 + delta).clamp(0, last as i32) as usize;
+                    return true;
+                }
+                TuiCommand::CursorUp => {
+                    state.ui.agent_switcher_selected = sel.saturating_sub(1);
+                    return true;
+                }
+                TuiCommand::CursorDown => {
+                    state.ui.agent_switcher_selected = (sel + 1).min(last);
+                    return true;
+                }
+                TuiCommand::SubmitInput => {
+                    // View the selected agent (read-only overlay). Keep focus on
+                    // the switcher so Shift+↑/↓ can hop between agents.
+                    state.session.viewing_agent_id = Some(agents[sel].clone());
+                    return true;
+                }
+                TuiCommand::InsertChar(c) if c.eq_ignore_ascii_case(&'x') => {
+                    // `x` = interrupt the selected agent (fires its cancel token).
+                    let _ = command_tx
+                        .send(UserCommand::CancelSubagent {
+                            task_id: agents[sel].clone(),
+                        })
+                        .await;
+                    return true;
+                }
+                TuiCommand::CursorLeft => {
+                    // `←` = back to main + input (the safe exit).
+                    state.session.viewing_agent_id = None;
+                    state.ui.focus = FocusTarget::Input;
+                    return true;
+                }
+                TuiCommand::Cancel => {
+                    // Esc swallowed: neither exits nor interrupts. `←` is the exit.
+                    return true;
+                }
+                _ => {
+                    // Any other key drops focus back to the input and falls
+                    // through so the keystroke isn't lost (mirrors FooterShells).
+                    state.session.viewing_agent_id = None;
+                    state.ui.focus = FocusTarget::Input;
+                }
+            }
+        }
+    }
+
     if state.ui.focus == FocusTarget::FooterShells {
         if crate::status_bar::background_pill_label(state).is_none() {
             state.ui.focus = FocusTarget::Input;
@@ -638,7 +711,9 @@ pub async fn handle_command(
         TuiCommand::FocusNext | TuiCommand::FocusPrevious => {
             state.ui.focus = match state.ui.focus {
                 FocusTarget::Input => FocusTarget::Chat,
-                FocusTarget::Chat | FocusTarget::FooterShells => FocusTarget::Input,
+                FocusTarget::Chat | FocusTarget::FooterShells | FocusTarget::AgentSwitcher => {
+                    FocusTarget::Input
+                }
             };
             true
         }
@@ -653,6 +728,20 @@ pub async fn handle_command(
         TuiCommand::FocusPrevAgent => {
             if let Some(idx) = state.session.focused_subagent_index {
                 state.session.focused_subagent_index = if idx > 0 { Some(idx - 1) } else { None };
+            }
+            true
+        }
+        TuiCommand::AgentSwitcherNav(delta) => {
+            // Reached only when the switcher isn't focused yet (the focus
+            // intercept above consumes it once focused). Shift+↑/↓ parks focus
+            // on the switcher — but only when there are agents to switch
+            // between AND we're not in coordinator mode (that panel has its own
+            // renderer and isn't wired to the switcher); otherwise it's an
+            // inert no-op (arrows stay history).
+            let count = state.session.switcher_agents().len();
+            if count > 0 && !state.ui.coordinator_mode_active {
+                state.ui.focus = FocusTarget::AgentSwitcher;
+                state.ui.agent_switcher_selected = if delta < 0 { count - 1 } else { 0 };
             }
             true
         }

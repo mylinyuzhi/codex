@@ -272,6 +272,11 @@ pub struct SessionState {
     pub lsp_active: bool,
     /// Focused subagent index for teammate/activity views.
     pub focused_subagent_index: Option<i32>,
+    /// `agent_id` of the subagent whose conversation is currently being
+    /// viewed in the read-only agent overlay (`None` = main view). Set by the
+    /// agent-switcher rail; the overlay reads the subagent's transcript
+    /// scoped to this id. See [`Self::viewing_agent`].
+    pub viewing_agent_id: Option<String>,
     /// Current turn number (within multi-turn loop).
     pub current_turn_number: Option<i32>,
     /// Queued commands for mid-turn injection — projection of the
@@ -653,6 +658,7 @@ impl Default for SessionState {
             mcp_servers: Vec::new(),
             lsp_active: false,
             focused_subagent_index: None,
+            viewing_agent_id: None,
             current_turn_number: None,
             queued_commands: VecDeque::new(),
             available_models: None,
@@ -1002,6 +1008,29 @@ impl SessionState {
         self.subagents
             .iter()
             .any(|agent| matches!(agent.status, SubagentStatus::Running))
+    }
+
+    /// Subagents shown as switchable rows in the Agents panel switcher, in
+    /// FIFO spawn order. The switcher prepends a synthetic `◯ main` row, so its
+    /// selection index `0` is main and `1..` index this list. The predicate
+    /// MUST match `presentation::activity::is_live_agent` (persistent teammates
+    /// always, one-shot subagents only while running) so the selection index
+    /// stays aligned with the rendered rows.
+    pub(crate) fn switcher_agents(&self) -> Vec<&SubagentInstance> {
+        self.subagents
+            .iter()
+            .filter(|a| {
+                matches!(a.kind, SubagentKind::Teammate)
+                    || matches!(a.status, SubagentStatus::Running)
+            })
+            .collect()
+    }
+
+    /// The subagent whose conversation is currently open in the read-only
+    /// agent-view overlay, if any. Resolved from [`Self::viewing_agent_id`].
+    pub(crate) fn viewing_agent(&self) -> Option<&SubagentInstance> {
+        let id = self.viewing_agent_id.as_deref()?;
+        self.subagents.iter().find(|a| a.agent_id == id)
     }
 }
 

@@ -100,7 +100,10 @@ fn activity_block(surface: &ActivitySurfaceView, styles: UiStyles<'_>) -> Block<
 fn activity_title(title: ActivityTitle) -> String {
     match title {
         ActivityTitle::Activity => format!(" {} ", t!("activity.title")),
-        ActivityTitle::Agents => format!(" {} ", t!("subagent.title")),
+        // The subagent panel drops its title word: the `Subagents (N) · …`
+        // summary body line is the de-facto header, so the top border is a
+        // bare rule and the label isn't repeated twice.
+        ActivityTitle::Agents => String::new(),
         ActivityTitle::Coordinator => format!(" {} ", t!("coordinator.title")),
         ActivityTitle::Tasks => t!("plan_panel.title").to_string(),
     }
