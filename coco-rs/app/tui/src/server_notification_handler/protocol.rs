@@ -477,6 +477,13 @@ pub(super) fn handle(
                 agent.input_tokens = agent.input_tokens.max(p.usage.input_tokens);
                 agent.output_tokens = agent.output_tokens.max(p.usage.output_tokens);
                 agent.cache_read_tokens = agent.cache_read_tokens.max(p.usage.cache_read_tokens);
+                // Live spend from the child's per-round usage snapshot
+                // (`SessionUsageUpdated` → drain → `set_progress`). Monotonic:
+                // the engine total only grows, so the final completion payload
+                // and this can't disagree downward.
+                if p.usage.cost_usd > agent.cost_usd {
+                    agent.cost_usd = p.usage.cost_usd;
+                }
                 // Replace the `local_agent` wire fallback (all `TaskStarted`
                 // knows) with the real declared type once it arrives on the
                 // first progress.
@@ -1130,6 +1137,27 @@ pub(super) fn handle(
 /// [`TaskStartedParams`]. Teammate-only metadata (`agent_name`,
 /// `team_name`, `color`) is only consulted for [`SubagentKind::Teammate`];
 /// BgAgent rows leave those `None` because their wire payload does too.
+/// Recover a subagent's declared `subagent_type` (Explore / Plan / Review / …)
+/// from the spawning Agent tool call's input, located by `tool_use_id` across
+/// the committed transcript cells. Mirrors the lookup the transcript header
+/// uses (`cells_renderer::render_tool_call_header`) so the panel badge and the
+/// committed cell agree. `None` until the issuing assistant turn is committed.
+fn declared_subagent_type(state: &AppState, tool_use_id: &str) -> Option<String> {
+    state
+        .session
+        .transcript
+        .cells()
+        .iter()
+        .find_map(|cell| {
+            crate::transcript::derive::extract_tool_call_input(cell.source.as_ref(), tool_use_id)
+        })
+        .as_ref()
+        .and_then(|input| input.get("subagent_type"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|ty| !ty.is_empty())
+        .map(str::to_string)
+}
+
 fn ensure_subagent_row(state: &mut AppState, kind: SubagentKind, p: &TaskStartedParams) {
     if state
         .session
@@ -1141,11 +1169,24 @@ fn ensure_subagent_row(state: &mut AppState, kind: SubagentKind, p: &TaskStarted
     }
     let (agent_type, color, team_name) = match kind {
         SubagentKind::Subagent => {
-            // `TaskStartedParams` doesn't yet surface the BgAgent's
-            // declared agent_type (Explore / Plan / Review / …). Until
-            // a `SubagentTypeAttachment` event lands, fall back to the
-            // wire literal so the badge is at least non-empty.
-            (task_type_wire::LOCAL_AGENT.to_string(), None, None)
+            // `TaskStartedParams` doesn't surface the BgAgent's declared
+            // agent_type (Explore / Plan / Review / …) on the wire. Recover
+            // it from the spawning Agent tool call's `subagent_type` input
+            // (keyed by `tool_use_id`) — the same source the committed
+            // transcript header reads — so the badge is correct from the
+            // first frame instead of flipping `local_agent → Explore` only
+            // once the first `TaskProgress` lands. Falls back to the wire
+            // literal when the ToolUse cell isn't committed yet; the
+            // `TaskProgress` handler still corrects it in that race.
+            let declared = p
+                .tool_use_id
+                .as_deref()
+                .and_then(|tuid| declared_subagent_type(state, tuid));
+            (
+                declared.unwrap_or_else(|| task_type_wire::LOCAL_AGENT.to_string()),
+                None,
+                None,
+            )
         }
         SubagentKind::Teammate => {
             // `agent_name` is the bare name; fall back to the

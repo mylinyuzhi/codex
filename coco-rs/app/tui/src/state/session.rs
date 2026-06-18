@@ -979,6 +979,18 @@ impl SessionState {
             .iter()
             .any(TaskEntry::is_running_background)
     }
+
+    /// Whether any subagent row is still running. Drives the spinner
+    /// self-schedule (`AppState::ui_animation`) so the Agents panel's elapsed
+    /// timers keep ticking while agents run *outside* an active foreground
+    /// turn (swarm teammates, `run_in_background`, the inter-turn gap) —
+    /// otherwise the frame scheduler sleeps and the clock freezes until the
+    /// next `CoreEvent` arrives, then jumps.
+    pub(crate) fn has_running_subagent(&self) -> bool {
+        self.subagents
+            .iter()
+            .any(|agent| matches!(agent.status, SubagentStatus::Running))
+    }
 }
 
 /// Hook execution entry for the hook panel.

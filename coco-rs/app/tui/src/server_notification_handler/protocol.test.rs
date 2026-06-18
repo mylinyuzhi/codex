@@ -363,6 +363,79 @@ fn progress_params(
     }
 }
 
+fn local_agent_started_params(task_id: &str, tool_use_id: &str) -> coco_types::TaskStartedParams {
+    coco_types::TaskStartedParams {
+        task_id: task_id.into(),
+        tool_use_id: Some(tool_use_id.into()),
+        description: "Map app root".into(),
+        task_type: Some("local_agent".into()),
+        workflow_name: None,
+        prompt: None,
+        agent_name: None,
+        team_name: None,
+        color: None,
+        backend_kind: None,
+    }
+}
+
+#[test]
+fn task_started_resolves_subagent_type_from_tool_call_input() {
+    // Regression: the row used to render the `local_agent` wire fallback until
+    // the first `TaskProgress` carried the real type, so the badge visibly
+    // flipped `local_agent → Explore` mid-run (staggered across siblings).
+    // `ensure_subagent_row` now recovers the declared `subagent_type` from the
+    // spawning Agent tool call's input, so the badge is correct on spawn.
+    let mut state = AppState::new();
+    let (tx, _rx) = channel();
+    // The assistant turn that issued the Agent spawn must be in the transcript.
+    test_helpers::push_tool_use_input(
+        &mut state.session,
+        "call-explore",
+        coco_types::ToolName::Agent.as_str(),
+        serde_json::json!({
+            "description": "Map app root",
+            "subagent_type": "Explore",
+            "prompt": "explore",
+        }),
+    );
+
+    let event = coco_types::ServerNotification::TaskStarted(local_agent_started_params(
+        "agent-app-root",
+        "call-explore",
+    ));
+    super::handle(&mut state, event, &tx);
+
+    let agent = state
+        .session
+        .subagents
+        .iter()
+        .find(|a| a.agent_id == "agent-app-root")
+        .expect("subagent row created");
+    assert_eq!(agent.agent_type, "Explore");
+}
+
+#[test]
+fn task_started_falls_back_to_wire_literal_when_tool_call_uncommitted() {
+    // No issuing assistant turn in the transcript (the streaming race) → keep
+    // the non-empty `local_agent` fallback; `TaskProgress` corrects it later.
+    let mut state = AppState::new();
+    let (tx, _rx) = channel();
+
+    let event = coco_types::ServerNotification::TaskStarted(local_agent_started_params(
+        "agent-x",
+        "call-missing",
+    ));
+    super::handle(&mut state, event, &tx);
+
+    let agent = state
+        .session
+        .subagents
+        .iter()
+        .find(|a| a.agent_id == "agent-x")
+        .expect("subagent row created");
+    assert_eq!(agent.agent_type, "local_agent");
+}
+
 #[test]
 fn task_progress_copies_recent_activities_into_subagent() {
     let mut state = AppState::new();

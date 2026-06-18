@@ -327,6 +327,18 @@ impl AgentQueryEngine for QueryEngineAdapter {
             engine = engine.with_live_transcript(live);
         }
 
+        // Per-round usage + cost: install a fresh `CostTracker` so the child
+        // emits `SessionUsageUpdated` after every model round. The engine's
+        // only token report otherwise rides the single end-of-cycle
+        // `TurnEnded`, and `TurnEnded` carries no cost at all — so without
+        // this the coordinator's spawn drain can't surface live spend (or even
+        // live tokens) on the subagent's activity row. The tracker is private
+        // to this child engine; its snapshot reaches only the spawn drain (the
+        // child's `event_tx`), never the parent session's usage.
+        engine = engine.with_session_usage_tracker(Arc::new(tokio::sync::Mutex::new(
+            coco_messages::CostTracker::new(),
+        )));
+
         // Fork mode: if the parent surfaced context messages, use
         // `run_with_messages` so the child's first turn sees the
         // parent's history prepended.

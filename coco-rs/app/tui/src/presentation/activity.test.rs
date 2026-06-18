@@ -178,6 +178,37 @@ fn turn_activity_view_keeps_stale_teammates_view_empty_without_agents() {
 }
 
 #[test]
+fn subagent_row_truncates_long_description_and_tail() {
+    // The Agents panel paints without `Wrap`, so an unbounded description or
+    // live-action tail would hard-clip at the screen edge mid-word. Both must
+    // be ellipsised so the stats stay on-screen.
+    let mut state = AppState::default();
+    let mut agent = subagent();
+    agent.description = "Map every crate in the app, core, and services layers thoroughly".into();
+    agent.last_tool_name =
+        Some("args: medium thoroughness: explore crate-level CLAUDE.md files under coco-rs".into());
+    state.session.subagents.push(agent);
+
+    let view = surface(turn_activity_view(&state, 160));
+    let text: String = view
+        .lines
+        .iter()
+        .flat_map(|line| &line.spans)
+        .map(|span| span.text.as_ref())
+        .collect();
+
+    assert!(text.contains('…'), "expected an ellipsis: {text}");
+    assert!(
+        !text.contains("services layers thoroughly"),
+        "description tail should be truncated: {text}"
+    );
+    assert!(
+        !text.contains("CLAUDE.md files under coco-rs"),
+        "live-action tail should be truncated: {text}"
+    );
+}
+
+#[test]
 fn inline_activity_height_caps_narrow_rows() {
     // Eight lines exceed the narrow budget (6), so the height caps at
     // budget + 1 border row = 7.

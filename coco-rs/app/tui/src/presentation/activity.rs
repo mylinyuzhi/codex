@@ -13,6 +13,11 @@ use crate::state::session::ToolStatus;
 use coco_tui_ui::constants;
 
 const MAX_TOOL_ACTIVITY_DISPLAY: usize = 5;
+// Per-subagent row caps so a long task description or live-action tail can't
+// run to the screen edge (the Agents panel paints without `Wrap`, so overflow
+// is hard-clipped mid-word). Mirrors the Tools section's `truncate_chars`.
+const SUBAGENT_DESC_MAX_CHARS: usize = 48;
+const SUBAGENT_TAIL_MAX_CHARS: usize = 40;
 // Row budgets for the inline activity panel. Raised from 3/5/7 so the
 // subagent panel renders every agent (one line each now) instead of
 // folding the tail behind `…more in activity`. `inline_activity_height`
@@ -330,11 +335,12 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
         coco_types::ExpandedView::Teammates
     );
     let now = state.clock.now_ms();
-    // Aggregate counters over the *live* agents shown in the panel — the
-    // dedicated subagent counter for the current stage. Completed agents
-    // have dropped out (their totals live in the transcript), so this
-    // reflects what's on screen, not a running cross-batch sum.
-    let agg = SubagentAggregate::of(state.session.subagents.iter().filter(|a| is_live_agent(a)));
+    // Aggregate counters over the current wave (live agents + their
+    // just-finished siblings) so the header can show `completed/total` and
+    // keep finished agents' tokens / cost in the tally. Anchoring on the
+    // running batch keeps this scoped to the current stage, not a running
+    // cross-batch sum. The per-agent *rows* below stay live-only.
+    let agg = SubagentAggregate::of(&state.session.subagents);
     let summary = agg.summary_text();
 
     if tree_mode && !state.session.subagents.is_empty() {
@@ -415,13 +421,15 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
             },
             crate::state::SubagentKind::Subagent => agent_type.clone(),
         };
+        // Lead with the kind badge (`Explore: …`, `@name@team: …`) so the
+        // type reads first and the descriptions stay left-aligned under it.
+        // Tint the badge with its assigned color (TS `AgentProgressLine`
+        // parity); falls back to Dim when unset.
         let mut spans = vec![
             ActivitySpan::tone(row_prefix, ActivityTone::Dim),
             ActivitySpan::tone(format!("{icon} "), tone),
-            ActivitySpan::raw(agent.description.clone()),
-            // Tint the agent badge with its assigned color (TS
-            // `AgentProgressLine` parity); falls back to Dim when unset.
-            ActivitySpan::tone(format!(" ({label})"), ActivityTone::Dim).with_color(agent.color),
+            ActivitySpan::tone(format!("{label}: "), ActivityTone::Dim).with_color(agent.color),
+            ActivitySpan::raw(truncate_chars(&agent.description, SUBAGENT_DESC_MAX_CHARS)),
         ];
 
         // One line per agent: tool count · (frozen) elapsed · tokens ·
@@ -460,6 +468,12 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
         } else if agent.total_tokens > 0 {
             stats.push(format!("↕{}", format_short_tokens(agent.total_tokens)));
         }
+        // Per-agent spend, mirroring the header aggregate and the committed
+        // transcript run summary. Populated on completion (the progress
+        // heartbeat carries tokens but not cost), so it tails the token split.
+        if agent.cost_usd > 0.0 {
+            stats.push(format!("${:.2}", agent.cost_usd));
+        }
         let tail = match agent.status {
             SubagentStatus::Running => {
                 crate::widgets::activity_summary::summarize_trailing(&agent.recent_activities)
@@ -469,7 +483,7 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
             SubagentStatus::Failed => Some("Failed".to_string()),
         };
         if let Some(tail) = tail {
-            stats.push(tail);
+            stats.push(truncate_chars(&tail, SUBAGENT_TAIL_MAX_CHARS));
         }
         if !stats.is_empty() {
             spans.push(ActivitySpan::tone(
@@ -520,10 +534,21 @@ fn is_live_agent(agent: &crate::state::SubagentInstance) -> bool {
         || matches!(agent.status, SubagentStatus::Running)
 }
 
-/// Aggregate counters across the live subagents shown in the panel,
-/// driving the leader/header summary line.
+/// Aggregate counters across the current *wave* of subagents, driving the
+/// leader/header summary line. The wave is the batch spawned together: every
+/// live subagent plus any sibling that has already finished but started
+/// alongside the still-running ones. Keeping finished siblings in the tally
+/// lets the `completed/total` fraction climb (0/3 → 1/3 → 2/3) instead of the
+/// denominator shrinking as agents land, and stops their tokens / cost from
+/// vanishing from the header the moment they complete.
 struct SubagentAggregate {
-    count: usize,
+    /// One-shot subagents in the wave — the `completed/total` denominator.
+    total: usize,
+    /// Wave subagents that reached a terminal state — the numerator.
+    completed: usize,
+    /// Live rows of any kind (incl. persistent teammates); the fallback
+    /// label when the wave holds no one-shot subagent.
+    live: usize,
     tools: i32,
     input: i64,
     output: i64,
@@ -532,17 +557,58 @@ struct SubagentAggregate {
 }
 
 impl SubagentAggregate {
-    fn of<'a>(agents: impl Iterator<Item = &'a crate::state::SubagentInstance>) -> Self {
+    /// A finished sibling that started within this slack of the earliest
+    /// still-running subagent counts as part of the same wave; agents from a
+    /// prior batch started long before the anchor and drop out.
+    const WAVE_ANCHOR_SLACK_MS: i64 = 2_000;
+
+    fn of(subagents: &[crate::state::SubagentInstance]) -> Self {
+        // Anchor the wave on the earliest start among running one-shot
+        // subagents. A terminal subagent belongs to the wave only while a
+        // sibling is still running (anchor present) and it started no earlier
+        // than that sibling (minus a small spawn-stagger slack) — so a single
+        // running batch keeps its finished members, but a previously-completed
+        // batch can't inflate the count once a new batch begins.
+        let anchor = subagents
+            .iter()
+            .filter(|a| {
+                matches!(a.kind, crate::state::SubagentKind::Subagent)
+                    && matches!(a.status, SubagentStatus::Running)
+            })
+            .filter_map(|a| a.started_at_ms)
+            .min();
+        let in_wave = |a: &crate::state::SubagentInstance| match a.kind {
+            crate::state::SubagentKind::Teammate => is_live_agent(a),
+            crate::state::SubagentKind::Subagent => match a.status {
+                SubagentStatus::Running => true,
+                SubagentStatus::Completed | SubagentStatus::Failed => {
+                    anchor.is_some_and(|anchor| {
+                        a.started_at_ms
+                            .is_some_and(|started| started >= anchor - Self::WAVE_ANCHOR_SLACK_MS)
+                    })
+                }
+            },
+        };
         let mut a = SubagentAggregate {
-            count: 0,
+            total: 0,
+            completed: 0,
+            live: 0,
             tools: 0,
             input: 0,
             output: 0,
             cache_read: 0,
             cost: 0.0,
         };
-        for s in agents {
-            a.count += 1;
+        for s in subagents.iter().filter(|s| in_wave(s)) {
+            if matches!(s.kind, crate::state::SubagentKind::Subagent) {
+                a.total += 1;
+                if matches!(s.status, SubagentStatus::Completed | SubagentStatus::Failed) {
+                    a.completed += 1;
+                }
+            }
+            if is_live_agent(s) {
+                a.live += 1;
+            }
             a.tools += s.tool_count;
             a.input += s.input_tokens;
             a.output += s.output_tokens;
@@ -552,15 +618,21 @@ impl SubagentAggregate {
         a
     }
 
-    /// `Subagents (3) · 99 tools · ↑128k ↓4k · cache 92% · $0.42`. Shown
-    /// from the moment any subagent is live (count > 0); the token / cache
-    /// / cost segments fill in as data arrives, so the line is present
-    /// from the start instead of waiting on the first token report.
+    /// `Subagents (1/3) · 99 tools · ↑128k ↓4k · cache 92% · $0.42`. The
+    /// `completed/total` fraction shows how many of the current batch have
+    /// landed; the token / cache / cost segments fill in as usage arrives, so
+    /// the line is present from the first spawn instead of waiting on the
+    /// first token report. Falls back to a bare count for teammate-only panels.
     fn summary_text(&self) -> Option<String> {
-        if self.count == 0 {
+        if self.total == 0 && self.live == 0 {
             return None;
         }
-        let mut parts = vec![format!("Subagents ({})", self.count)];
+        let head = if self.total > 0 {
+            format!("Subagents ({}/{})", self.completed, self.total)
+        } else {
+            format!("Subagents ({})", self.live)
+        };
+        let mut parts = vec![head];
         if self.tools > 0 {
             parts.push(format!("{} tools", self.tools));
         }

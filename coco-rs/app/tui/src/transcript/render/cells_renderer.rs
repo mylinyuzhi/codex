@@ -361,9 +361,25 @@ impl<'a> CellsRenderer<'a> {
             .map(|tool| format!(" ({})", format_duration_seconds(tool.elapsed())))
             .unwrap_or_default();
         let tone = tool_tone_color(tool_name_tone(tool_name), self.styles);
+        // Agent (subagent) headers lead with the subagent TYPE
+        // (`Explore` / `Plan` / custom) rather than the generic "Agent" — the
+        // type is the meaningful operation, and it no longer repeats in the
+        // run-summary line below. Pulled from the call's `subagent_type`
+        // input; falls back to the tool name when absent.
+        let header_name = if tool_name == coco_types::ToolName::Agent.as_str() {
+            crate::transcript::derive::extract_tool_call_input(source, call_id)
+                .as_ref()
+                .and_then(|input| input.get("subagent_type"))
+                .and_then(serde_json::Value::as_str)
+                .filter(|ty| !ty.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| tool_name.to_string())
+        } else {
+            tool_name.to_string()
+        };
         let mut spans = vec![
             Span::raw("● ").fg(tone),
-            Span::raw(tool_name.to_string()).fg(tone).bold(),
+            Span::raw(header_name).fg(tone).bold(),
         ];
         if !preview_spans.is_empty() {
             spans.push(Span::raw("(").fg(self.styles.text()));
@@ -396,8 +412,9 @@ impl<'a> CellsRenderer<'a> {
         };
         // Subagent run summary on the Agent tool-result cell: the transient
         // panel drops a subagent the instant it finishes, so its final
-        // stats (`✓ Explore · 37 tools · 1m11s · ↑68.1k ↓468 · cache 95% ·
-        // $0.18`) surface here as the committed transcript record.
+        // stats (`✓ 37 tools · 1m11s · ↑68.1k ↓468 · cache 95% · $0.18`)
+        // surface here as the committed transcript record. The type lives in
+        // the `● Explore(...)` header above, not in this line.
         if projection.tool_name == coco_types::ToolName::Agent.as_str()
             && let Some(summary) = self.subagent_summaries.and_then(|m| m.get(&tr.tool_use_id))
         {
@@ -414,8 +431,8 @@ impl<'a> CellsRenderer<'a> {
         );
     }
 
-    /// `  └ ✓ Explore · 37 tools · 1m11s · ↑68.1k ↓468 · cache 95% · $0.18`
-    /// — the committed run summary for a finished subagent.
+    /// `  └ ✓ 37 tools · 1m11s · ↑68.1k ↓468 · cache 95% · $0.18` — the
+    /// committed run summary for a finished subagent (type is in the header).
     fn agent_summary_line(&self, s: &crate::state::session::SubagentRunSummary) -> Line<'static> {
         use crate::presentation::activity::format_short_tokens;
         let (glyph, tone) = if s.succeeded {
@@ -423,10 +440,10 @@ impl<'a> CellsRenderer<'a> {
         } else {
             ("✗", self.styles.error())
         };
+        // The subagent type now leads the invocation header
+        // (`● Explore(...)`), so it's intentionally omitted here to avoid
+        // repeating it one line below.
         let mut parts: Vec<String> = Vec::new();
-        if !s.agent_type.is_empty() {
-            parts.push(s.agent_type.clone());
-        }
         if s.tool_count > 0 {
             parts.push(format!("{} tools", s.tool_count));
         }

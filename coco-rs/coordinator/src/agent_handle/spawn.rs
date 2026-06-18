@@ -635,9 +635,39 @@ fn spawn_task_event_drain(
                     );
                     registry.set_progress(&task_id, tracker.clone()).await;
                 }
-                // Per-turn usage roll-up so the activity panel shows live
-                // token counts while the subagent runs (cost stays unknown
-                // until completion — `AgentStreamEvent` carries no cost).
+                // Per-round usage + cost roll-up so the activity panel shows
+                // live token counts AND spend while the subagent runs. The
+                // child engine emits `SessionUsageUpdated` after every model
+                // round (`agent_adapter` installs its `CostTracker`); unlike
+                // `TurnEnded` the snapshot carries engine-authoritative cost,
+                // so this is the only pre-completion cost signal. Counters are
+                // monotonic so an out-of-order snapshot can't roll them back.
+                coco_types::CoreEvent::Protocol(
+                    coco_types::ServerNotification::SessionUsageUpdated(snap),
+                ) => {
+                    let totals = &snap.totals;
+                    let total = totals.input_tokens.saturating_add(totals.output_tokens);
+                    let cost_micro = (totals.total_cost_usd * 1_000_000.0) as i64;
+                    let mut changed = false;
+                    if total > tracker.total_tokens {
+                        tracker.total_tokens = total;
+                        tracker.input_tokens = totals.input_tokens;
+                        tracker.output_tokens = totals.output_tokens;
+                        tracker.cache_read_tokens = totals.cache_read_input_tokens;
+                        changed = true;
+                    }
+                    if cost_micro > tracker.cost_micro_usd {
+                        tracker.cost_micro_usd = cost_micro;
+                        changed = true;
+                    }
+                    if changed {
+                        registry.set_progress(&task_id, tracker.clone()).await;
+                    }
+                }
+                // End-of-cycle fallback: the single `TurnEnded` still carries
+                // the final token total (no cost). Kept so token counts land
+                // even if a usage snapshot was missed; cost arrives via the
+                // completion payload.
                 coco_types::CoreEvent::Protocol(coco_types::ServerNotification::TurnEnded(p)) => {
                     if let Some(usage) = &p.usage {
                         let total = usage

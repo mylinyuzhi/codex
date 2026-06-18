@@ -12,6 +12,9 @@ use crate::state::PermissionPromptState;
 use crate::state::PlanEntryPromptState;
 use crate::state::StreamingState;
 use crate::state::UiAnimation;
+use crate::state::session::SubagentInstance;
+use crate::state::session::SubagentKind;
+use crate::state::session::SubagentStatus;
 use crate::state::session::TokenUsage;
 use crate::state::ui::Toast;
 use crate::transcript::cells::CellKind;
@@ -508,6 +511,30 @@ fn test_token_usage_update() {
     assert_eq!(state.session.token_usage.output_tokens, 50);
 }
 
+fn running_subagent(status: SubagentStatus) -> SubagentInstance {
+    SubagentInstance {
+        kind: SubagentKind::Subagent,
+        agent_id: "agent-1".into(),
+        agent_type: "Explore".into(),
+        description: "scan".into(),
+        status,
+        color: None,
+        team_name: None,
+        started_at_ms: Some(0),
+        last_tool_name: None,
+        tool_count: 0,
+        total_tokens: 0,
+        is_backgrounded: false,
+        recent_activities: Vec::new(),
+        final_message: None,
+        completed_at_ms: None,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        cost_usd: 0.0,
+    }
+}
+
 // ── Frame-animation gating (`AppState::ui_animation`) ──
 
 #[test]
@@ -574,6 +601,35 @@ fn test_ui_animation_idle_while_modal_covers_running_turn() {
     let mut state = AppState::new();
     state.ui.ephemeral.start_turn("Thinking", Instant::now());
     state.ui.show_modal(ModalState::Help);
+    assert_eq!(state.ui_animation(), UiAnimation::Idle);
+}
+
+/// A subagent running *outside* an active foreground turn (swarm teammate,
+/// `run_in_background`, the inter-turn gap) carries a live elapsed clock in
+/// the Agents panel, so the spinner cadence must stay armed — otherwise the
+/// frame scheduler sleeps and the clock freezes until the next event, then
+/// jumps. Regression for the "整个UI看起来没有刷新" freeze.
+#[test]
+fn test_ui_animation_spinner_while_subagent_runs_without_turn() {
+    let mut state = AppState::new();
+    assert!(!state.ui.ephemeral.turn_active());
+    state
+        .session
+        .subagents
+        .push(running_subagent(SubagentStatus::Running));
+    assert_eq!(state.ui_animation(), UiAnimation::SpinnerOnly);
+}
+
+/// Once every subagent has finished, the panel rows freeze at their terminal
+/// elapsed and no longer need a live clock — the animation must idle so the
+/// scheduler can sleep.
+#[test]
+fn test_ui_animation_idle_when_subagents_all_finished() {
+    let mut state = AppState::new();
+    state
+        .session
+        .subagents
+        .push(running_subagent(SubagentStatus::Completed));
     assert_eq!(state.ui_animation(), UiAnimation::Idle);
 }
 

@@ -346,6 +346,69 @@ fn test_s_is_not_consumed_by_non_permission_confirmation_prompts() {
     );
 }
 
+fn background_tasks_state() -> AppState {
+    let mut state = AppState::new();
+    state
+        .ui
+        .show_modal(crate::state::ModalState::BackgroundTasks(
+            crate::state::BackgroundTasksState::default(),
+        ));
+    state
+}
+
+#[test]
+fn test_background_tasks_uses_dedicated_context() {
+    let state = background_tasks_state();
+    assert_eq!(active_context(&state), KeybindingContext::BackgroundTasks);
+}
+
+#[test]
+fn test_background_tasks_nav_keys_reach_the_intercept() {
+    // Regression: the dialog routed through the generic Confirmation map, which
+    // emits Surface{Prev,Next,Confirm} and has no x/← arms — but
+    // `update::background_tasks::intercept` consumes Cursor*/SubmitInput/
+    // InsertChar('x'). So ↑/↓/Enter/x/← were all dead and only Esc closed.
+    let state = background_tasks_state();
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Up)),
+        Some(TuiCommand::CursorUp)
+    ));
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Down)),
+        Some(TuiCommand::CursorDown)
+    ));
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Enter)),
+        Some(TuiCommand::SubmitInput)
+    ));
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Left)),
+        Some(TuiCommand::CursorLeft)
+    ));
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Esc)),
+        Some(TuiCommand::Cancel)
+    ));
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Char('x'))),
+        Some(TuiCommand::InsertChar('x'))
+    ));
+    // Vim-style nav also works.
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Char('k'))),
+        Some(TuiCommand::CursorUp)
+    ));
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Char('j'))),
+        Some(TuiCommand::CursorDown)
+    ));
+    // Reserved exits still win over the dialog map.
+    assert!(matches!(
+        map_key(&state, ctrl(KeyCode::Char('c'))),
+        Some(TuiCommand::Interrupt)
+    ));
+}
+
 #[test]
 fn test_model_picker_context() {
     let state = model_picker_state();

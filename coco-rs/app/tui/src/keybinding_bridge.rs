@@ -52,6 +52,13 @@ pub enum KeybindingContext {
     /// chars become `InsertChar` and arrows `Cursor*` so the rule field is
     /// editable, rather than being hijacked as y/n/a confirmation actions.
     PermissionPrefixEdit,
+    /// Background-tasks dialog (footer "N agents" pill → full-screen list +
+    /// per-task detail). Dedicated context because the generic
+    /// [`Self::Confirmation`] map emits `Surface{Prev,Next,Confirm}` and has no
+    /// `x`/`←` arms, but `update::background_tasks::intercept` consumes
+    /// `Cursor{Up,Down,Left}` / `SubmitInput` / `InsertChar('x')` — so routing
+    /// it through confirmation left ↑/↓/Enter/x/← all dead (only Esc closed).
+    BackgroundTasks,
     /// Default chat input context.
     Chat,
 }
@@ -100,6 +107,10 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
             // `/permissions` editor — dedicated context for text input +
             // distinct nav (see the enum-variant doc).
             ModalState::PermissionsEditor(_) => KeybindingContext::PermissionsEditor,
+
+            // Background-tasks list/detail — dedicated nav context so ↑/↓/Enter/
+            // x/← reach the dialog's intercept (see the enum-variant doc).
+            ModalState::BackgroundTasks(_) => KeybindingContext::BackgroundTasks,
 
             // All others are confirmation/approval surfaces
             _ => KeybindingContext::Confirmation,
@@ -323,6 +334,7 @@ fn resolve_key(
         }
         KeybindingContext::PermissionsEditor => crate::modal_pane::permissions_editor::map_key(key),
         KeybindingContext::PermissionPrefixEdit => permission_prefix_edit_map_key(key),
+        KeybindingContext::BackgroundTasks => background_tasks_map_key(key),
         KeybindingContext::Chat => map_global_key(state, key).or_else(|| map_input_key(state, key)),
     };
     let source = if cmd.is_some() { "cascade" } else { "unmapped" };
@@ -350,6 +362,23 @@ fn permission_prefix_edit_map_key(key: KeyEvent) -> Option<TuiCommand> {
         KeyCode::Char('e') if ctrl => Some(TuiCommand::CursorEnd),
         KeyCode::Char('w') if ctrl => Some(TuiCommand::DeleteWordBackward),
         KeyCode::Char(c) if !ctrl && !alt => Some(TuiCommand::InsertChar(c)),
+        _ => None,
+    }
+}
+
+/// Keys for the background-tasks dialog. Emits exactly the commands
+/// `update::background_tasks::intercept` consumes: ↑/↓ (k/j) move the list
+/// cursor, Enter drills into / closes the focused task, ← steps back from the
+/// detail view (or closes the list), Esc closes, and `x` stops the focused
+/// task. Plain chars otherwise fall through (the dialog has no text input).
+fn background_tasks_map_key(key: KeyEvent) -> Option<TuiCommand> {
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k' | 'K') => Some(TuiCommand::CursorUp),
+        KeyCode::Down | KeyCode::Char('j' | 'J') => Some(TuiCommand::CursorDown),
+        KeyCode::Enter => Some(TuiCommand::SubmitInput),
+        KeyCode::Left => Some(TuiCommand::CursorLeft),
+        KeyCode::Esc => Some(TuiCommand::Cancel),
+        KeyCode::Char('x' | 'X') => Some(TuiCommand::InsertChar('x')),
         _ => None,
     }
 }
