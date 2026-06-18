@@ -189,6 +189,23 @@ pub async fn build_live_server_with_options(
     let cwd = cwd_dir.path().to_path_buf();
     let sessions_dir = common::tmpdir::make("coco-tests-sdk-sessions-")?;
 
+    // Pin `config_home()` at the sessions tempdir so the transcript
+    // *writer* and the resume *reader* share one base. The SessionRuntime
+    // persists transcripts under `project_paths(cwd)` =
+    // `<config_home>/projects/<slug>/<id>.jsonl` (config_home is not
+    // injectable — see app/cli/src/paths.rs), while `SessionManager`
+    // below reads from `sessions_dir`. Without this they diverge (real
+    // `~/.coco` vs tempdir) and `session/resume` fails with
+    // `transcript not found`. This also makes every sdk_server live test
+    // hermetic from the developer's real `~/.coco`.
+    //
+    // SAFETY: nextest isolates each test in its own process, so this
+    // process-global set is not observed by other tests; the
+    // `_sessions_dir` TempDir on `LiveSdkServer` keeps the dir alive for
+    // the whole test, and the process exits before the value matters
+    // again.
+    unsafe { std::env::set_var("COCO_CONFIG_DIR", sessions_dir.path()) };
+
     let runtime_config = headless::build_runtime_config_for_cli(&cli, &cwd)?;
     let main_model = headless::resolve_main_model(&runtime_config);
     let model_id = main_model.model_id.clone();
@@ -207,6 +224,10 @@ pub async fn build_live_server_with_options(
     registry.register(Arc::new(coco_tools::WriteTool));
     registry.register(Arc::new(coco_tools::EditTool));
     registry.register(Arc::new(coco_tools::GlobTool));
+    // Statically-typed schema (required `skill` field), safe for
+    // DeepSeek. Required for the `skill_listing` reminder, which is
+    // gated behind `reminder_skill_tool_loaded` (engine_turn_reminders.rs).
+    registry.register(Arc::new(coco_tools::SkillTool));
     let tools = Arc::new(registry);
 
     let system_prompt = headless::build_system_prompt_for_model(
