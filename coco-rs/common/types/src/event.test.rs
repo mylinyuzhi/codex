@@ -539,6 +539,9 @@ fn task_progress_params_description_and_usage_required() {
         description: "working".into(),
         usage: TaskUsage {
             total_tokens: 1000,
+            input_tokens: 800,
+            output_tokens: 200,
+            cache_read_tokens: 0,
             tool_uses: 5,
             duration_ms: 12_000,
             cost_usd: 0.0,

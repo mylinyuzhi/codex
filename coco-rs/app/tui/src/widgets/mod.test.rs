@@ -714,6 +714,9 @@ fn test_snapshot_subagent_panel_populated() {
             recent_activities: Vec::new(),
             final_message: None,
             completed_at_ms: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
             cost_usd: 0.0,
         },
         SubagentInstance {
@@ -735,6 +738,9 @@ fn test_snapshot_subagent_panel_populated() {
             recent_activities: Vec::new(),
             final_message: None,
             completed_at_ms: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
             cost_usd: 0.0,
         },
         SubagentInstance {
@@ -753,6 +759,9 @@ fn test_snapshot_subagent_panel_populated() {
             recent_activities: Vec::new(),
             final_message: None,
             completed_at_ms: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
             cost_usd: 0.0,
         },
     ];

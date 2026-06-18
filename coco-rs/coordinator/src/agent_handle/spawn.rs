@@ -646,6 +646,9 @@ fn spawn_task_event_drain(
                             .saturating_add(usage.output_tokens.total);
                         if total > tracker.total_tokens {
                             tracker.total_tokens = total;
+                            tracker.input_tokens = usage.input_tokens.total;
+                            tracker.output_tokens = usage.output_tokens.total;
+                            tracker.cache_read_tokens = usage.input_tokens.cache_read;
                             registry.set_progress(&task_id, tracker.clone()).await;
                         }
                     }
@@ -1696,6 +1699,12 @@ impl SwarmAgentHandle {
                 .ok()
                 .map(|qr| qr.cost_usd)
                 .unwrap_or(0.0);
+            // Full token breakdown (incl cache) for the completion payload.
+            let token_usage = query_result
+                .as_ref()
+                .ok()
+                .map(|qr| qr.usage)
+                .unwrap_or_default();
             let response = match query_result {
                 Ok(qr) => {
                     tracing::info!(
@@ -1781,7 +1790,7 @@ impl SwarmAgentHandle {
                             let payload = coco_tool_runtime::AgentCompletionPayload {
                                 result: response.result.clone(),
                                 usage: Some(coco_tool_runtime::AgentUsage {
-                                    total_tokens: response.total_tokens,
+                                    usage: token_usage,
                                     tool_uses: response.total_tool_use_count as i32,
                                     duration_ms,
                                     cost_usd,
@@ -2165,7 +2174,7 @@ impl SwarmAgentHandle {
                     .await
                     .or_else(|| last_assistant_text(&qr.messages));
                     let usage = Some(coco_tool_runtime::AgentUsage {
-                        total_tokens: qr.input_tokens + qr.output_tokens,
+                        usage: qr.usage,
                         tool_uses: qr.tool_use_count as i32,
                         duration_ms,
                         cost_usd: qr.cost_usd,

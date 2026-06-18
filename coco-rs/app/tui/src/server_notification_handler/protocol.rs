@@ -378,6 +378,9 @@ pub(super) fn handle(
                 // `Subagents · N tok · $X` aggregate line).
                 if let Some(usage) = &p.usage {
                     agent.total_tokens = agent.total_tokens.max(usage.total_tokens);
+                    agent.input_tokens = agent.input_tokens.max(usage.input_tokens);
+                    agent.output_tokens = agent.output_tokens.max(usage.output_tokens);
+                    agent.cache_read_tokens = agent.cache_read_tokens.max(usage.cache_read_tokens);
                     if usage.cost_usd > 0.0 {
                         agent.cost_usd = usage.cost_usd;
                     }
@@ -443,6 +446,9 @@ pub(super) fn handle(
                 }
                 agent.tool_count = agent.tool_count.max(p.usage.tool_uses);
                 agent.total_tokens = agent.total_tokens.max(p.usage.total_tokens);
+                agent.input_tokens = agent.input_tokens.max(p.usage.input_tokens);
+                agent.output_tokens = agent.output_tokens.max(p.usage.output_tokens);
+                agent.cache_read_tokens = agent.cache_read_tokens.max(p.usage.cache_read_tokens);
                 // Replace the `local_agent` wire fallback (all `TaskStarted`
                 // knows) with the real declared type once it arrives on the
                 // first progress.
@@ -1144,6 +1150,9 @@ fn ensure_subagent_row(state: &mut AppState, kind: SubagentKind, p: &TaskStarted
         final_message: None,
         completed_at_ms: None,
         cost_usd: 0.0,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 0,
     });
 }
 

@@ -392,6 +392,13 @@ pub struct AgentQueryResult {
     pub output_tokens: i64,
     /// Number of tool invocations.
     pub tool_use_count: i64,
+    /// Full token breakdown (input/output with cache buckets) straight
+    /// from the engine's `total_usage`. Reused rather than re-flattened
+    /// so cache + every dimension is available downstream. The scalar
+    /// `input_tokens`/`output_tokens` above remain the `.total` mirrors
+    /// existing callers read.
+    #[serde(default)]
+    pub usage: coco_types::TokenUsage,
     /// Real USD cost of this query, summed across models from the
     /// engine's `CostTracker`. `0.0` when pricing is unavailable.
     #[serde(default)]

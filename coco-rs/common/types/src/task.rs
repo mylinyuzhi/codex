@@ -158,6 +158,10 @@ pub struct TaskProgress {
     pub output_tokens: i64,
     #[serde(default)]
     pub total_tokens: i64,
+    /// Input tokens served from the prompt cache (the `cache hit`
+    /// dimension). Mirrors `TokenUsage.input_tokens.cache_read`.
+    #[serde(default)]
+    pub cache_read_tokens: i64,
     /// Real cost in micro-USD (USD × 1_000_000), stamped onto the
     /// progress slot at terminal transition so `emit_task_completed`
     /// can forward it to the TUI. Integer to keep `TaskProgress: Eq`

@@ -233,7 +233,7 @@ impl TaskManager {
     pub async fn record_terminal_usage(
         &self,
         id: &str,
-        total_tokens: i64,
+        usage: coco_types::TokenUsage,
         tool_uses: i32,
         cost_usd: f64,
     ) {
@@ -242,8 +242,14 @@ impl TaskManager {
         let Some(slot) = row.extras.progress_slot_mut() else {
             return;
         };
+        let total = usage.input_tokens.total + usage.output_tokens.total;
         let progress = slot.get_or_insert_with(TaskProgress::default);
-        progress.total_tokens = progress.total_tokens.max(total_tokens);
+        progress.total_tokens = progress.total_tokens.max(total);
+        progress.input_tokens = progress.input_tokens.max(usage.input_tokens.total);
+        progress.output_tokens = progress.output_tokens.max(usage.output_tokens.total);
+        progress.cache_read_tokens = progress
+            .cache_read_tokens
+            .max(usage.input_tokens.cache_read);
         progress.tool_use_count = progress.tool_use_count.max(tool_uses);
         progress.cost_micro_usd = (cost_usd * 1_000_000.0) as i64;
     }
@@ -279,6 +285,9 @@ impl TaskManager {
             description: state.description,
             usage: TaskUsage {
                 total_tokens: progress.total_tokens,
+                input_tokens: progress.input_tokens,
+                output_tokens: progress.output_tokens,
+                cache_read_tokens: progress.cache_read_tokens,
                 tool_uses: progress.tool_use_count,
                 duration_ms,
                 cost_usd: progress.cost_micro_usd as f64 / 1_000_000.0,
@@ -901,6 +910,9 @@ impl TaskManager {
             description: state.description.clone(),
             usage: TaskUsage {
                 total_tokens: 0,
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_read_tokens: 0,
                 tool_uses: 0,
                 duration_ms,
                 cost_usd: 0.0,
@@ -932,6 +944,9 @@ impl TaskManager {
         let progress = state.progress();
         let usage = TaskUsage {
             total_tokens: progress.map(|p| p.total_tokens).unwrap_or(0),
+            input_tokens: progress.map(|p| p.input_tokens).unwrap_or(0),
+            output_tokens: progress.map(|p| p.output_tokens).unwrap_or(0),
+            cache_read_tokens: progress.map(|p| p.cache_read_tokens).unwrap_or(0),
             tool_uses: progress.map(|p| p.tool_use_count).unwrap_or(0),
             duration_ms,
             cost_usd: progress

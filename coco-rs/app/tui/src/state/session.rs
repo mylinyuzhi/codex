@@ -781,6 +781,11 @@ pub struct SubagentInstance {
     /// `TaskProgress.usage.total_tokens` — monotonically maxed for the
     /// same reason as [`Self::tool_count`]. Zero means "not yet reported".
     pub total_tokens: i64,
+    /// Input / output split + cache-read hits (the `↑in ↓out` / cache-%
+    /// the panel renders). Mirrored from `TaskUsage`; `0` until reported.
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
     /// UI-only flag for the foreground→background transition (Ctrl+B).
     /// Not produced by any wire event — the optimistic flip lives in
     /// `update::handle_command(TuiCommand::BackgroundAllTasks)`.

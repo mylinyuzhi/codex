@@ -1403,6 +1403,15 @@ pub struct TaskProgressParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskUsage {
     pub total_tokens: i64,
+    /// Input / output split + cache-read (the `↑in ↓out` / cache-hit
+    /// dimensions the panel and transcript summary show). `#[serde(default)]`
+    /// for back-compat with payloads that only carried `total_tokens`.
+    #[serde(default)]
+    pub input_tokens: i64,
+    #[serde(default)]
+    pub output_tokens: i64,
+    #[serde(default)]
+    pub cache_read_tokens: i64,
     pub tool_uses: i32,
     pub duration_ms: i64,
     /// Real USD cost for completed subagent runs. `#[serde(default)]`

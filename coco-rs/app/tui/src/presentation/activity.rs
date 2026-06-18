@@ -330,25 +330,12 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
         coco_types::ExpandedView::Teammates
     );
     let now = state.clock.now_ms();
-    // Aggregate token + cost over the *live* agents shown in the panel —
-    // the dedicated subagent counter for the current stage. Completed
-    // agents have dropped out (their totals live in the transcript), so
-    // this reflects what's on screen, not a running cross-batch sum.
-    let total_tokens: i64 = state
-        .session
-        .subagents
-        .iter()
-        .filter(|a| is_live_agent(a))
-        .map(|a| a.total_tokens)
-        .sum();
-    let total_cost: f64 = state
-        .session
-        .subagents
-        .iter()
-        .filter(|a| is_live_agent(a))
-        .map(|a| a.cost_usd)
-        .sum();
-    let summary = subagent_summary_text(total_tokens, total_cost);
+    // Aggregate counters over the *live* agents shown in the panel — the
+    // dedicated subagent counter for the current stage. Completed agents
+    // have dropped out (their totals live in the transcript), so this
+    // reflects what's on screen, not a running cross-batch sum.
+    let agg = SubagentAggregate::of(state.session.subagents.iter().filter(|a| is_live_agent(a)));
+    let summary = agg.summary_text();
 
     if tree_mode && !state.session.subagents.is_empty() {
         let mut leader = vec![
@@ -457,7 +444,20 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
             };
             stats.push(format_short_elapsed((end_ms - started_ms).max(0)));
         }
-        if agent.total_tokens > 0 {
+        // Split token counter: `↑in ↓out` (+ cache-hit %) once the
+        // in/out breakdown has arrived; fall back to the combined `↕total`
+        // for the brief window before the first usage report.
+        if agent.input_tokens > 0 || agent.output_tokens > 0 {
+            stats.push(format!(
+                "↑{} ↓{}",
+                format_short_tokens(agent.input_tokens),
+                format_short_tokens(agent.output_tokens)
+            ));
+            if agent.input_tokens > 0 && agent.cache_read_tokens > 0 {
+                let pct = (agent.cache_read_tokens * 100 / agent.input_tokens).clamp(0, 100);
+                stats.push(format!("cache {pct}%"));
+            }
+        } else if agent.total_tokens > 0 {
             stats.push(format!("↕{}", format_short_tokens(agent.total_tokens)));
         }
         let tail = match agent.status {
@@ -520,21 +520,66 @@ fn is_live_agent(agent: &crate::state::SubagentInstance) -> bool {
         || matches!(agent.status, SubagentStatus::Running)
 }
 
-/// `Subagents · 128k tok · $0.42` — the aggregate token + cost segment
-/// shown on the panel's leader (tree mode) or header (flat mode) row.
-/// `None` when there's nothing to report yet.
-fn subagent_summary_text(total_tokens: i64, total_cost: f64) -> Option<String> {
-    if total_tokens <= 0 && total_cost <= 0.0 {
-        return None;
+/// Aggregate counters across the live subagents shown in the panel,
+/// driving the leader/header summary line.
+struct SubagentAggregate {
+    count: usize,
+    tools: i32,
+    input: i64,
+    output: i64,
+    cache_read: i64,
+    cost: f64,
+}
+
+impl SubagentAggregate {
+    fn of<'a>(agents: impl Iterator<Item = &'a crate::state::SubagentInstance>) -> Self {
+        let mut a = SubagentAggregate {
+            count: 0,
+            tools: 0,
+            input: 0,
+            output: 0,
+            cache_read: 0,
+            cost: 0.0,
+        };
+        for s in agents {
+            a.count += 1;
+            a.tools += s.tool_count;
+            a.input += s.input_tokens;
+            a.output += s.output_tokens;
+            a.cache_read += s.cache_read_tokens;
+            a.cost += s.cost_usd;
+        }
+        a
     }
-    let mut parts = vec!["Subagents".to_string()];
-    if total_tokens > 0 {
-        parts.push(format!("{} tok", format_short_tokens(total_tokens)));
+
+    /// `Subagents (3) · 99 tools · ↑128k ↓4k · cache 92% · $0.42`. Shown
+    /// from the moment any subagent is live (count > 0); the token / cache
+    /// / cost segments fill in as data arrives, so the line is present
+    /// from the start instead of waiting on the first token report.
+    fn summary_text(&self) -> Option<String> {
+        if self.count == 0 {
+            return None;
+        }
+        let mut parts = vec![format!("Subagents ({})", self.count)];
+        if self.tools > 0 {
+            parts.push(format!("{} tools", self.tools));
+        }
+        if self.input > 0 || self.output > 0 {
+            parts.push(format!(
+                "↑{} ↓{}",
+                format_short_tokens(self.input),
+                format_short_tokens(self.output)
+            ));
+            if self.input > 0 && self.cache_read > 0 {
+                let pct = (self.cache_read * 100 / self.input).clamp(0, 100);
+                parts.push(format!("cache {pct}%"));
+            }
+        }
+        if self.cost > 0.0 {
+            parts.push(format!("${:.2}", self.cost));
+        }
+        Some(parts.join(" · "))
     }
-    if total_cost > 0.0 {
-        parts.push(format!("${total_cost:.2}"));
-    }
-    Some(parts.join(" · "))
 }
 
 fn append_coordinator_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {

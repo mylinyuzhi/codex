@@ -668,6 +668,7 @@ async fn test_classifier_passes_through_when_side_query_unconfigured() {
     // is a no-op rather than a hard fail.
     let handle = create_test_handle();
     let qr = coco_tool_runtime::AgentQueryResult {
+        usage: Default::default(),
         cost_usd: 0.0,
         response_text: Some("computed answer".into()),
         messages: Vec::new(),
@@ -712,6 +713,7 @@ async fn test_classifier_skips_on_empty_transcript() {
         responses: tokio::sync::Mutex::new(Vec::new()), // would error if called
     }));
     let qr = coco_tool_runtime::AgentQueryResult {
+        usage: Default::default(),
         cost_usd: 0.0,
         response_text: Some("explored result".into()),
         messages: Vec::new(), // empty transcript
@@ -738,6 +740,7 @@ async fn test_classifier_skips_in_non_auto_mode() {
         responses: tokio::sync::Mutex::new(Vec::new()), // would error if queried
     }));
     let qr = coco_tool_runtime::AgentQueryResult {
+        usage: Default::default(),
         cost_usd: 0.0,
         response_text: Some("did the work".into()),
         messages: messages_with_transcript(),
@@ -770,6 +773,7 @@ async fn test_classifier_runs_for_read_only_agent_with_transcript() {
         ]),
     }));
     let qr = coco_tool_runtime::AgentQueryResult {
+        usage: Default::default(),
         cost_usd: 0.0,
         response_text: Some("explored result".into()),
         messages: messages_with_transcript(),
@@ -796,6 +800,7 @@ async fn test_classifier_unavailable_prepends_warning() {
         responses: tokio::sync::Mutex::new(Vec::new()), // empty → query errors
     }));
     let qr = coco_tool_runtime::AgentQueryResult {
+        usage: Default::default(),
         cost_usd: 0.0,
         response_text: Some("partial work".into()),
         messages: messages_with_transcript(),
@@ -829,6 +834,7 @@ async fn test_classifier_short_circuits_on_stage1_safe() {
         responses: tokio::sync::Mutex::new(vec!["SAFE".into()]),
     }));
     let qr = coco_tool_runtime::AgentQueryResult {
+        usage: Default::default(),
         cost_usd: 0.0,
         response_text: Some("clean output".into()),
         messages: messages_with_transcript(),
@@ -861,6 +867,7 @@ async fn test_classifier_blocks_when_verdict_is_blocked() {
         ]),
     }));
     let qr = coco_tool_runtime::AgentQueryResult {
+        usage: Default::default(),
         cost_usd: 0.0,
         response_text: Some("malicious child output".into()),
         messages: messages_with_transcript(),
@@ -963,6 +970,7 @@ async fn test_spawn_subagent_sync_with_engine_routes_to_query() {
             _config: AgentQueryConfig,
         ) -> Result<AgentQueryResult, coco_error::BoxedError> {
             Ok(AgentQueryResult {
+                usage: Default::default(),
                 cost_usd: 0.0,
                 response_text: Some("child result".into()),
                 messages: Vec::new(),
@@ -1014,6 +1022,7 @@ async fn test_spawn_subagent_sync_classifier_respects_permission_mode() {
             _config: AgentQueryConfig,
         ) -> Result<AgentQueryResult, coco_error::BoxedError> {
             Ok(AgentQueryResult {
+                usage: Default::default(),
                 cost_usd: 0.0,
                 response_text: Some("child result".into()),
                 // Non-empty transcript → `should_classify` would pass, so
@@ -1084,6 +1093,7 @@ async fn test_spawn_subagent_sync_drains_stream_events_to_task_registry() {
             .await
             .expect("event receiver active");
             Ok(AgentQueryResult {
+                usage: Default::default(),
                 cost_usd: 0.0,
                 response_text: Some("child result".into()),
                 messages: Vec::new(),
@@ -1167,6 +1177,7 @@ async fn test_drain_fills_task_activity_summary_from_tool_input() {
             .await
             .expect("event receiver active");
             Ok(AgentQueryResult {
+                usage: Default::default(),
                 cost_usd: 0.0,
                 response_text: Some("done".into()),
                 messages: Vec::new(),
@@ -1342,6 +1353,7 @@ async fn test_spawn_subagent_sync_detach_keeps_engine_running() {
         ) -> Result<AgentQueryResult, coco_error::BoxedError> {
             self.release.notified().await;
             Ok(AgentQueryResult {
+                usage: Default::default(),
                 cost_usd: 0.0,
                 response_text: Some("detached result".into()),
                 messages: Vec::new(),
@@ -1445,6 +1457,7 @@ async fn test_spawn_subagent_async() {
             _config: AgentQueryConfig,
         ) -> Result<AgentQueryResult, coco_error::BoxedError> {
             Ok(AgentQueryResult {
+                usage: Default::default(),
                 cost_usd: 0.0,
                 response_text: Some("background result".into()),
                 messages: Vec::new(),
@@ -1676,6 +1689,7 @@ async fn test_spawn_subagent_fresh_threads_definition_system_prompt() {
         ) -> Result<AgentQueryResult, coco_error::BoxedError> {
             *self.captured.lock().await = Some(config.system_prompt);
             Ok(AgentQueryResult {
+                usage: Default::default(),
                 cost_usd: 0.0,
                 response_text: Some("ok".into()),
                 messages: Vec::new(),
@@ -1742,6 +1756,7 @@ async fn test_spawn_subagent_threads_definition_allowed_tools() {
         ) -> Result<AgentQueryResult, coco_error::BoxedError> {
             *self.captured.lock().await = Some(config.allowed_tools);
             Ok(AgentQueryResult {
+                usage: Default::default(),
                 cost_usd: 0.0,
                 response_text: Some("ok".into()),
                 messages: Vec::new(),
@@ -1814,6 +1829,7 @@ async fn test_spawn_subagent_applies_universal_tool_block() {
         ) -> Result<AgentQueryResult, coco_error::BoxedError> {
             *self.denied.lock().await = Some(config.disallowed_tools);
             Ok(AgentQueryResult {
+                usage: Default::default(),
                 cost_usd: 0.0,
                 response_text: Some("ok".into()),
                 messages: Vec::new(),
@@ -2364,6 +2380,7 @@ async fn test_subagent_start_hook_injects_additional_context() {
         ) -> Result<AgentQueryResult, coco_error::BoxedError> {
             *self.captured_prompt.lock().await = Some(prompt.to_string());
             Ok(AgentQueryResult {
+                usage: Default::default(),
                 cost_usd: 0.0,
                 response_text: Some("ok".into()),
                 messages: Vec::new(),
@@ -2452,6 +2469,7 @@ async fn test_subagent_start_hook_no_context_leaves_prompt_unchanged() {
         ) -> Result<AgentQueryResult, coco_error::BoxedError> {
             *self.captured_prompt.lock().await = Some(prompt.to_string());
             Ok(AgentQueryResult {
+                usage: Default::default(),
                 cost_usd: 0.0,
                 response_text: Some("ok".into()),
                 messages: Vec::new(),
@@ -2511,6 +2529,7 @@ async fn test_spawn_subagent_resume_mode_preserves_tool_results() {
         ) -> Result<AgentQueryResult, coco_error::BoxedError> {
             *self.captured.lock().await = Some(config.fork_context_messages.clone());
             Ok(AgentQueryResult {
+                usage: Default::default(),
                 cost_usd: 0.0,
                 response_text: Some("resumed".into()),
                 messages: Vec::new(),
@@ -2588,6 +2607,7 @@ async fn test_spawn_subagent_fork_mode_wraps_directive_with_boilerplate() {
             *self.captured_system.lock().await = Some(config.system_prompt.clone());
             *self.captured_messages.lock().await = Some(config.fork_context_messages.clone());
             Ok(AgentQueryResult {
+                usage: Default::default(),
                 cost_usd: 0.0,
                 response_text: Some("done".into()),
                 messages: Vec::new(),
