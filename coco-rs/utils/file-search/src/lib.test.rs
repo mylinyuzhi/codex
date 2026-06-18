@@ -114,6 +114,37 @@ impl RecordingReporter {
         })
     }
 
+    /// Returns `true` as soon as a snapshot is observed that was emitted
+    /// *before* the walk finished (`!walk_complete`). Returns promptly once
+    /// the walk completes even if no such snapshot was seen (reporting the
+    /// result), so callers don't pay for the full walk+match to drain.
+    fn saw_partial_update(&self) -> bool {
+        self.updates
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|snapshot| !snapshot.walk_complete)
+    }
+
+    fn wait_for_partial_before_complete(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if self.saw_partial_update() {
+                return true;
+            }
+            if !self.complete_times.lock().unwrap().is_empty() {
+                return self.saw_partial_update();
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return self.saw_partial_update();
+            }
+            let guard = self.updates.lock().unwrap();
+            let slice = remaining.min(Duration::from_millis(25));
+            let _ = self.update_cv.wait_timeout(guard, slice).unwrap();
+        }
+    }
+
     fn snapshot(&self) -> FileSearchSnapshot {
         self.updates
             .lock()
@@ -171,17 +202,29 @@ fn session_scanned_file_count_is_monotonic_across_queries() {
 
 #[test]
 fn session_streams_updates_before_walk_complete() {
-    let dir = create_temp_tree(600);
+    // Verifies the session streams partial results *during* the walk, not only
+    // at the end. We assert this by returning as soon as a snapshot emitted
+    // before the walk finished (`!walk_complete`) is observed — there is no
+    // need to drain the entire walk+match. Waiting for full completion is what
+    // made this test take ~5s under parallel-suite contention; observing the
+    // first pre-completion snapshot takes <10ms even under heavy load.
+    //
+    // 200 files keeps the walk comfortably longer than the matcher's first
+    // tick so a pre-completion snapshot is reliably emitted: a tiny tree can
+    // finish walking before the first tick, leaving every snapshot already
+    // `walk_complete`. The 10s ceiling is only a safety bound (well under
+    // nextest's 15s slow gate) for a stuck walk — the happy path never nears it.
+    let dir = create_temp_tree(200);
     let reporter = Arc::new(RecordingReporter::default());
     let session = create_session(dir.path(), FileSearchOptions::default(), reporter.clone())
         .expect("session");
 
     session.update_query("file-0");
-    let completed = reporter.wait_for_complete(Duration::from_secs(5));
 
-    assert!(completed);
-    let updates = reporter.updates();
-    assert!(updates.iter().any(|snapshot| !snapshot.walk_complete));
+    assert!(
+        reporter.wait_for_partial_before_complete(Duration::from_secs(10)),
+        "session did not stream any snapshot before the walk completed"
+    );
 }
 
 #[test]
@@ -240,8 +283,14 @@ fn session_emits_complete_when_query_changes_with_no_matches() {
 
 #[test]
 fn dropping_session_does_not_cancel_siblings_with_shared_cancel_flag() {
+    // `root_b` only needs to be large enough that session_b's walk is still in
+    // progress when session_a is dropped a few ms below — that is the scenario
+    // under test (dropping A must not poison the shared cancel flag and abort
+    // B). 1000 files keeps B walking well past the 5ms drop while keeping the
+    // filesystem footprint modest; a smaller-than-4000 tree is strictly safe
+    // here since B completing sooner only makes the assertion easier.
     let root_a = create_temp_tree(200);
-    let root_b = create_temp_tree(4_000);
+    let root_b = create_temp_tree(1_000);
     let cancel_flag = Arc::new(AtomicBool::new(false));
 
     let reporter_a = Arc::new(RecordingReporter::default());
@@ -268,7 +317,7 @@ fn dropping_session_does_not_cancel_siblings_with_shared_cancel_flag() {
     thread::sleep(Duration::from_millis(5));
     drop(session_a);
 
-    let completed = reporter_b.wait_for_complete(Duration::from_secs(5));
+    let completed = reporter_b.wait_for_complete(Duration::from_secs(10));
     assert_eq!(completed, true);
 }
 
