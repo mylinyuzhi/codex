@@ -576,6 +576,11 @@ fn append_tool_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
                 ToolStatus::Streaming | ToolStatus::Queued | ToolStatus::Running
             )
         })
+        // Agent (subagent) spawns are shown as their own rows above in the
+        // Agents panel — drop them from the "Tools:" section so the same
+        // spawn isn't listed twice (and the two surfaces can't disagree on
+        // count, e.g. 1 panel row vs 3 `⏳ Agent(...)` rows).
+        .filter(|tool| tool.name != coco_types::ToolName::Agent.as_str())
         .collect();
     if tools.is_empty() {
         return;

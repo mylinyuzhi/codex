@@ -369,7 +369,13 @@ pub(crate) fn active_transcript_cell<'a>(
     // sits on a bare spinner for the whole execution (a multi-minute `Agent`
     // run looks frozen until it finishes). The committed header takes over the
     // instant the result lands; see [`is_tool_in_flight`].
-    if tool_executions.iter().any(is_tool_in_flight) {
+    // Agent spawns are excluded: their live progress shows in the Agents
+    // panel (`agent_surface`), and `in_flight_tool_lines` filters them out,
+    // so gating on them here would render an empty in-flight cell.
+    if tool_executions
+        .iter()
+        .any(|t| is_tool_in_flight(t) && t.name != coco_types::ToolName::Agent.as_str())
+    {
         return Some(ActiveTranscriptCell::InFlightTools);
     }
     None
