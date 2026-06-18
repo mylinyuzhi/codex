@@ -967,10 +967,22 @@ impl SessionState {
     /// background-tasks dialog and counted by the footer pill. Shared by the
     /// renderer and the key-intercept so selection indices stay aligned.
     pub fn running_background_tasks(&self) -> Vec<&TaskEntry> {
-        self.active_tasks
+        let mut rows: Vec<&TaskEntry> = self
+            .active_tasks
             .iter()
             .filter(|t| t.is_running_background())
-            .collect()
+            .collect();
+        // Group by kind (agents, then shells) so the dialog can render section
+        // headers. The sort is STABLE, so start order is preserved within a
+        // kind — and because the key-intercept reads selection from this same
+        // ordered list, the flat selection index stays aligned with the
+        // rendered rows.
+        rows.sort_by_key(|t| match t.kind {
+            TaskEntryKind::Agent => 0,
+            TaskEntryKind::Shell => 1,
+            TaskEntryKind::Other => 2,
+        });
+        rows
     }
 
     /// Cheap (no allocation) existence check for the layout/height pass.

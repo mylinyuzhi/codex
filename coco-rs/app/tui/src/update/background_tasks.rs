@@ -3,7 +3,7 @@
 //! parks focus there; Enter opens this dialog).
 //!
 //! The list/detail layers are rendered by
-//! `presentation::confirm::background_tasks_content`; this module owns only
+//! `presentation::picker_styled::background_tasks_lines`; this module owns only
 //! navigation: ↑/↓ select (or scroll the detail), Enter drill-in / close,
 //! `x` stop the focused task, ←/Esc back-or-close. Rows are derived live from
 //! `SessionState::running_background_tasks`, so the modal state holds just the

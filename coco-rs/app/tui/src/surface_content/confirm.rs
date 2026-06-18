@@ -3,8 +3,6 @@
 use ratatui::prelude::Color;
 
 use crate::presentation::confirm;
-use crate::state::AppState;
-use crate::state::BackgroundTasksState;
 use crate::state::BridgeState;
 use crate::state::BypassPermissionsState;
 use crate::state::CostWarningPromptState;
@@ -95,15 +93,6 @@ pub(super) fn task_detail_content(
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     confirm::task_detail_content(td, styles)
-}
-
-pub(super) fn background_tasks_content(
-    bt: &BackgroundTasksState,
-    state: &AppState,
-    now_ms: i64,
-    styles: UiStyles<'_>,
-) -> (String, String, Color) {
-    confirm::background_tasks_content(bt, state, now_ms, styles)
 }
 
 pub(super) fn plan_approval_content(
