@@ -600,7 +600,9 @@ impl QueryEngine {
                     LanguageModelTool::Function(LanguageModelFunctionTool {
                         name: f.name,
                         description: Some(f.description),
-                        input_schema: f.parameters,
+                        input_schema: coco_tool_runtime::canonicalize_model_tool_schema(
+                            &f.parameters,
+                        ),
                         input_examples: None,
                         strict: f.strict.then_some(true),
                         provider_options,

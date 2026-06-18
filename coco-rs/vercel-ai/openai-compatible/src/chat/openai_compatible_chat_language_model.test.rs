@@ -26,6 +26,7 @@ fn make_config() -> Arc<OpenAICompatibleConfig> {
         ),
         prompt_tokens_total_semantics:
             crate::provider_options::PromptTokensTotalSemantics::Inclusive,
+        provider_profile: crate::OpenAICompatibleProviderProfile::Generic,
         full_url: None,
     })
 }
@@ -107,6 +108,7 @@ fn get_args_applies_transform_body() {
         ),
         prompt_tokens_total_semantics:
             crate::provider_options::PromptTokensTotalSemantics::Inclusive,
+        provider_profile: crate::OpenAICompatibleProviderProfile::Generic,
         full_url: None,
     });
 
@@ -152,6 +154,7 @@ fn config_url_with_query_params() {
         ),
         prompt_tokens_total_semantics:
             crate::provider_options::PromptTokensTotalSemantics::Inclusive,
+        provider_profile: crate::OpenAICompatibleProviderProfile::Generic,
         full_url: None,
     };
     let url = config.url("/chat/completions");

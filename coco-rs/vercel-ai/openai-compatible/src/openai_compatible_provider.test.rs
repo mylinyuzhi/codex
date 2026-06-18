@@ -90,3 +90,23 @@ fn provider_with_custom_env_var() {
     });
     assert_eq!(provider.provider(), "groq");
 }
+
+#[test]
+fn deepseek_profile_defaults_stream_usage_on() {
+    let provider = OpenAICompatibleProvider::new(OpenAICompatibleProviderSettings {
+        name: Some("deepseek-openai".into()),
+        api_key: Some("sk-test".into()),
+        provider_profile: Some(OpenAICompatibleProviderProfile::DeepSeek),
+        ..Default::default()
+    });
+    assert!(provider.include_usage);
+}
+
+#[test]
+fn generic_profile_preserves_stream_usage_default_off() {
+    let provider = OpenAICompatibleProvider::new(OpenAICompatibleProviderSettings {
+        api_key: Some("sk-test".into()),
+        ..Default::default()
+    });
+    assert!(!provider.include_usage);
+}

@@ -13,6 +13,29 @@ fn make_input(model: &str, system_hash: u64, tools_hash: u64) -> PromptStateInpu
             ("Write".into(), 200),
             ("Bash".into(), 300),
         ]),
+        per_tool_schema_sizes: HashMap::from([
+            (
+                "Read".into(),
+                ToolSchemaSize {
+                    bytes: 1000,
+                    estimated_tokens: 250,
+                },
+            ),
+            (
+                "Write".into(),
+                ToolSchemaSize {
+                    bytes: 2000,
+                    estimated_tokens: 500,
+                },
+            ),
+            (
+                "Bash".into(),
+                ToolSchemaSize {
+                    bytes: 3000,
+                    estimated_tokens: 750,
+                },
+            ),
+        ]),
         system_char_count: 5000,
         model: model.into(),
         query_source: "repl_main_thread".into(),
@@ -227,6 +250,13 @@ fn test_tool_schema_change_detection() {
     let input2 = {
         let mut inp = make_input("claude-sonnet-4-20250514", 111, 333);
         inp.per_tool_hashes.insert("Write".into(), 999);
+        inp.per_tool_schema_sizes.insert(
+            "Write".into(),
+            ToolSchemaSize {
+                bytes: 2100,
+                estimated_tokens: 525,
+            },
+        );
         inp
     };
     detector.record_prompt_state(input2);
@@ -236,6 +266,10 @@ fn test_tool_schema_change_detection() {
     let changes = result.changes.expect("should have changes");
     assert!(changes.tool_schemas_changed);
     assert_eq!(changes.changed_tool_schemas, vec!["Write"]);
+    assert_eq!(
+        changes.changed_tool_schema_deltas,
+        vec!["Write (+100 bytes, ~+25 tokens)"]
+    );
 }
 
 #[test]
@@ -259,6 +293,7 @@ fn test_pending_changes_explain() {
         added_tools: vec![],
         removed_tools: vec![],
         changed_tool_schemas: vec![],
+        changed_tool_schema_deltas: vec![],
         added_betas: vec![],
         removed_betas: vec![],
         previous_model: "old-model".into(),

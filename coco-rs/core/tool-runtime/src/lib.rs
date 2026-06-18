@@ -138,6 +138,7 @@ pub use schedule_store::TriggerEntry;
 pub use schema::SchemaError;
 pub use schema::SchemaIssue;
 pub use schema::ToolInputSchema;
+pub use schema::canonicalize_model_tool_schema;
 pub use schema::format_schema_error;
 pub use schema::schema_omit_properties;
 pub use side_query::NoOpSideQuery;

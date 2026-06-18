@@ -22,6 +22,7 @@ use crate::openai_compatible_config::OpenAICompatibleConfig;
 use crate::openai_compatible_error::OpenAICompatibleFailedResponseHandler;
 use crate::openai_compatible_provider_settings::OpenAICompatibleProviderSettings;
 use crate::provider_options::PromptTokensTotalSemantics;
+use crate::provider_profile::OpenAICompatibleProviderProfile;
 
 /// OpenAI-compatible multi-model provider.
 ///
@@ -40,6 +41,7 @@ pub struct OpenAICompatibleProvider {
     metadata_extractor: Option<Arc<dyn crate::metadata_extractor::MetadataExtractor>>,
     error_handler: Option<Arc<dyn ResponseHandler<AISdkError>>>,
     prompt_tokens_total_semantics: PromptTokensTotalSemantics,
+    provider_profile: OpenAICompatibleProviderProfile,
     full_url: Option<bool>,
 }
 
@@ -91,18 +93,23 @@ impl OpenAICompatibleProvider {
             h
         });
 
+        let provider_profile = settings.provider_profile.unwrap_or_default();
+
         Self {
             provider_name,
             base_url,
             headers,
             query_params: settings.query_params,
             client: settings.client,
-            include_usage: settings.include_usage.unwrap_or(false),
+            include_usage: settings
+                .include_usage
+                .unwrap_or_else(|| provider_profile.default_include_usage()),
             supports_structured_outputs: settings.supports_structured_outputs.unwrap_or(false),
             transform_request_body: settings.transform_request_body,
             metadata_extractor: settings.metadata_extractor,
             error_handler: settings.error_handler,
             prompt_tokens_total_semantics: settings.prompt_tokens_total_semantics,
+            provider_profile,
             full_url: settings.full_url,
         }
     }
@@ -128,6 +135,7 @@ impl OpenAICompatibleProvider {
             supported_urls: None,
             error_handler,
             prompt_tokens_total_semantics: self.prompt_tokens_total_semantics,
+            provider_profile: self.provider_profile,
             full_url: self.full_url,
         })
     }

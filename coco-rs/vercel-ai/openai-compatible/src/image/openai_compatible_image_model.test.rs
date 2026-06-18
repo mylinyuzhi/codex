@@ -21,6 +21,7 @@ fn make_config() -> Arc<OpenAICompatibleConfig> {
         ),
         prompt_tokens_total_semantics:
             crate::provider_options::PromptTokensTotalSemantics::Inclusive,
+        provider_profile: crate::OpenAICompatibleProviderProfile::Generic,
         full_url: None,
     })
 }

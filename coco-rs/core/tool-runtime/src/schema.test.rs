@@ -115,6 +115,91 @@ fn schema_omit_properties_drops_empty_required() {
 }
 
 #[test]
+fn canonicalize_model_tool_schema_stabilizes_key_and_required_order() {
+    let a = super::canonicalize_model_tool_schema(&json!({
+        "properties": {
+            "b": {"type": "string", "description": "B"},
+            "a": {"description": "A", "type": "string"}
+        },
+        "required": ["b", "a"]
+    }));
+    let b = super::canonicalize_model_tool_schema(&json!({
+        "required": ["a", "b"],
+        "properties": {
+            "a": {"type": "string", "description": "A"},
+            "b": {"description": "B", "type": "string"}
+        }
+    }));
+    assert_eq!(a, b);
+    assert_eq!(a["required"], json!(["a", "b"]));
+    assert_eq!(a["type"], json!("object"));
+}
+
+#[test]
+fn canonicalize_model_tool_schema_empty_schema_becomes_object() {
+    assert_eq!(
+        super::canonicalize_model_tool_schema(&json!({})),
+        json!({"type": "object"})
+    );
+}
+
+#[test]
+fn canonicalize_model_tool_schema_drops_invalid_and_empty_required() {
+    let invalid = super::canonicalize_model_tool_schema(&json!({
+        "type": "object",
+        "required": true,
+        "properties": {"a": {"type": "string"}}
+    }));
+    assert!(invalid.get("required").is_none());
+
+    let empty = super::canonicalize_model_tool_schema(&json!({
+        "type": "object",
+        "required": []
+    }));
+    assert!(empty.get("required").is_none());
+}
+
+#[test]
+fn canonicalize_model_tool_schema_preserves_ordered_semantic_arrays() {
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "choice": {"enum": ["z", "a"]},
+            "union": {"oneOf": [{"const": "b"}, {"const": "a"}]},
+            "any": {"anyOf": [{"const": 2}, {"const": 1}]},
+            "all": {"allOf": [{"required": ["b", "a"]}, {"required": ["d", "c"]}]}
+        }
+    });
+    let out = super::canonicalize_model_tool_schema(&schema);
+    assert_eq!(out["properties"]["choice"]["enum"], json!(["z", "a"]));
+    assert_eq!(
+        out["properties"]["union"]["oneOf"],
+        json!([{"const": "b"}, {"const": "a"}])
+    );
+    assert_eq!(
+        out["properties"]["any"]["anyOf"],
+        json!([{"const": 2}, {"const": 1}])
+    );
+    assert_eq!(
+        out["properties"]["all"]["allOf"],
+        json!([{"required": ["a", "b"]}, {"required": ["c", "d"]}])
+    );
+}
+
+#[test]
+fn canonicalize_model_tool_schema_sorts_dependent_required() {
+    let out = super::canonicalize_model_tool_schema(&json!({
+        "type": "object",
+        "dependentRequired": {
+            "b": ["z", "a"],
+            "a": ["d", "c"]
+        }
+    }));
+    assert_eq!(out["dependentRequired"]["a"], json!(["c", "d"]));
+    assert_eq!(out["dependentRequired"]["b"], json!(["a", "z"]));
+}
+
+#[test]
 fn schema_error_classifies_invalid_arguments() {
     use coco_error::ErrorExt;
     let e = super::ToolInputSchema::from_value(json!({"type": "array"})).unwrap_err();

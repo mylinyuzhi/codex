@@ -65,6 +65,8 @@ struct PromptSnapshot {
     tool_names: Vec<String>,
     /// Per-tool schema hashes for pinpointing which tool changed.
     per_tool_hashes: HashMap<String, u64>,
+    /// Per-tool schema byte/token estimates.
+    per_tool_schema_sizes: HashMap<String, ToolSchemaSize>,
     /// Character count of the system prompt.
     system_char_count: i64,
     /// Model ID.
@@ -125,6 +127,7 @@ pub struct PendingChanges {
     pub added_tools: Vec<String>,
     pub removed_tools: Vec<String>,
     pub changed_tool_schemas: Vec<String>,
+    pub changed_tool_schema_deltas: Vec<String>,
     pub added_betas: Vec<String>,
     pub removed_betas: Vec<String>,
     pub previous_model: String,
@@ -133,6 +136,12 @@ pub struct PendingChanges {
     pub new_effort_value: String,
     pub prev_global_cache_strategy: String,
     pub new_global_cache_strategy: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ToolSchemaSize {
+    pub bytes: i64,
+    pub estimated_tokens: i64,
 }
 
 impl PendingChanges {
@@ -161,6 +170,11 @@ impl PendingChanges {
                 format!(
                     " (+{}/-{} tools)",
                     self.added_tool_count, self.removed_tool_count
+                )
+            } else if !self.changed_tool_schema_deltas.is_empty() {
+                format!(
+                    " (changed schemas: {})",
+                    self.changed_tool_schema_deltas.join(", ")
                 )
             } else {
                 " (tool prompt/schema changed, same tool set)".to_string()
@@ -297,6 +311,14 @@ fn is_excluded_model(model: &str) -> bool {
     model.contains("haiku")
 }
 
+fn signed_delta(delta: i64) -> String {
+    if delta > 0 {
+        format!("+{delta}")
+    } else {
+        delta.to_string()
+    }
+}
+
 /// Tracking key for a query source.
 ///
 /// - `compact` shares `repl_main_thread`'s key.
@@ -336,6 +358,8 @@ pub struct PromptStateInput {
     pub tool_names: Vec<String>,
     /// Per-tool schema hashes.
     pub per_tool_hashes: HashMap<String, u64>,
+    /// Per-tool schema byte/token estimates for diagnostics.
+    pub per_tool_schema_sizes: HashMap<String, ToolSchemaSize>,
     /// Character count of system prompt.
     pub system_char_count: i64,
     /// Model ID.
@@ -419,6 +443,7 @@ impl CacheBreakDetector {
                         cache_control_hash: input.cache_control_hash,
                         tool_names: input.tool_names,
                         per_tool_hashes: input.per_tool_hashes,
+                        per_tool_schema_sizes: input.per_tool_schema_sizes,
                         system_char_count: input.system_char_count,
                         model: input.model,
                         fast_mode: input.fast_mode,
@@ -495,6 +520,19 @@ impl CacheBreakDetector {
             } else {
                 Vec::new()
             };
+            let changed_tool_schema_deltas = changed_tool_schemas
+                .iter()
+                .filter_map(|name| {
+                    let prev_size = prev.per_tool_schema_sizes.get(name)?;
+                    let new_size = input.per_tool_schema_sizes.get(name)?;
+                    Some(format!(
+                        "{} ({} bytes, ~{} tokens)",
+                        name,
+                        signed_delta(new_size.bytes - prev_size.bytes),
+                        signed_delta(new_size.estimated_tokens - prev_size.estimated_tokens)
+                    ))
+                })
+                .collect();
             let prev_beta_set: HashSet<&str> = prev.betas.iter().map(String::as_str).collect();
             let new_beta_set: HashSet<&str> = input.betas.iter().map(String::as_str).collect();
             let added_betas: Vec<String> = input
@@ -531,6 +569,7 @@ impl CacheBreakDetector {
                     added_tools,
                     removed_tools,
                     changed_tool_schemas,
+                    changed_tool_schema_deltas,
                     added_betas,
                     removed_betas,
                     previous_model: prev.model.clone(),
@@ -553,6 +592,7 @@ impl CacheBreakDetector {
             snapshot.cache_control_hash = input.cache_control_hash;
             snapshot.tool_names = input.tool_names;
             snapshot.per_tool_hashes = input.per_tool_hashes;
+            snapshot.per_tool_schema_sizes = input.per_tool_schema_sizes;
             snapshot.system_char_count = input.system_char_count;
             snapshot.model = input.model;
             snapshot.fast_mode = input.fast_mode;

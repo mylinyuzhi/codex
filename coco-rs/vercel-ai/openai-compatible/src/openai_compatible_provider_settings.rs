@@ -7,6 +7,7 @@ use vercel_ai_provider_utils::ResponseHandler;
 
 use crate::metadata_extractor::MetadataExtractor;
 use crate::provider_options::PromptTokensTotalSemantics;
+use crate::provider_profile::OpenAICompatibleProviderProfile;
 
 /// Settings for creating an OpenAI-compatible provider.
 #[derive(Default)]
@@ -41,6 +42,8 @@ pub struct OpenAICompatibleProviderSettings {
     /// Whether `prompt_tokens` already includes cached tokens. Defaults
     /// to `Inclusive` (the OpenAI convention).
     pub prompt_tokens_total_semantics: PromptTokensTotalSemantics,
+    /// Provider-specific wire behavior. Defaults to generic OpenAI-compatible.
+    pub provider_profile: Option<OpenAICompatibleProviderProfile>,
     /// When `true`, `base_url` is the complete endpoint URL — no API path
     /// suffix is appended. Default (`None`): auto-detect duplicate suffixes.
     pub full_url: Option<bool>,
