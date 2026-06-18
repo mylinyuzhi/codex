@@ -331,6 +331,9 @@ impl SkillHandle for QuerySkillRuntime {
                     permission_mode: inherit.permission_mode,
                     permission_prompt_policy:
                         coco_tool_runtime::PermissionPromptPolicy::PromptAllowed,
+                    // Skill forks share the parent cwd (no worktree isolation),
+                    // so no extra read-scope dirs to inherit.
+                    inherited_read_dirs: Vec::new(),
                     max_turns: None,
                     context_window: None,
                     prompt_cache: None,

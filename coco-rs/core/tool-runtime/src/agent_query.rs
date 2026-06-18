@@ -94,6 +94,12 @@ pub struct AgentQueryConfig {
     pub permission_mode: coco_types::PermissionMode,
     /// Explicit prompt-routing policy for residual permission asks.
     pub permission_prompt_policy: PermissionPromptPolicy,
+    /// Parent session's read-scope working directories, folded into the
+    /// child's `ToolPermissionContext.additional_dirs` so an isolated-worktree
+    /// subagent can READ the parent project without a prompt (TS
+    /// `createSubagentContext` cwd + `additionalWorkingDirectories` parity).
+    #[serde(default)]
+    pub inherited_read_dirs: Vec<String>,
     /// Optional cancellation token for this agent query turn. In-process
     /// teammates use a fresh token per prompt so interrupting current
     /// work does not kill the teammate lifecycle.
@@ -323,6 +329,7 @@ impl Default for AgentQueryConfig {
             model_selection: coco_types::LlmModelSelection::InheritMain,
             permission_mode: coco_types::PermissionMode::Default,
             permission_prompt_policy: PermissionPromptPolicy::FailClosed,
+            inherited_read_dirs: Vec::new(),
             cancel: None,
             max_turns: None,
             context_window: None,
@@ -385,6 +392,17 @@ pub struct AgentQueryResult {
     pub output_tokens: i64,
     /// Number of tool invocations.
     pub tool_use_count: i64,
+    /// Full token breakdown (input/output with cache buckets) straight
+    /// from the engine's `total_usage`. Reused rather than re-flattened
+    /// so cache + every dimension is available downstream. The scalar
+    /// `input_tokens`/`output_tokens` above remain the `.total` mirrors
+    /// existing callers read.
+    #[serde(default)]
+    pub usage: coco_types::TokenUsage,
+    /// Real USD cost of this query, summed across models from the
+    /// engine's `CostTracker`. `0.0` when pricing is unavailable.
+    #[serde(default)]
+    pub cost_usd: f64,
     /// Whether the agent was cancelled.
     #[serde(default)]
     pub cancelled: bool,

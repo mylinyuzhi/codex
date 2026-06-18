@@ -9,8 +9,6 @@ use ratatui::prelude::Color;
 
 use crate::i18n::t;
 use crate::presentation::pager;
-use crate::state::AppState;
-use crate::state::BackgroundTasksState;
 use crate::state::BridgeState;
 use crate::state::BypassPermissionsState;
 use crate::state::CostWarningPromptState;
@@ -26,9 +24,6 @@ use crate::state::SandboxPermissionPromptState;
 use crate::state::TaskDetailState;
 use crate::state::TrustState;
 use crate::state::WorktreeExitState;
-use crate::state::session::TaskEntry;
-use crate::state::session::TaskEntryKind;
-use crate::state::session::TaskEntryStatus;
 use coco_tui_ui::style::UiStyles;
 
 pub(crate) fn cost_warning_content(
@@ -251,115 +246,6 @@ pub(crate) fn task_detail_content(
         ),
         styles.primary(),
     )
-}
-
-/// Background-tasks dialog: list of running shells/agents, or a single task's
-/// detail view. Rows are derived live from the session; `bt` holds only the
-/// cursor and which layer is showing.
-pub(crate) fn background_tasks_content(
-    bt: &BackgroundTasksState,
-    state: &AppState,
-    now_ms: i64,
-    styles: UiStyles<'_>,
-) -> (String, String, Color) {
-    let rows = state.session.running_background_tasks();
-    if let Some(task_id) = bt.detail.as_deref() {
-        background_task_detail(&rows, task_id, now_ms, styles)
-    } else {
-        background_task_list(&rows, bt.selected, state, styles)
-    }
-}
-
-fn background_task_list(
-    rows: &[&TaskEntry],
-    selected: usize,
-    state: &AppState,
-    styles: UiStyles<'_>,
-) -> (String, String, Color) {
-    let subtitle = crate::status_bar::background_pill_label(state)
-        .unwrap_or_else(|| t!("dialog.background_empty").to_string());
-    let mut body = format!("{subtitle}\n\n");
-    if rows.is_empty() {
-        body.push_str(&t!("dialog.background_empty"));
-    } else {
-        let selected = selected.min(rows.len() - 1);
-        for (i, task) in rows.iter().enumerate() {
-            let pointer = if i == selected { "❯ " } else { "  " };
-            let cmd = crate::presentation::layout::truncate_to_width(&task.description, 120);
-            let status = t!(task_status_key(task.status)).to_string();
-            body.push_str(&format!("{pointer}{cmd} ({status})\n"));
-        }
-    }
-    body.push('\n');
-    body.push_str(&t!("dialog.background_list_hints"));
-    (
-        t!("dialog.background_tasks_title").to_string(),
-        body,
-        styles.primary(),
-    )
-}
-
-fn background_task_detail(
-    rows: &[&TaskEntry],
-    task_id: &str,
-    now_ms: i64,
-    styles: UiStyles<'_>,
-) -> (String, String, Color) {
-    let task = rows.iter().find(|t| t.task_id == task_id);
-    let (title_key, status, runtime, command) = match task {
-        Some(t) => (
-            detail_title_key(t.kind),
-            t!(task_status_key(t.status)).to_string(),
-            format_runtime(now_ms - t.started_at_ms),
-            t.description.clone(),
-        ),
-        None => (
-            "dialog.task_details_title",
-            t!("dialog.background_status_ended").to_string(),
-            "—".to_string(),
-            "—".to_string(),
-        ),
-    };
-    let body = format!(
-        "{}\n{}\n{}\n\n{}\n{}\n\n{}",
-        t!("dialog.background_status", status = status),
-        t!("dialog.background_runtime", runtime = runtime),
-        t!("dialog.background_command", command = command),
-        t!("dialog.background_output_label"),
-        t!("dialog.background_output_empty"),
-        t!("dialog.background_detail_hints"),
-    );
-    (t!(title_key).to_string(), body, styles.primary())
-}
-
-fn detail_title_key(kind: TaskEntryKind) -> &'static str {
-    match kind {
-        TaskEntryKind::Shell => "dialog.shell_details_title",
-        TaskEntryKind::Agent => "dialog.agent_details_title",
-        TaskEntryKind::Other => "dialog.task_details_title",
-    }
-}
-
-fn task_status_key(status: TaskEntryStatus) -> &'static str {
-    match status {
-        TaskEntryStatus::Running => "task_status.running",
-        TaskEntryStatus::Completed => "task_status.completed",
-        TaskEntryStatus::Failed => "task_status.failed",
-        TaskEntryStatus::Stopped => "task_status.stopped",
-    }
-}
-
-/// "7h 19m 32s" / "19m 32s" / "32s" from an elapsed-millis count.
-fn format_runtime(ms: i64) -> String {
-    let secs = (ms / 1000).max(0);
-    let (h, m, s) = (secs / 3600, (secs % 3600) / 60, secs % 60);
-    if h > 0 {
-        format!("{h}h {m}m {s}s")
-    } else if m > 0 {
-        format!("{m}m {s}s")
-    } else {
-        format!("{s}s")
-    }
 }
 
 pub(crate) fn plan_approval_content(

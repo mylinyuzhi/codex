@@ -105,6 +105,11 @@ fn app_toggle_team_roster_opens_when_a_teammate_is_present() {
             is_backgrounded: false,
             recent_activities: Vec::new(),
             final_message: None,
+            completed_at_ms: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cost_usd: 0.0,
         });
     let cmd = dispatch_action(&KeybindingAction::AppToggleTeamRoster, &state).unwrap();
     assert!(matches!(cmd, TuiCommand::OpenTeamRoster));

@@ -224,6 +224,14 @@ pub struct AgentSpawnRequest {
     /// Working directory override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,
+    /// Parent session's read-scope working directories (the parent cwd plus
+    /// its inherited `additional_dirs`), forwarded so a subagent that runs in
+    /// an isolated worktree cwd can still READ the parent project without a
+    /// permission prompt. Mirrors TS `createSubagentContext`, where the child
+    /// inherits the parent's cwd + `additionalWorkingDirectories`. Read scope
+    /// only — writes / bash still evaluate against the worktree cwd + rules.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inherited_read_dirs: Vec<String>,
     // Note: the following fields are NOT on `AgentSpawnRequest`. They
     // were dead pass-through slots — not in the AgentTool input schema
     // and no Rust caller ever set them; the

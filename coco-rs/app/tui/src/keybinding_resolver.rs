@@ -258,6 +258,11 @@ pub fn context_stack(ctx: TuiContext) -> Vec<KbContext> {
         // No Select/Confirmation so chars/arrows aren't resolved to filter /
         // Surface* / Y-N-A before reaching the input map.
         PermissionPrefixEdit => vec![KbContext::Global],
+        // Global-only, same rationale as `PermissionsEditor`: the dialog's nav
+        // (↑/↓/Enter/x/←) comes entirely from `background_tasks_map_key`. No
+        // Select/Confirmation so arrows aren't resolved to `Surface*` before
+        // `update::background_tasks::intercept` sees them as `Cursor*`.
+        BackgroundTasks => vec![KbContext::Global],
         // Task sits between Chat and Global so `ctrl+b` (defaults.rs:200)
         // resolves while typing in the composer. TS `defaultBindings.ts:181-188`
         // makes the Task context active whenever a backgroundable task exists;

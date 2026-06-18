@@ -1,5 +1,6 @@
 use ratatui::text::Line;
 
+use super::background_tasks_lines;
 use super::copy_picker_lines;
 use super::export_lines;
 use super::global_search_lines;
@@ -239,6 +240,151 @@ fn global_search_lines_cap_results_and_states() {
         10,
     );
     assert!(joined(&searching).contains("Searching..."));
+}
+
+fn running_shell(id: &str, cmd: &str, started_at_ms: i64) -> crate::state::session::TaskEntry {
+    crate::state::session::TaskEntry {
+        task_id: id.to_string(),
+        description: cmd.to_string(),
+        status: crate::state::session::TaskEntryStatus::Running,
+        kind: crate::state::session::TaskEntryKind::Shell,
+        started_at_ms,
+    }
+}
+
+fn running_agent(id: &str, desc: &str, started_at_ms: i64) -> crate::state::session::TaskEntry {
+    crate::state::session::TaskEntry {
+        task_id: id.to_string(),
+        description: desc.to_string(),
+        status: crate::state::session::TaskEntryStatus::Running,
+        kind: crate::state::session::TaskEntryKind::Agent,
+        started_at_ms,
+    }
+}
+
+fn subagent_for(
+    agent_id: &str,
+    agent_type: &str,
+    activities: Vec<coco_types::TaskActivity>,
+) -> crate::state::SubagentInstance {
+    crate::state::SubagentInstance {
+        kind: crate::state::SubagentKind::Subagent,
+        agent_id: agent_id.to_string(),
+        agent_type: agent_type.to_string(),
+        description: String::new(),
+        status: crate::state::SubagentStatus::Running,
+        color: Some(coco_types::AgentColorName::Blue),
+        team_name: None,
+        started_at_ms: Some(0),
+        last_tool_name: None,
+        tool_count: 0,
+        total_tokens: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        is_backgrounded: false,
+        recent_activities: activities,
+        final_message: None,
+        completed_at_ms: None,
+        cost_usd: 0.0,
+    }
+}
+
+#[test]
+fn background_tasks_lines_group_sections_with_cursor_and_agent_type() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let styles = UiStyles::new(&theme);
+    let mut state = crate::state::AppState::default();
+    // Mixed start order: a shell first, then an agent. The grouped ordering
+    // must surface the agent section first (and selection index 0 → agent).
+    state.session.active_tasks = vec![
+        running_shell("s1", "cargo test", 0),
+        running_agent("a1", "map workspace crates", 0),
+    ];
+    state.session.subagents = vec![subagent_for(
+        "a1",
+        "Explore",
+        vec![coco_types::TaskActivity {
+            tool_name: "Grep".to_string(),
+            summary: Some("3 patterns".to_string()),
+        }],
+    )];
+    let bt = crate::state::BackgroundTasksState {
+        selected: 0,
+        detail: None,
+    };
+
+    let (title, lines, _) = background_tasks_lines(&bt, &state, styles, 40);
+    let j = joined(&lines);
+
+    assert_eq!(title, " Background tasks ");
+    assert!(j.contains("Agents"), "missing agents section: {j}");
+    assert!(j.contains("Shells"), "missing shells section: {j}");
+    // Index 0 is the agent (grouped first); it carries the cursor + type badge.
+    let agent_row = cursor_row(&lines, "map workspace crates");
+    assert!(agent_row.starts_with("❯ "), "{agent_row}");
+    assert!(agent_row.contains("Explore"), "{agent_row}");
+    assert!(agent_row.contains("3 patterns"), "{agent_row}");
+    // The shell row is unselected.
+    assert!(cursor_row(&lines, "cargo test").starts_with("  "));
+    assert!(j.contains("Enter to view"));
+}
+
+#[test]
+fn background_tasks_detail_shell_shows_status_runtime_command() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let styles = UiStyles::new(&theme);
+    // Pin the clock so runtime is deterministic: 1h 19m 32s after start.
+    let now_ms = (3600 + 19 * 60 + 32) * 1000;
+    let mut state = crate::state::AppState::with_clock(coco_tui_ui::clock::MockClock::arc(now_ms));
+    state.session.active_tasks = vec![running_shell("s1", "sleep 100", 0)];
+    let bt = crate::state::BackgroundTasksState {
+        selected: 0,
+        detail: Some("s1".to_string()),
+    };
+
+    let (title, lines, _) = background_tasks_lines(&bt, &state, styles, 40);
+    let j = joined(&lines);
+
+    assert_eq!(title, " Shell details ");
+    assert!(j.contains("Status:   running"), "{j}");
+    assert!(j.contains("Runtime:  1h 19m 32s"), "{j}");
+    assert!(j.contains("Command:  sleep 100"), "{j}");
+    assert!(j.contains("No output available"), "{j}");
+    assert!(j.contains("to go back"), "{j}");
+}
+
+#[test]
+fn background_tasks_detail_agent_shows_live_activity() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let styles = UiStyles::new(&theme);
+    let mut state = crate::state::AppState::default();
+    state.session.active_tasks = vec![running_agent("a1", "summarize crates", 0)];
+    state.session.subagents = vec![subagent_for(
+        "a1",
+        "Explore",
+        vec![coco_types::TaskActivity {
+            tool_name: "Read".to_string(),
+            summary: Some("CLAUDE.md".to_string()),
+        }],
+    )];
+    let bt = crate::state::BackgroundTasksState {
+        selected: 0,
+        detail: Some("a1".to_string()),
+    };
+
+    let (title, lines, _) = background_tasks_lines(&bt, &state, styles, 40);
+    let j = joined(&lines);
+
+    assert_eq!(title, " Agent details ");
+    assert!(j.contains("Recent activity"), "{j}");
+    assert!(j.contains("Read"), "{j}");
+    assert!(j.contains("CLAUDE.md"), "{j}");
+    // The agent detail replaces the shell "no output" placeholder.
+    assert!(!j.contains("No output available"), "{j}");
 }
 
 #[test]

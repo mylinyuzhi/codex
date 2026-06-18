@@ -112,7 +112,28 @@ pub(crate) enum TranscriptSourceCell<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ActiveTranscriptCell<'a> {
     Streaming(StreamingTailView<'a>),
-    BusySpinner,
+    /// One `● Tool(args) (Ns)` row per still-executing tool. Rendered from the
+    /// live `tool_executions` ledger — see [`is_tool_in_flight`].
+    InFlightTools,
+}
+
+/// A tool that is still executing — no `ToolResult` has committed for it yet.
+///
+/// Until the result pairs with the call, `committable_prefix_len`
+/// (`transcript::cells`) holds the committed `● Tool` header *out* of native
+/// scrollback, and it is not part of the active streaming tail either — so the
+/// header renders nowhere during execution. This predicate drives the inline
+/// row that fills that gap.
+///
+/// `message_uuid` is deliberately NOT consulted: the header is withheld whether
+/// or not the owning assistant message has committed. A tool leaves this set
+/// the instant its result lands — which is exactly when its committed header
+/// becomes paintable — so the inline row and the committed header never overlap.
+pub(crate) fn is_tool_in_flight(tool: &ToolExecution) -> bool {
+    matches!(
+        tool.status,
+        ToolStatus::Streaming | ToolStatus::Queued | ToolStatus::Running
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -341,15 +362,21 @@ pub(crate) fn active_transcript_cell<'a>(
             }))
         });
     }
-    // `Streaming` is deliberately excluded: a tool whose arguments are still
-    // streaming is part of the live assistant turn (covered by the streaming
-    // tail above when text is present), not the post-commit "tools pending, no
-    // live content" gap the busy spinner exists to fill.
+    // Any still-executing tool: its committed `● Tool` header is held out of
+    // scrollback by `committable_prefix_len` until the result pairs, so render
+    // the live header inline here. This is the only place a running tool shows
+    // up between the turn's text and its result — without it the transcript
+    // sits on a bare spinner for the whole execution (a multi-minute `Agent`
+    // run looks frozen until it finishes). The committed header takes over the
+    // instant the result lands; see [`is_tool_in_flight`].
+    // Agent spawns are excluded: their live progress shows in the Agents
+    // panel (`agent_surface`), and `in_flight_tool_lines` filters them out,
+    // so gating on them here would render an empty in-flight cell.
     if tool_executions
         .iter()
-        .any(|t| matches!(t.status, ToolStatus::Queued | ToolStatus::Running))
+        .any(|t| is_tool_in_flight(t) && t.name != coco_types::ToolName::Agent.as_str())
     {
-        return Some(ActiveTranscriptCell::BusySpinner);
+        return Some(ActiveTranscriptCell::InFlightTools);
     }
     None
 }

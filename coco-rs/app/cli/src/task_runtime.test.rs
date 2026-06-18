@@ -194,9 +194,19 @@ async fn mark_completed_pushes_rich_agent_notification() {
         AgentCompletionPayload {
             result: Some("done".into()),
             usage: Some(AgentUsage {
-                total_tokens: 500,
+                usage: coco_types::TokenUsage {
+                    input_tokens: coco_types::InputTokens {
+                        total: 400,
+                        ..Default::default()
+                    },
+                    output_tokens: coco_types::OutputTokens {
+                        total: 100,
+                        ..Default::default()
+                    },
+                },
                 tool_uses: 3,
                 duration_ms: 6000,
+                cost_usd: 0.0,
             }),
             worktree: Some(AgentWorktree {
                 path: "/tmp/wt".into(),

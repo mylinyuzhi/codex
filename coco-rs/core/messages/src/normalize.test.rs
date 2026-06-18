@@ -123,6 +123,19 @@ fn test_filters_tombstones() {
 }
 
 #[test]
+fn api_error_system_message_is_dropped_from_api_request() {
+    // The inline turn-failure row (`create_api_error_message`) is display-only
+    // transcript provenance — it must never re-enter the model context.
+    let msgs = vec![
+        user_msg("hello"),
+        crate::create_api_error_message("LLM stream failed: error decoding response body", None),
+        assistant_msg("hi"),
+    ];
+    let result = normalize_messages_for_api(&arc_vec(&msgs));
+    assert_eq!(result.len(), 2, "ApiError system message filtered out");
+}
+
+#[test]
 fn normalize_strips_prior_image_after_image_too_large_error() {
     let msgs = vec![
         user_with_files(),

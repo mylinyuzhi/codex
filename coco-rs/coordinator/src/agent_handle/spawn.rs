@@ -571,13 +571,20 @@ fn resolve_engine_outcome(
 fn spawn_task_event_drain(
     registry: coco_tool_runtime::AgentTaskRegistryRef,
     task_id: String,
+    agent_type: String,
     mut event_rx: tokio::sync::mpsc::Receiver<coco_types::CoreEvent>,
 ) {
     tokio::spawn(async move {
         // ProgressTracker increments on every ToolUseStarted,
         // while TextDelta is appended so TaskOutput can read mid-flight
         // output.
-        let mut tracker = coco_types::TaskProgress::default();
+        let mut tracker = coco_types::TaskProgress {
+            // Carry the real declared type (Explore / Plan / …) so the TUI
+            // can replace the `local_agent` fallback from `TaskStarted`.
+            agent_type: Some(agent_type),
+            ..Default::default()
+        };
+        tracing::debug!(task_id = %task_id, "subagent event drain started");
         // `ToolUseQueued` (carries the full input) fires before
         // `ToolUseStarted` (carries no input); stash the input-derived
         // summary keyed by call_id so the activity row can read
@@ -620,11 +627,70 @@ fn spawn_task_event_drain(
                         tool_name: name,
                         summary: pending_summaries.remove(&call_id),
                     });
+                    tracing::debug!(
+                        task_id = %task_id,
+                        tool = tracker.last_tool_name.as_deref().unwrap_or_default(),
+                        tool_use_count = tracker.tool_use_count,
+                        "subagent drain: ToolUseStarted → set_progress"
+                    );
                     registry.set_progress(&task_id, tracker.clone()).await;
+                }
+                // Per-round usage + cost roll-up so the activity panel shows
+                // live token counts AND spend while the subagent runs. The
+                // child engine emits `SessionUsageUpdated` after every model
+                // round (`agent_adapter` installs its `CostTracker`); unlike
+                // `TurnEnded` the snapshot carries engine-authoritative cost,
+                // so this is the only pre-completion cost signal. Counters are
+                // monotonic so an out-of-order snapshot can't roll them back.
+                coco_types::CoreEvent::Protocol(
+                    coco_types::ServerNotification::SessionUsageUpdated(snap),
+                ) => {
+                    let totals = &snap.totals;
+                    let total = totals.input_tokens.saturating_add(totals.output_tokens);
+                    let cost_micro = (totals.total_cost_usd * 1_000_000.0) as i64;
+                    let mut changed = false;
+                    if total > tracker.total_tokens {
+                        tracker.total_tokens = total;
+                        tracker.input_tokens = totals.input_tokens;
+                        tracker.output_tokens = totals.output_tokens;
+                        tracker.cache_read_tokens = totals.cache_read_input_tokens;
+                        changed = true;
+                    }
+                    if cost_micro > tracker.cost_micro_usd {
+                        tracker.cost_micro_usd = cost_micro;
+                        changed = true;
+                    }
+                    if changed {
+                        registry.set_progress(&task_id, tracker.clone()).await;
+                    }
+                }
+                // End-of-cycle fallback: the single `TurnEnded` still carries
+                // the final token total (no cost). Kept so token counts land
+                // even if a usage snapshot was missed; cost arrives via the
+                // completion payload.
+                coco_types::CoreEvent::Protocol(coco_types::ServerNotification::TurnEnded(p)) => {
+                    if let Some(usage) = &p.usage {
+                        let total = usage
+                            .input_tokens
+                            .total
+                            .saturating_add(usage.output_tokens.total);
+                        if total > tracker.total_tokens {
+                            tracker.total_tokens = total;
+                            tracker.input_tokens = usage.input_tokens.total;
+                            tracker.output_tokens = usage.output_tokens.total;
+                            tracker.cache_read_tokens = usage.input_tokens.cache_read;
+                            registry.set_progress(&task_id, tracker.clone()).await;
+                        }
+                    }
                 }
                 _ => {}
             }
         }
+        tracing::debug!(
+            task_id = %task_id,
+            total_tools = tracker.tool_use_count,
+            "subagent event drain ended (event channel closed)"
+        );
     });
 }
 
@@ -1191,6 +1257,10 @@ impl SwarmAgentHandle {
             } else {
                 coco_tool_runtime::PermissionPromptPolicy::PromptAllowed
             },
+            // Read-scope inheritance: forward the parent's read working dirs so
+            // an isolated-worktree subagent can read the parent project without
+            // a prompt (TS subagent cwd + additionalWorkingDirectories parity).
+            inherited_read_dirs: request.inherited_read_dirs.clone(),
             // `max_turns` precedence: constraints (memory forks tighten
             // via `AgentSpawnConstraints.max_turns`) > definition. Top-
             // level `request.max_turns` was a dead slot and is gone.
@@ -1543,7 +1613,12 @@ impl SwarmAgentHandle {
         if let Some((tid, task_cancel)) = sync_task.as_ref() {
             let (event_tx, event_rx) = tokio::sync::mpsc::channel::<coco_types::CoreEvent>(64);
             query_config.event_tx = Some(event_tx);
-            spawn_task_event_drain(task_registry.clone(), tid.clone(), event_rx);
+            spawn_task_event_drain(
+                task_registry.clone(),
+                tid.clone(),
+                agent_type_for_engine.clone(),
+                event_rx,
+            );
             // `live_transcript` is `Some` iff `request.enable_summarization`,
             // so this gates the timer on the same condition while handing it
             // the reader half of the engine's snapshot sink.
@@ -1646,6 +1721,20 @@ impl SwarmAgentHandle {
             };
 
             // ── Build AgentSpawnResponse ──────────────────────────
+            // Capture the real USD cost before the match consumes
+            // `query_result`; the bg/detach completion path below only
+            // has `response` in scope, not `qr`.
+            let cost_usd = query_result
+                .as_ref()
+                .ok()
+                .map(|qr| qr.cost_usd)
+                .unwrap_or(0.0);
+            // Full token breakdown (incl cache) for the completion payload.
+            let token_usage = query_result
+                .as_ref()
+                .ok()
+                .map(|qr| qr.usage)
+                .unwrap_or_default();
             let response = match query_result {
                 Ok(qr) => {
                     tracing::info!(
@@ -1731,9 +1820,10 @@ impl SwarmAgentHandle {
                             let payload = coco_tool_runtime::AgentCompletionPayload {
                                 result: response.result.clone(),
                                 usage: Some(coco_tool_runtime::AgentUsage {
-                                    total_tokens: response.total_tokens,
+                                    usage: token_usage,
                                     tool_uses: response.total_tool_use_count as i32,
                                     duration_ms,
+                                    cost_usd,
                                 }),
                                 worktree: response.worktree_path.clone().map(|path| {
                                     coco_tool_runtime::AgentWorktree {
@@ -1913,7 +2003,12 @@ impl SwarmAgentHandle {
         let (event_tx, event_rx) = tokio::sync::mpsc::channel::<coco_types::CoreEvent>(64);
         let mut query_config = query_config;
         query_config.event_tx = Some(event_tx);
-        spawn_task_event_drain(task_registry.clone(), task_id.clone(), event_rx);
+        spawn_task_event_drain(
+            task_registry.clone(),
+            task_id.clone(),
+            agent_type.to_string(),
+            event_rx,
+        );
 
         // Periodic AgentSummary timer: only run when the spawn requested it
         // via `enable_summarization`. Default-off keeps a saturated coordinator
@@ -2109,9 +2204,10 @@ impl SwarmAgentHandle {
                     .await
                     .or_else(|| last_assistant_text(&qr.messages));
                     let usage = Some(coco_tool_runtime::AgentUsage {
-                        total_tokens: qr.input_tokens + qr.output_tokens,
+                        usage: qr.usage,
                         tool_uses: qr.tool_use_count as i32,
                         duration_ms,
+                        cost_usd: qr.cost_usd,
                     });
                     let worktree = worktree_session_for_task.as_ref().map(|s| {
                         coco_tool_runtime::AgentWorktree {

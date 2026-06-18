@@ -8,9 +8,10 @@
 /// both counters (`reset_after_total_limit`).
 ///
 /// Lives in `coco-tool-runtime` because it is per-`ToolUseContext` runtime
-/// state (fork-isolated when `local_denial_tracking` is set; session-scoped
-/// otherwise). `coco-permissions` re-exports the type and operates on it
-/// from the auto-mode classifier path.
+/// state (subagent-isolated when `local_denial_tracking` is set — every
+/// subagent/fork gets a fresh one, TS `createSubagentContext` parity;
+/// session-scoped otherwise for the main loop). `coco-permissions` re-exports
+/// the type and operates on it from the auto-mode classifier path.
 #[derive(Debug, Default)]
 pub struct DenialTracker {
     pub consecutive_denials: i32,

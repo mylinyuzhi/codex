@@ -273,9 +273,17 @@ impl AppState {
         if self.is_streaming() {
             return UiAnimation::StreamReveal;
         }
-        let spinner_animating = (self.ui.ephemeral.turn_active() || self.session.is_compacting)
-            && self.ui.modal.is_none()
-            && !self.ui.ephemeral.turn_paused();
+        // Subagents and background tasks can outlive the foreground turn
+        // (swarm teammates, `run_in_background`, the inter-turn gap). Their
+        // panel rows carry live elapsed clocks, so the spinner cadence must
+        // stay armed while they run — gating purely on `turn_active` let the
+        // frame scheduler sleep, freezing those clocks until the next event.
+        let background_activity =
+            self.session.has_running_subagent() || self.session.has_running_background_task();
+        let spinner_animating =
+            (self.ui.ephemeral.turn_active() || self.session.is_compacting || background_activity)
+                && self.ui.modal.is_none()
+                && !self.ui.ephemeral.turn_paused();
         if spinner_animating {
             UiAnimation::SpinnerOnly
         } else {

@@ -129,6 +129,29 @@ async fn test_factory_preserves_structured_turn_abort_reason() {
 }
 
 #[tokio::test]
+async fn local_denial_tracking_isolated_per_subagent_shared_for_main_session() {
+    // TS `createSubagentContext` parity: every subagent gets its own
+    // `DenialTracker` so one child's denial streak can't trip the shared
+    // auto-mode circuit breaker for the parent + siblings. The main session
+    // (`agent_id == None`) keeps `None` and uses the engine-level tracker.
+    let main_ctx = factory(test_config()).build(Default::default()).await;
+    assert!(
+        main_ctx.local_denial_tracking.is_none(),
+        "main session uses the shared engine-level tracker",
+    );
+
+    let subagent_config = QueryEngineConfig {
+        agent_id: Some("agent-1".into()),
+        ..test_config()
+    };
+    let subagent_ctx = factory(subagent_config).build(Default::default()).await;
+    assert!(
+        subagent_ctx.local_denial_tracking.is_some(),
+        "subagent gets an isolated fresh DenialTracker",
+    );
+}
+
+#[tokio::test]
 async fn test_factory_main_loop_model_defaults_to_config_model_id() {
     // When no current_model_id override is supplied, main_loop_model
     // falls back to the static config.model_id. This path is used by

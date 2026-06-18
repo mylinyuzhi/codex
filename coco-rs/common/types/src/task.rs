@@ -158,6 +158,24 @@ pub struct TaskProgress {
     pub output_tokens: i64,
     #[serde(default)]
     pub total_tokens: i64,
+    /// Input tokens served from the prompt cache (the `cache hit`
+    /// dimension). Mirrors `TokenUsage.input_tokens.cache_read`.
+    #[serde(default)]
+    pub cache_read_tokens: i64,
+    /// Real cost in micro-USD (USD × 1_000_000), stamped onto the
+    /// progress slot at terminal transition so `emit_task_completed`
+    /// can forward it to the TUI. Integer to keep `TaskProgress: Eq`
+    /// (and the `TaskStateBase` chain that embeds it). `0` mid-flight —
+    /// cost is only known once the subagent's engine returns its
+    /// `CostTracker`.
+    #[serde(default)]
+    pub cost_micro_usd: i64,
+    /// Declared subagent type (`Explore` / `Plan` / …). Carried on
+    /// progress so the TUI can replace the `local_agent` wire fallback
+    /// (which is all `TaskStarted` knows) with the real type once the
+    /// first progress arrives. `None` for non-subagent tasks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_type: Option<String>,
     #[serde(default)]
     pub tool_use_count: i32,
     #[serde(default)]

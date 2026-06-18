@@ -346,6 +346,89 @@ fn test_s_is_not_consumed_by_non_permission_confirmation_prompts() {
     );
 }
 
+fn background_tasks_state() -> AppState {
+    let mut state = AppState::new();
+    state
+        .ui
+        .show_modal(crate::state::ModalState::BackgroundTasks(
+            crate::state::BackgroundTasksState::default(),
+        ));
+    state
+}
+
+#[test]
+fn test_shift_up_maps_to_agent_switcher_nav() {
+    let state = AppState::new();
+    let key = KeyEvent {
+        code: KeyCode::Up,
+        modifiers: KeyModifiers::SHIFT,
+        kind: KeyEventKind::Press,
+        state: KeyEventState::NONE,
+    };
+    assert!(matches!(
+        map_key(&state, key),
+        Some(TuiCommand::AgentSwitcherNav(-1))
+    ));
+    // Plain Up stays history-recall, not the switcher.
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Up)),
+        Some(TuiCommand::CursorUp)
+    ));
+}
+
+#[test]
+fn test_background_tasks_uses_dedicated_context() {
+    let state = background_tasks_state();
+    assert_eq!(active_context(&state), KeybindingContext::BackgroundTasks);
+}
+
+#[test]
+fn test_background_tasks_nav_keys_reach_the_intercept() {
+    // Regression: the dialog routed through the generic Confirmation map, which
+    // emits Surface{Prev,Next,Confirm} and has no x/← arms — but
+    // `update::background_tasks::intercept` consumes Cursor*/SubmitInput/
+    // InsertChar('x'). So ↑/↓/Enter/x/← were all dead and only Esc closed.
+    let state = background_tasks_state();
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Up)),
+        Some(TuiCommand::CursorUp)
+    ));
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Down)),
+        Some(TuiCommand::CursorDown)
+    ));
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Enter)),
+        Some(TuiCommand::SubmitInput)
+    ));
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Left)),
+        Some(TuiCommand::CursorLeft)
+    ));
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Esc)),
+        Some(TuiCommand::Cancel)
+    ));
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Char('x'))),
+        Some(TuiCommand::InsertChar('x'))
+    ));
+    // Vim-style nav also works.
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Char('k'))),
+        Some(TuiCommand::CursorUp)
+    ));
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Char('j'))),
+        Some(TuiCommand::CursorDown)
+    ));
+    // Reserved exits still win over the dialog map.
+    assert!(matches!(
+        map_key(&state, ctrl(KeyCode::Char('c'))),
+        Some(TuiCommand::Interrupt)
+    ));
+}
+
 #[test]
 fn test_model_picker_context() {
     let state = model_picker_state();
@@ -471,6 +554,11 @@ fn test_ctrl_shift_t_opens_team_roster_when_teammate_present() {
             is_backgrounded: false,
             recent_activities: Vec::new(),
             final_message: None,
+            completed_at_ms: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cost_usd: 0.0,
         });
     let cmd = map_key(&state, ctrl_shift(KeyCode::Char('t')));
     assert!(

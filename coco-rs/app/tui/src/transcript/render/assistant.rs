@@ -350,9 +350,26 @@ pub(super) fn try_render(
             // (`🔧`) is width-2 and its cell width is font-dependent, so it
             // drifts the whole row out of the gutter.
             let tone = tool_tone_color(tool_name_tone(tool_name), w.styles);
+            // Agent (subagent) headers lead with the subagent TYPE
+            // (Explore / Plan / custom) rather than the generic "Agent" — the
+            // type is the meaningful operation, matching how other tool
+            // headers name what they do. Pulled from the call's
+            // `subagent_type` input; falls back to the tool name when absent
+            // (older transcripts, or any non-Agent tool).
+            let header_name = if tool_name.as_str() == coco_types::ToolName::Agent.as_str() {
+                crate::transcript::derive::extract_tool_call_input(&cell.source, call_id)
+                    .as_ref()
+                    .and_then(|input| input.get("subagent_type"))
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|ty| !ty.is_empty())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| tool_name.clone())
+            } else {
+                tool_name.clone()
+            };
             let mut spans = vec![
                 Span::raw("● ").fg(tone),
-                Span::raw(tool_name.clone()).fg(tone).bold(),
+                Span::raw(header_name).fg(tone).bold(),
             ];
             if !preview_spans.is_empty() {
                 spans.push(Span::raw("(").fg(w.styles.text()));

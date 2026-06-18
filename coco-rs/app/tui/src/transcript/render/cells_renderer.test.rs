@@ -1,6 +1,7 @@
 use super::TRANSCRIPT_LINE_CHAR_CAP;
 use super::attachment_summary_text;
 use super::compact_file_reference_chip_path;
+use super::in_flight_tool_lines;
 use super::mention_summary_lines;
 use super::nested_memory_chip_path;
 use super::single_line_capped;
@@ -103,6 +104,47 @@ fn mention_summary_lines_render_compact_rows() {
         .collect();
     assert!(text[0].contains("Read foo.rs (3 lines)"), "{text:?}");
     assert!(text[1].contains("Listed directory dir/"), "{text:?}");
+}
+
+#[test]
+fn in_flight_tool_lines_render_header_and_skip_committed() {
+    use crate::state::session::ToolExecution;
+    use crate::state::session::ToolStatus;
+
+    let theme = coco_tui_ui::theme::Theme::default();
+    let styles = coco_tui_ui::style::UiStyles::new(&theme);
+
+    let mk = |call_id: &str, preview: Option<&str>, status| ToolExecution {
+        call_id: call_id.to_string(),
+        name: "Read".to_string(),
+        status,
+        started_at: std::time::Instant::now(),
+        completed_at: None,
+        description: None,
+        input_preview: preview.map(str::to_string),
+        streaming_input: None,
+        // message_uuid is irrelevant to the filter — the committed header is
+        // held back until the result pairs regardless, so set it to prove that.
+        message_uuid: Some(uuid::Uuid::new_v4()),
+    };
+
+    let tools = vec![
+        // Still executing → its header is withheld, so render the inline row.
+        mk("a", Some("CLAUDE.md"), ToolStatus::Running),
+        // Finished → its committed `● Read` header now pairs + paints, so the
+        // inline row must NOT duplicate it.
+        mk("b", Some("other.rs"), ToolStatus::Completed),
+    ];
+
+    let lines = in_flight_tool_lines(&tools, styles);
+    assert_eq!(lines.len(), 1, "only the still-running tool renders a row");
+    let row: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+    assert!(row.contains("● Read"), "{row:?}");
+    assert!(row.contains("CLAUDE.md"), "{row:?}");
+    assert!(
+        !row.contains("other.rs"),
+        "completed tool excluded: {row:?}"
+    );
 }
 
 #[test]

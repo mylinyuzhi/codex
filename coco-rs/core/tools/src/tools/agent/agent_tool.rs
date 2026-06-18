@@ -396,6 +396,26 @@ impl Tool for AgentTool {
         };
         renderer.full_prompt(&render_opts)
     }
+    /// Mirror TS `AgentTool.isReadOnly() => true` ("delegates permission
+    /// checks to its underlying tools"). The spawn itself touches nothing —
+    /// the child subagent runs under the inherited permission mode and its
+    /// own tool calls (Read/Bash/Edit/…) are each gated there. So the gate
+    /// treats the spawn as read-only and auto-allows it instead of prompting
+    /// on every `Agent(...)` in auto/default mode. Deny rules (`Agent(<type>)`)
+    /// still apply: they are evaluated before this read-only fast path and are
+    /// also enforced in `execute`.
+    ///
+    /// `is_always_read_only` covers the DynTool bridge's partial-input
+    /// fallback (`traits.rs`: when the raw `Value` can't deserialize into
+    /// `AgentInput`, e.g. streamed/partial input, it reads this constant), so
+    /// the answer is unconditional `true` exactly like the TS flag.
+    fn is_read_only(&self, _input: &AgentInput) -> bool {
+        true
+    }
+    fn is_always_read_only(&self) -> bool {
+        true
+    }
+
     /// Multiple agent spawns issued in the same turn are independent — each
     /// runs in its own context (and optionally its own worktree) — so the
     /// executor can batch them into a single `ConcurrentSafe` partition.
@@ -942,6 +962,29 @@ impl Tool for AgentTool {
             // The coordinator now reads them directly from
             // `request.definition` (the resolved AgentDefinition).
             cwd: requested_cwd,
+            // Read-scope inheritance (TS `createSubagentContext` parity): the
+            // child runs in an isolated worktree cwd but should still READ the
+            // parent project without prompting, so forward the parent's cwd(s)
+            // + its inherited `additional_dirs` as the child's read working
+            // dirs. Writes/bash stay scoped to the worktree + rules.
+            inherited_read_dirs: {
+                let mut dirs: Vec<String> = ctx
+                    .permission_context
+                    .additional_dirs
+                    .keys()
+                    .cloned()
+                    .collect();
+                for p in [ctx.original_cwd.as_deref(), ctx.cwd_override.as_deref()]
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|p| p.to_str())
+                {
+                    if !dirs.iter().any(|d| d == p) {
+                        dirs.push(p.to_string());
+                    }
+                }
+                dirs
+            },
             // Subagent inheritance (Layers 1 + 2 + 4). Forward the
             // parent context's resolved values so the child can't see
             // tools gated off at the top level.

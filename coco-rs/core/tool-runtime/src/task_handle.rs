@@ -227,11 +227,18 @@ pub struct AgentCompletionPayload {
     pub worktree: Option<AgentWorktree>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct AgentUsage {
-    pub total_tokens: i64,
+    /// Full token breakdown (input/output + cache buckets). Reuses the
+    /// engine's `TokenUsage` rather than carrying hand-picked scalars,
+    /// so cache hits and every dimension flow through to the transcript
+    /// summary.
+    pub usage: coco_types::TokenUsage,
     pub tool_uses: i32,
     pub duration_ms: i64,
+    /// Real USD cost of the completed subagent run. `0.0` when pricing
+    /// is unavailable.
+    pub cost_usd: f64,
 }
 
 #[derive(Debug, Clone)]

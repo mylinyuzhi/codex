@@ -28,6 +28,7 @@ pub(crate) use cells_renderer::CellsRenderer;
 pub(crate) use cells_renderer::assistant_stream_lead_marker;
 pub(crate) use cells_renderer::attachment_summary_text;
 pub(crate) use cells_renderer::compact_file_reference_chip_path;
+pub(crate) use cells_renderer::in_flight_tool_lines;
 pub(crate) use cells_renderer::mention_summary_lines;
 pub(crate) use cells_renderer::nested_memory_chip_path;
 // Shared helpers the per-category renderers reach via `super::…` (they were
@@ -112,6 +113,11 @@ pub(crate) struct HistoryLineRenderOptions<'a> {
     /// `· <duration> · <tokens>` badge (live append before
     /// `TurnCompleted` arrives).
     pub(crate) reasoning_metadata: Option<&'a HashMap<uuid::Uuid, ReasoningMetadata>>,
+    /// TUI-side side-cache for completed-subagent run summaries keyed by
+    /// the spawning Agent tool_use_id. `None` ⇒ Agent tool-result cells
+    /// render without the `✓ Explore · N tools · …` summary row.
+    pub(crate) subagent_summaries:
+        Option<&'a HashMap<String, crate::state::session::SubagentRunSummary>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -320,6 +326,9 @@ pub(crate) fn render_finalized_history_lines(
     }
     if let Some(meta) = options.reasoning_metadata {
         chat = chat.reasoning_metadata(meta);
+    }
+    if let Some(summaries) = options.subagent_summaries {
+        chat = chat.subagent_summaries(summaries);
     }
     chat.build_lines_owned()
 }
@@ -637,9 +646,28 @@ fn hash_cacheable_cell(
             hash_str(hasher, call_id);
             hash_message_source(hasher, cell.source.as_ref())?;
         }
-        CellKind::ToolResult { .. } => {
+        CellKind::ToolResult { call_id } => {
             hash_u8(hasher, 6);
             hash_message_source(hasher, cell.source.as_ref())?;
+            // Fold the subagent run summary (keyed by the spawning
+            // tool_use_id) into the key so a late-arriving `TaskCompleted`
+            // re-renders the Agent tool-result cell instead of serving a
+            // stale cached body without the `✓ Explore · …` row.
+            match options
+                .subagent_summaries
+                .and_then(|cache| cache.get(call_id))
+            {
+                Some(s) => {
+                    hash_u8(hasher, 1);
+                    hash_i64(hasher, s.tool_count as i64);
+                    hash_i64(hasher, s.duration_ms);
+                    hash_i64(hasher, s.input_tokens);
+                    hash_i64(hasher, s.output_tokens);
+                    hash_i64(hasher, s.cache_read_tokens);
+                    hash_i64(hasher, (s.cost_usd * 1_000_000.0) as i64);
+                }
+                None => hash_u8(hasher, 0),
+            }
         }
         CellKind::Attachment => {
             hash_u8(hasher, 8);
