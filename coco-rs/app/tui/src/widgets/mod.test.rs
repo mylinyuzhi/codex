@@ -721,7 +721,10 @@ fn test_snapshot_subagent_panel_populated() {
             agent_id: "agent-c1d3".into(),
             agent_type: "Plan".into(),
             description: "Design refactor plan".into(),
-            status: SubagentStatus::Completed,
+            // Running so the populated panel shows multiple live rows; the
+            // Failed agent below is terminal and must drop out (transient
+            // stage view — completed agents commit to the transcript).
+            status: SubagentStatus::Running,
             color: None,
             team_name: None,
             started_at_ms: None,

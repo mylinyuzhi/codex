@@ -784,6 +784,11 @@ pub(crate) fn in_flight_tool_lines(
     tools
         .iter()
         .filter(|t| crate::presentation::transcript::is_tool_in_flight(t))
+        // Agent (subagent) spawns render in the dedicated Agents panel
+        // (`agent_surface`); suppressing them here avoids duplicating the
+        // same work as both an inline `Agent(...)` row and a panel row
+        // (the two surfaces are independently keyed and drift out of sync).
+        .filter(|t| t.name != coco_types::ToolName::Agent.as_str())
         .map(|tool| {
             let tone = tool_tone_color(tool_name_tone(&tool.name), styles);
             let mut spans = vec![

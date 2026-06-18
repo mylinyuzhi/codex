@@ -138,7 +138,12 @@ pub(crate) enum TurnActivityView {
 }
 
 pub(crate) fn turn_activity_view(state: &AppState, width: u16) -> TurnActivityView {
-    let has_subagents = !state.session.subagents.is_empty();
+    // The Agents panel is a transient stage view (like the inline Tools
+    // list), not an accumulating log: it shows only *live* agents and
+    // disappears once none remain. Completed one-shot subagents drop out
+    // and their final summary commits to the transcript (Agent tool result
+    // cell), so they never pile up here across batches.
+    let has_subagents = state.session.subagents.iter().any(is_live_agent);
     // Include `active_tasks` so the Tasks panel can open when only running
     // background tasks (bash / agent) exist, without any plan items or
     // per-agent todos. Before: opening ctrl+t after `run_in_background`
@@ -325,12 +330,24 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
         coco_types::ExpandedView::Teammates
     );
     let now = state.clock.now_ms();
-    // Aggregate token + cost across all subagents — the dedicated
-    // subagent counter. Cost is only known for completed agents
-    // (mid-flight runs contribute tokens but $0 until they return their
-    // `CostTracker`).
-    let total_tokens: i64 = state.session.subagents.iter().map(|a| a.total_tokens).sum();
-    let total_cost: f64 = state.session.subagents.iter().map(|a| a.cost_usd).sum();
+    // Aggregate token + cost over the *live* agents shown in the panel —
+    // the dedicated subagent counter for the current stage. Completed
+    // agents have dropped out (their totals live in the transcript), so
+    // this reflects what's on screen, not a running cross-batch sum.
+    let total_tokens: i64 = state
+        .session
+        .subagents
+        .iter()
+        .filter(|a| is_live_agent(a))
+        .map(|a| a.total_tokens)
+        .sum();
+    let total_cost: f64 = state
+        .session
+        .subagents
+        .iter()
+        .filter(|a| is_live_agent(a))
+        .map(|a| a.cost_usd)
+        .sum();
     let summary = subagent_summary_text(total_tokens, total_cost);
 
     if tree_mode && !state.session.subagents.is_empty() {
@@ -357,8 +374,19 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
             )],
         });
     }
-    let total = state.session.subagents.len();
-    for (i, agent) in state.session.subagents.iter().enumerate() {
+    // Only live agents render (transient stage view). Keep the original
+    // index for focus matching; use the in-list position for tree
+    // connectors so `└─` lands on the last *visible* row.
+    let live: Vec<(usize, &crate::state::SubagentInstance)> = state
+        .session
+        .subagents
+        .iter()
+        .enumerate()
+        .filter(|(_, agent)| is_live_agent(agent))
+        .collect();
+    let total = live.len();
+    for (pos, (i, agent)) in live.iter().enumerate() {
+        let i = *i;
         let is_focused = state.session.focused_subagent_index == Some(i as i32);
         // Backgrounded is orthogonal to status — a Running agent flipped
         // to background renders with the dim half-circle so the user can
@@ -379,7 +407,7 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
         // and let `ActivitySpan::tone` do the single `String::from`
         // at the boundary instead of allocating twice.
         let row_prefix: &'static str = if tree_mode {
-            match (is_focused, i + 1 == total) {
+            match (is_focused, pos + 1 == total) {
                 (true, true) => "╘═ ",
                 (true, false) => "╞═ ",
                 (false, true) => "└─ ",
@@ -480,6 +508,16 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
             }
         }
     }
+}
+
+/// Whether a subagent row is shown in the (transient) Agents panel.
+/// Persistent teammates always show; one-shot subagents show only while
+/// `Running`. Completed subagents drop out — their final summary lands in
+/// the transcript via the Agent tool result cell, so the panel stays a
+/// current-stage view instead of an accumulating log.
+fn is_live_agent(agent: &crate::state::SubagentInstance) -> bool {
+    matches!(agent.kind, crate::state::SubagentKind::Teammate)
+        || matches!(agent.status, SubagentStatus::Running)
 }
 
 /// `Subagents · 128k tok · $0.42` — the aggregate token + cost segment
