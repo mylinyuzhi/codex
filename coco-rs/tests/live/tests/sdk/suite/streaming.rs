@@ -3,6 +3,7 @@
 use anyhow::Result;
 use coco_inference::LanguageModelFunctionTool;
 use coco_inference::LanguageModelTool;
+use coco_inference::LanguageModelToolChoice;
 use coco_inference::ModelCommunicationOutcome;
 use coco_inference::QueryParams;
 use coco_inference::StreamEvent;
@@ -97,14 +98,36 @@ pub async fn run(target: &LiveTarget) -> Result<()> {
 }
 
 /// Streaming + tool-calling. Asserts a `ToolCallStart` event for `get_weather`.
+///
+/// Leaves `tool_choice` unset (the model decides) — relies on the imperative
+/// prompt below to nudge tool use. Providers whose model spontaneously skips
+/// the call (Gemini) should use [`run_with_tools_forced`] instead.
 pub async fn run_with_tools(target: &LiveTarget) -> Result<()> {
+    run_with_tools_choice(target, None).await
+}
+
+/// Same as [`run_with_tools`] but forces the call via `tool_choice: Required`.
+///
+/// For Gemini, `tool_choice: None` + a prompt nudge is flaky: the model
+/// sometimes answers in prose and never emits a `ToolCallStart`. Forcing the
+/// choice removes that model nondeterminism. NOTE: this is opt-in per provider
+/// because some models reject a forced `tool_choice` — e.g. DeepSeek's thinking
+/// model returns HTTP 400 "Thinking mode does not support this tool_choice".
+pub async fn run_with_tools_forced(target: &LiveTarget) -> Result<()> {
+    run_with_tools_choice(target, Some(LanguageModelToolChoice::required())).await
+}
+
+async fn run_with_tools_choice(
+    target: &LiveTarget,
+    tool_choice: Option<LanguageModelToolChoice>,
+) -> Result<()> {
     let params = QueryParams {
-        // Imperative system prompt nudges the model toward calling
-        // the tool rather than answering in prose. 16k removes
-        // max_tokens as a variable in failure analysis: the model
-        // normally reasons ~100 tokens and emits the tool call.
-        // Real flakes are gateway / model side, surfaced via
-        // `stop_reason` in the assertion message below.
+        // Imperative system prompt nudges the model toward calling the tool
+        // rather than answering in prose (the default for `tool_choice: None`
+        // callers). 16k removes max_tokens as a variable in failure analysis:
+        // the model normally reasons ~100 tokens and emits the tool call. Real
+        // flakes are gateway / model side, surfaced via `stop_reason` in the
+        // assertion message below.
         prompt: vec![
             LlmMessage::system(
                 "You are a helpful assistant. For weather questions you MUST call \
@@ -119,7 +142,7 @@ pub async fn run_with_tools(target: &LiveTarget) -> Result<()> {
         thinking_level: None,
         fast_mode: false,
         tools: Some(vec![weather_tool_def()]),
-        tool_choice: None,
+        tool_choice,
         context_management: None,
         query_source: Some("coco-tests-live::sdk::streaming::run_with_tools".into()),
         agent_id: None,

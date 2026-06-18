@@ -77,7 +77,10 @@ async fn test_streaming_google() -> Result<()> {
 #[tokio::test]
 async fn test_streaming_tools_google() -> Result<()> {
     let target = require_live!(PROVIDER, "tools");
-    suite::streaming::run_with_tools(&target).await
+    // Gemini is flaky under `tool_choice: None` (sometimes answers in prose),
+    // so force the call. Other providers keep the unforced variant — DeepSeek's
+    // thinking model rejects a forced `tool_choice` (HTTP 400).
+    suite::streaming::run_with_tools_forced(&target).await
 }
 
 /// Regression: thinking_level=medium + tool schema with `Option<i64>`
