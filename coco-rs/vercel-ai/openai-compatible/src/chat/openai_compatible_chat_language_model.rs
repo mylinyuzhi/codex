@@ -41,7 +41,7 @@ use crate::openai_compatible_config::OpenAICompatibleConfig;
 use crate::provider_options_key::warn_if_deprecated_provider_options_key;
 
 use super::convert_chat_usage::convert_openai_compatible_chat_usage;
-use super::convert_to_chat_messages::convert_to_openai_compatible_chat_messages;
+use super::convert_to_chat_messages::convert_to_openai_compatible_chat_messages_with_profile;
 use super::map_finish_reason::map_openai_compatible_chat_finish_reason;
 use super::openai_compatible_chat_api::OpenAICompatibleChatChunk;
 use super::openai_compatible_chat_api::OpenAICompatibleChatResponse;
@@ -88,7 +88,10 @@ impl OpenAICompatibleChatLanguageModel {
         }
 
         // Convert prompt to messages (always uses "system" role, no Developer mode)
-        let (messages, msg_warnings) = convert_to_openai_compatible_chat_messages(&options.prompt)?;
+        let (messages, msg_warnings) = convert_to_openai_compatible_chat_messages_with_profile(
+            &options.prompt,
+            self.config.provider_profile,
+        )?;
         warnings.extend(msg_warnings);
 
         // Prepare tools

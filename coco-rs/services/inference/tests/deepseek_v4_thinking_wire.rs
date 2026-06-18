@@ -124,6 +124,7 @@ fn make_openai_compat_config() -> Arc<OpenAICompatibleConfig> {
             "deepseek-openai",
         )),
         prompt_tokens_total_semantics: PromptTokensTotalSemantics::Inclusive,
+        provider_profile: vercel_ai_openai_compatible::OpenAICompatibleProviderProfile::DeepSeek,
         full_url: None,
     })
 }

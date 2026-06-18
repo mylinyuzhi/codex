@@ -29,6 +29,31 @@ fn assistant_text(text: &str) -> LanguageModelV4Message {
     }
 }
 
+fn tool_call(id: &str, name: &str, input: serde_json::Value) -> AssistantContentPart {
+    AssistantContentPart::ToolCall(ToolCallPart {
+        tool_call_id: id.into(),
+        tool_name: name.into(),
+        input,
+        provider_executed: None,
+        provider_metadata: None,
+        invalid: false,
+        invalid_reason: None,
+    })
+}
+
+fn tool_result(id: &str, name: &str, output: &str) -> ToolContentPart {
+    ToolContentPart::ToolResult(ToolResultPart {
+        tool_call_id: id.into(),
+        tool_name: name.into(),
+        output: ToolResultContent::Text {
+            value: output.into(),
+            provider_options: None,
+        },
+        is_error: false,
+        provider_metadata: None,
+    })
+}
+
 #[test]
 fn converts_system_message_as_system() {
     let prompt = vec![system_msg("You are helpful")];
@@ -187,6 +212,299 @@ fn includes_reasoning_content_in_assistant_message() {
     assert_eq!(msgs[0]["role"], "assistant");
     assert_eq!(msgs[0]["content"], "The answer is 42.");
     assert_eq!(msgs[0]["reasoning_content"], "Let me think...");
+}
+
+#[test]
+fn deepseek_pure_tool_call_assistant_uses_null_content() {
+    let prompt = vec![LanguageModelV4Message::Assistant {
+        content: vec![tool_call("call_123", "get_weather", json!({"city": "SF"}))],
+        provider_options: None,
+    }];
+    let (msgs, _) = convert_to_openai_compatible_chat_messages_with_profile(
+        &prompt,
+        crate::OpenAICompatibleProviderProfile::DeepSeek,
+    )
+    .unwrap();
+    assert_eq!(msgs[0]["role"], "assistant");
+    assert!(msgs[0]["content"].is_null());
+    assert_eq!(msgs[0]["tool_calls"][0]["id"], "call_123");
+}
+
+#[test]
+fn deepseek_plain_assistant_drops_reasoning_content() {
+    let prompt = vec![LanguageModelV4Message::Assistant {
+        content: vec![
+            AssistantContentPart::Reasoning(vercel_ai_provider::ReasoningPart::new(
+                "private thought",
+            )),
+            AssistantContentPart::Text(TextPart {
+                text: "answer".into(),
+                provider_metadata: None,
+            }),
+        ],
+        provider_options: None,
+    }];
+    let (msgs, _) = convert_to_openai_compatible_chat_messages_with_profile(
+        &prompt,
+        crate::OpenAICompatibleProviderProfile::DeepSeek,
+    )
+    .unwrap();
+    assert_eq!(msgs[0]["content"], "answer");
+    assert!(msgs[0].get("reasoning_content").is_none());
+}
+
+#[test]
+fn deepseek_tool_call_assistant_keeps_reasoning_content() {
+    let prompt = vec![LanguageModelV4Message::Assistant {
+        content: vec![
+            AssistantContentPart::Reasoning(vercel_ai_provider::ReasoningPart::new("tool thought")),
+            tool_call("call_123", "get_weather", json!({"city": "SF"})),
+        ],
+        provider_options: None,
+    }];
+    let (msgs, _) = convert_to_openai_compatible_chat_messages_with_profile(
+        &prompt,
+        crate::OpenAICompatibleProviderProfile::DeepSeek,
+    )
+    .unwrap();
+    assert_eq!(msgs[0]["reasoning_content"], "tool thought");
+}
+
+#[test]
+fn generic_profile_still_emits_plain_reasoning_content() {
+    let prompt = vec![LanguageModelV4Message::Assistant {
+        content: vec![
+            AssistantContentPart::Reasoning(vercel_ai_provider::ReasoningPart::new(
+                "generic thought",
+            )),
+            AssistantContentPart::Text(TextPart {
+                text: "answer".into(),
+                provider_metadata: None,
+            }),
+        ],
+        provider_options: None,
+    }];
+    let (msgs, _) = convert_to_openai_compatible_chat_messages(&prompt).unwrap();
+    assert_eq!(msgs[0]["reasoning_content"], "generic thought");
+}
+
+#[test]
+fn deepseek_synthesizes_missing_tool_result() {
+    let prompt = vec![LanguageModelV4Message::Assistant {
+        content: vec![tool_call("call_123", "read_file", json!({"path": "a"}))],
+        provider_options: None,
+    }];
+    let (msgs, _) = convert_to_openai_compatible_chat_messages_with_profile(
+        &prompt,
+        crate::OpenAICompatibleProviderProfile::DeepSeek,
+    )
+    .unwrap();
+    assert_eq!(msgs.len(), 2);
+    assert_eq!(msgs[1]["role"], "tool");
+    assert_eq!(msgs[1]["tool_call_id"], "call_123");
+    assert!(
+        msgs[1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("Tool result missing")
+    );
+}
+
+#[test]
+fn deepseek_drops_orphan_tool_result() {
+    let prompt = vec![LanguageModelV4Message::Tool {
+        content: vec![tool_result("orphan", "read_file", "ignored")],
+        provider_options: None,
+    }];
+    let (msgs, _) = convert_to_openai_compatible_chat_messages_with_profile(
+        &prompt,
+        crate::OpenAICompatibleProviderProfile::DeepSeek,
+    )
+    .unwrap();
+    assert!(msgs.is_empty());
+}
+
+#[test]
+fn deepseek_reorders_tool_results_to_assistant_call_order() {
+    let prompt = vec![
+        LanguageModelV4Message::Assistant {
+            content: vec![
+                tool_call("call_a", "first", json!({})),
+                tool_call("call_b", "second", json!({})),
+            ],
+            provider_options: None,
+        },
+        LanguageModelV4Message::Tool {
+            content: vec![
+                tool_result("call_b", "second", "B"),
+                tool_result("call_a", "first", "A"),
+            ],
+            provider_options: None,
+        },
+    ];
+    let (msgs, _) = convert_to_openai_compatible_chat_messages_with_profile(
+        &prompt,
+        crate::OpenAICompatibleProviderProfile::DeepSeek,
+    )
+    .unwrap();
+    assert_eq!(msgs[1]["tool_call_id"], "call_a");
+    assert_eq!(msgs[1]["content"], "A");
+    assert_eq!(msgs[2]["tool_call_id"], "call_b");
+    assert_eq!(msgs[2]["content"], "B");
+}
+
+#[test]
+fn deepseek_pairs_duplicate_and_empty_tool_ids_positionally() {
+    let prompt = vec![
+        LanguageModelV4Message::Assistant {
+            content: vec![
+                tool_call("", "first", json!({})),
+                tool_call("dup", "second", json!({})),
+                tool_call("dup", "third", json!({})),
+            ],
+            provider_options: None,
+        },
+        LanguageModelV4Message::Tool {
+            content: vec![
+                tool_result("", "first", "one"),
+                tool_result("dup", "second", "two"),
+                tool_result("dup", "third", "three"),
+            ],
+            provider_options: None,
+        },
+    ];
+    let (msgs, _) = convert_to_openai_compatible_chat_messages_with_profile(
+        &prompt,
+        crate::OpenAICompatibleProviderProfile::DeepSeek,
+    )
+    .unwrap();
+    assert_eq!(msgs[0]["tool_calls"][0]["id"], "__deepseek_call_0");
+    assert_eq!(msgs[0]["tool_calls"][1]["id"], "__deepseek_call_1");
+    assert_eq!(msgs[0]["tool_calls"][2]["id"], "__deepseek_call_2");
+    assert_eq!(msgs[1]["tool_call_id"], "__deepseek_call_0");
+    assert_eq!(msgs[1]["content"], "one");
+    assert_eq!(msgs[2]["tool_call_id"], "__deepseek_call_1");
+    assert_eq!(msgs[2]["content"], "two");
+    assert_eq!(msgs[3]["tool_call_id"], "__deepseek_call_2");
+    assert_eq!(msgs[3]["content"], "three");
+}
+
+#[test]
+fn deepseek_drops_non_empty_unmatched_tool_result_id() {
+    let prompt = vec![
+        LanguageModelV4Message::Assistant {
+            content: vec![
+                tool_call("call_a", "first", json!({})),
+                tool_call("call_b", "second", json!({})),
+            ],
+            provider_options: None,
+        },
+        LanguageModelV4Message::Tool {
+            content: vec![tool_result("bogus", "first", "wrong")],
+            provider_options: None,
+        },
+    ];
+    let (msgs, _) = convert_to_openai_compatible_chat_messages_with_profile(
+        &prompt,
+        crate::OpenAICompatibleProviderProfile::DeepSeek,
+    )
+    .unwrap();
+    assert_eq!(msgs[1]["tool_call_id"], "call_a");
+    assert!(
+        msgs[1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("Tool result missing")
+    );
+    assert_eq!(msgs[2]["tool_call_id"], "call_b");
+    assert!(
+        msgs[2]["content"]
+            .as_str()
+            .unwrap()
+            .contains("Tool result missing")
+    );
+}
+
+#[test]
+fn deepseek_synthetic_tool_call_ids_do_not_collide_with_raw_ids() {
+    let prompt = vec![LanguageModelV4Message::Assistant {
+        content: vec![
+            tool_call("call_0", "real_call_prefix", json!({})),
+            tool_call("__deepseek_call_0", "real_reserved_prefix", json!({})),
+            tool_call("", "empty", json!({})),
+        ],
+        provider_options: None,
+    }];
+    let (msgs, _) = convert_to_openai_compatible_chat_messages_with_profile(
+        &prompt,
+        crate::OpenAICompatibleProviderProfile::DeepSeek,
+    )
+    .unwrap();
+    assert_eq!(msgs[0]["tool_calls"][0]["id"], "call_0");
+    assert_eq!(msgs[0]["tool_calls"][1]["id"], "__deepseek_call_0");
+    assert_eq!(msgs[0]["tool_calls"][2]["id"], "__deepseek_call_2");
+}
+
+#[test]
+fn deepseek_mixed_exact_and_positional_results_preserve_call_order() {
+    let prompt = vec![
+        LanguageModelV4Message::Assistant {
+            content: vec![
+                tool_call("exact_a", "first", json!({})),
+                tool_call("", "second", json!({})),
+                tool_call("dup", "third", json!({})),
+                tool_call("dup", "fourth", json!({})),
+                tool_call("exact_b", "fifth", json!({})),
+            ],
+            provider_options: None,
+        },
+        LanguageModelV4Message::Tool {
+            content: vec![
+                tool_result("exact_b", "fifth", "five"),
+                tool_result("", "second", "two"),
+                tool_result("exact_a", "first", "one"),
+                tool_result("dup", "third", "three"),
+                tool_result("dup", "fourth", "four"),
+            ],
+            provider_options: None,
+        },
+    ];
+    let (msgs, _) = convert_to_openai_compatible_chat_messages_with_profile(
+        &prompt,
+        crate::OpenAICompatibleProviderProfile::DeepSeek,
+    )
+    .unwrap();
+    assert_eq!(msgs[1]["tool_call_id"], "exact_a");
+    assert_eq!(msgs[1]["content"], "one");
+    assert_eq!(msgs[2]["tool_call_id"], "__deepseek_call_1");
+    assert_eq!(msgs[2]["content"], "two");
+    assert_eq!(msgs[3]["tool_call_id"], "__deepseek_call_2");
+    assert_eq!(msgs[3]["content"], "three");
+    assert_eq!(msgs[4]["tool_call_id"], "__deepseek_call_3");
+    assert_eq!(msgs[4]["content"], "four");
+    assert_eq!(msgs[5]["tool_call_id"], "exact_b");
+    assert_eq!(msgs[5]["content"], "five");
+}
+
+#[test]
+fn deepseek_repairs_truncated_string_tool_arguments_to_valid_json() {
+    let prompt = vec![LanguageModelV4Message::Assistant {
+        content: vec![tool_call(
+            "call_bad",
+            "broken",
+            Value::String("{\"path\":".into()),
+        )],
+        provider_options: None,
+    }];
+    let (msgs, _) = convert_to_openai_compatible_chat_messages_with_profile(
+        &prompt,
+        crate::OpenAICompatibleProviderProfile::DeepSeek,
+    )
+    .unwrap();
+    assert_eq!(
+        msgs[0]["tool_calls"][0]["function"]["arguments"],
+        "{\"path\":null}"
+    );
 }
 
 #[test]

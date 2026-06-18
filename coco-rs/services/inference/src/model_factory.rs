@@ -581,6 +581,11 @@ fn build_openai_compat(
         metadata_extractor: None,
         error_handler: None,
         prompt_tokens_total_semantics: knobs.prompt_tokens_total_semantics,
+        provider_profile: if provider_cfg.name == "deepseek-openai" {
+            Some(vercel_ai_openai_compatible::OpenAICompatibleProviderProfile::DeepSeek)
+        } else {
+            None
+        },
         full_url: Some(opts.full_url),
     };
     let provider = vercel_ai_openai_compatible::create_openai_compatible(settings);

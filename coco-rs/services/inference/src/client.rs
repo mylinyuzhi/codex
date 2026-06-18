@@ -3,6 +3,7 @@ use crate::build_call_options::build_call_options_with_extra;
 use crate::cache_detection::CacheBreakDetector;
 use crate::cache_detection::CacheState;
 use crate::cache_detection::PromptStateInput;
+use crate::cache_detection::ToolSchemaSize;
 use crate::cache_detection::canonical_extra_body_hash;
 use crate::cache_detection::canonical_extra_body_serialize;
 use crate::cache_detection::djb2_hash;
@@ -1046,6 +1047,7 @@ fn build_prompt_state_input(
                 system_char_count,
             )
         };
+    let per_tool_schema_sizes = tool_schema_sizes(params.tools.as_deref());
 
     // Hash the full merged extra-body map (pre-namespace-wrap). Empty
     // map → hash 0 / serialized None, preserving mock-path behavior.
@@ -1077,6 +1079,7 @@ fn build_prompt_state_input(
         cache_control_hash: 0, // Provider-specific; tracked via extra_body_hash for now.
         tool_names,
         per_tool_hashes,
+        per_tool_schema_sizes,
         system_char_count,
         model: client.model_id().to_string(),
         query_source: query_source.to_string(),
@@ -1091,6 +1094,40 @@ fn build_prompt_state_input(
         is_using_overage: false,
         cached_mc_enabled: false,
     }
+}
+
+fn tool_schema_sizes(
+    tools: Option<&[vercel_ai_provider::LanguageModelV4Tool]>,
+) -> HashMap<String, ToolSchemaSize> {
+    let Some(tools) = tools else {
+        return HashMap::new();
+    };
+    let mut sizes = HashMap::with_capacity(tools.len());
+    for (idx, tool) in tools.iter().enumerate() {
+        let raw_name = match tool {
+            vercel_ai_provider::LanguageModelV4Tool::Function(f) => f.name.clone(),
+            vercel_ai_provider::LanguageModelV4Tool::Provider(p) => p.name.clone(),
+        };
+        let key = if raw_name.is_empty() {
+            format!("__idx_{idx}")
+        } else {
+            raw_name
+        };
+        let serialized = serde_json::to_string(tool).unwrap_or_default();
+        let bytes = i64::try_from(serialized.len()).unwrap_or(i64::MAX);
+        sizes.insert(
+            key,
+            ToolSchemaSize {
+                bytes,
+                estimated_tokens: estimate_schema_tokens(bytes),
+            },
+        );
+    }
+    sizes
+}
+
+fn estimate_schema_tokens(bytes: i64) -> i64 {
+    bytes.saturating_add(3) / 4
 }
 
 /// Extract the concatenated system message text + char count. Returns

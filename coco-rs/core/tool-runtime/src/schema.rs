@@ -41,6 +41,7 @@
 
 use std::sync::Arc;
 
+use serde_json::Map;
 use serde_json::Value;
 
 use crate::derive::derive_input_schema_value;
@@ -199,6 +200,104 @@ pub fn schema_omit_properties(schema: &Value, fields: &[&str]) -> Value {
         }
     }
     out
+}
+
+/// Canonicalize the model-facing copy of a tool JSON Schema.
+///
+/// This intentionally does not feed back into runtime validation. It stabilizes
+/// provider prompt-cache keys by normalizing only deterministic wire details:
+/// object key order, selected unordered keyword arrays, and a missing plain
+/// object root type.
+#[must_use]
+pub fn canonicalize_model_tool_schema(schema: &Value) -> Value {
+    let mut out = canonicalize_schema_value(schema, true);
+    if matches!(out, Value::Object(ref obj) if obj.is_empty()) {
+        out = serde_json::json!({ "type": "object" });
+    }
+    out
+}
+
+fn canonicalize_schema_value(value: &Value, is_root: bool) -> Value {
+    match value {
+        Value::Object(obj) => {
+            let mut out = Map::new();
+            let mut keys: Vec<&String> = obj.keys().collect();
+            keys.sort();
+            for key in keys {
+                let Some(raw) = obj.get(key) else {
+                    continue;
+                };
+                match key.as_str() {
+                    "required" => {
+                        if let Some(required) = sorted_string_array(raw)
+                            && !required.is_empty()
+                        {
+                            out.insert(key.clone(), Value::Array(required));
+                        }
+                    }
+                    "dependentRequired" => {
+                        if let Some(deps) = canonical_dependent_required(raw) {
+                            out.insert(key.clone(), deps);
+                        }
+                    }
+                    _ => {
+                        out.insert(key.clone(), canonicalize_schema_value(raw, false));
+                    }
+                }
+            }
+
+            if is_root
+                && !out.contains_key("type")
+                && !["$ref", "allOf", "anyOf", "oneOf", "not"]
+                    .iter()
+                    .any(|key| out.contains_key(*key))
+            {
+                out.insert("type".to_string(), Value::String("object".to_string()));
+            }
+
+            let mut keys: Vec<String> = out.keys().cloned().collect();
+            keys.sort();
+            Value::Object(
+                keys.into_iter()
+                    .filter_map(|key| out.remove(&key).map(|value| (key, value)))
+                    .collect(),
+            )
+        }
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| canonicalize_schema_value(item, false))
+                .collect(),
+        ),
+        _ => value.clone(),
+    }
+}
+
+fn sorted_string_array(value: &Value) -> Option<Vec<Value>> {
+    let mut strings: Vec<String> = value
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect();
+    strings.sort();
+    strings.dedup();
+    Some(strings.into_iter().map(Value::String).collect())
+}
+
+fn canonical_dependent_required(value: &Value) -> Option<Value> {
+    let obj = value.as_object()?;
+    let mut out = Map::new();
+    let mut keys: Vec<&String> = obj.keys().collect();
+    keys.sort();
+    for key in keys {
+        if let Some(raw) = obj.get(key)
+            && let Some(required) = sorted_string_array(raw)
+        {
+            out.insert(key.clone(), Value::Array(required));
+        }
+    }
+    Some(Value::Object(out))
 }
 
 /// Construction-time schema error. Tier-3 (`thiserror` plus a manual
