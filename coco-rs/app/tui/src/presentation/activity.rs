@@ -735,7 +735,7 @@ fn format_short_elapsed(ms: i64) -> String {
     }
 }
 
-fn format_short_tokens(total: i64) -> String {
+pub(crate) fn format_short_tokens(total: i64) -> String {
     if total < 1_000 {
         format!("{total}")
     } else {

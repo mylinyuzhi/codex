@@ -164,6 +164,46 @@ fn test_snapshot_with_tool_result() {
 }
 
 #[test]
+fn test_snapshot_subagent_result_summary() {
+    // A finished subagent drops out of the transient panel; its run summary
+    // surfaces on the committed Agent tool-result cell instead
+    // (`└ ✓ Explore · 37 tools · 1m11s · ↑68.1k ↓468 · cache 95% · $0.18`).
+    use crate::state::session::SubagentRunSummary;
+    let mut state = AppState::new();
+    state.session.model = "opus-4".to_string();
+    test_helpers::push_user_text(&mut state.session, "1", "explore the codebase");
+    test_helpers::push_tool_use_input(
+        &mut state.session,
+        "call-agent",
+        "Agent",
+        serde_json::json!({"description": "Map app/core crates", "subagent_type": "Explore"}),
+    );
+    test_helpers::push_tool_result(
+        &mut state.session,
+        "call-agent",
+        "Agent",
+        "Mapped the app/core crates and their responsibilities.",
+        false,
+    );
+    state.session.insert_subagent_summary(
+        "call-agent".into(),
+        SubagentRunSummary {
+            agent_type: "Explore".into(),
+            tool_count: 37,
+            duration_ms: 71_000,
+            input_tokens: 68_100,
+            output_tokens: 468,
+            cache_read_tokens: 64_695,
+            cost_usd: 0.18,
+            succeeded: true,
+        },
+    );
+
+    let output = render_to_string(&state, 100, 20);
+    insta::assert_snapshot!("subagent_result_summary", output);
+}
+
+#[test]
 fn test_snapshot_attachment_chips() {
     // Alignment reference: every leading marker is width-1 and content lands at
     // column 2 — user `❯`, tool `●`, result `└` (+ line-number gutter), memory

@@ -51,6 +51,7 @@ pub(super) fn clear_session_boundary_state(state: &mut AppState) {
     state.session.tool_executions.clear();
     state.session.tool_group_summaries.clear();
     state.session.clear_reasoning_metadata();
+    state.session.subagent_summaries.clear();
     state.session.session_usage = None;
     state.session.token_usage = crate::state::session::TokenUsage::default();
     state.session.queued_commands.clear();

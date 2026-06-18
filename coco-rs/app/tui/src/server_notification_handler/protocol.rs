@@ -355,6 +355,10 @@ pub(super) fn handle(
             // by the optimistic Ctrl+B flip in `update.rs`, never by a
             // terminal status.
             let now = state.clock.now_ms();
+            // Captured inside the agent borrow, inserted after it drops —
+            // the completed subagent's run summary for the transcript cell.
+            let mut completed_summary: Option<(String, crate::state::session::SubagentRunSummary)> =
+                None;
             if let Some(agent) = state
                 .session
                 .subagents
@@ -388,6 +392,27 @@ pub(super) fn handle(
                 if !p.summary.is_empty() {
                     agent.final_message = Some(preview_summary(&p.summary, 80));
                 }
+                // Capture the run summary on the Running→terminal edge so it
+                // lands on the spawning Agent tool-result cell once the agent
+                // drops out of the transient panel.
+                if matches!(prev_status, SubagentStatus::Running)
+                    && let Some(tuid) = p.tool_use_id.clone()
+                {
+                    let duration_ms = agent.started_at_ms.map(|s| (now - s).max(0)).unwrap_or(0);
+                    completed_summary = Some((
+                        tuid,
+                        crate::state::session::SubagentRunSummary {
+                            agent_type: agent.agent_type.clone(),
+                            tool_count: agent.tool_count,
+                            duration_ms,
+                            input_tokens: agent.input_tokens,
+                            output_tokens: agent.output_tokens,
+                            cache_read_tokens: agent.cache_read_tokens,
+                            cost_usd: agent.cost_usd,
+                            succeeded: matches!(agent.status, SubagentStatus::Completed),
+                        },
+                    ));
+                }
                 // Toast only when the agent was explicitly backgrounded
                 // (Ctrl+B) — foreground completions are already visible
                 // in the activity panel. Gate on the Running→terminal
@@ -407,6 +432,9 @@ pub(super) fn handle(
                     };
                     state.ui.add_toast(toast);
                 }
+            }
+            if let Some((tuid, summary)) = completed_summary {
+                state.session.insert_subagent_summary(tuid, summary);
             }
             true
         }

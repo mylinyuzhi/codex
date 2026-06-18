@@ -219,6 +219,12 @@ pub struct SessionState {
     pub reasoning_metadata: HashMap<uuid::Uuid, ReasoningMetadata>,
     /// Subagent instances.
     pub subagents: Vec<SubagentInstance>,
+    /// Per-completed-subagent run summary, keyed by the spawning Agent
+    /// tool_use_id. Side-cache (like [`Self::reasoning_metadata`]): the
+    /// transient panel drops a subagent the moment it finishes, so its
+    /// final stats live here and render on the committed Agent tool-result
+    /// cell in the transcript instead.
+    pub subagent_summaries: HashMap<String, SubagentRunSummary>,
     /// Token usage.
     pub token_usage: TokenUsage,
     /// Cumulative session usage and cost snapshot.
@@ -602,6 +608,10 @@ impl SessionState {
     pub fn clear_reasoning_metadata(&mut self) {
         self.reasoning_metadata.clear();
     }
+
+    pub fn insert_subagent_summary(&mut self, tool_use_id: String, summary: SubagentRunSummary) {
+        self.subagent_summaries.insert(tool_use_id, summary);
+    }
 }
 
 impl Default for SessionState {
@@ -623,6 +633,7 @@ impl Default for SessionState {
             has_submit_interruptible_tool_in_progress: false,
             tool_group_summaries: HashMap::new(),
             reasoning_metadata: HashMap::new(),
+            subagent_summaries: HashMap::new(),
             subagents: Vec::new(),
             token_usage: TokenUsage::default(),
             session_usage: None,
@@ -811,6 +822,23 @@ pub struct SubagentInstance {
     /// (`TaskUsage.cost_usd`). `0.0` until the agent completes. Summed
     /// across agents for the panel's `Subagents · N tok · $X` line.
     pub cost_usd: f64,
+}
+
+/// Final run summary for a completed subagent, rendered on its Agent
+/// tool-result cell in the transcript (`✓ Explore · 37 tools · 1m11s ·
+/// ↑68.1k ↓468 · cache 95% · $0.18`). UI-only side-cache keyed by the
+/// spawning tool_use_id.
+#[derive(Debug, Clone)]
+pub struct SubagentRunSummary {
+    pub agent_type: String,
+    pub tool_count: i32,
+    pub duration_ms: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cost_usd: f64,
+    /// Terminal outcome — `false` drives the `✗`/`Failed` glyph.
+    pub succeeded: bool,
 }
 
 /// Subagent lifecycle status. Covers what the TUI displays. The orthogonal

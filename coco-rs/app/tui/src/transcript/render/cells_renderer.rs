@@ -65,6 +65,11 @@ pub struct CellsRenderer<'a> {
     /// `None` ⇒ no reasoning badges (renderer falls back to header without metrics).
     pub(crate) reasoning_metadata:
         Option<&'a HashMap<uuid::Uuid, crate::state::session::ReasoningMetadata>>,
+    /// Side-cache lookup for completed-subagent run summaries, keyed by the
+    /// spawning Agent tool_use_id. `None` ⇒ Agent tool-result cells render
+    /// without the `✓ Explore · …` summary row.
+    pub(crate) subagent_summaries:
+        Option<&'a HashMap<String, crate::state::session::SubagentRunSummary>>,
     pub(crate) styles: UiStyles<'a>,
     pub(crate) syntax_highlighting: SyntaxHighlighting,
     pub(crate) width: u16,
@@ -90,6 +95,7 @@ impl<'a> CellsRenderer<'a> {
             tool_executions: &[],
             collapsed_tools: None,
             reasoning_metadata: None,
+            subagent_summaries: None,
             styles,
             syntax_highlighting: SyntaxHighlighting::Enabled,
             width: 80,
@@ -110,6 +116,14 @@ impl<'a> CellsRenderer<'a> {
         meta: &'a HashMap<uuid::Uuid, crate::state::session::ReasoningMetadata>,
     ) -> Self {
         self.reasoning_metadata = Some(meta);
+        self
+    }
+
+    pub fn subagent_summaries(
+        mut self,
+        summaries: &'a HashMap<String, crate::state::session::SubagentRunSummary>,
+    ) -> Self {
+        self.subagent_summaries = Some(summaries);
         self
     }
 
@@ -380,6 +394,15 @@ impl<'a> CellsRenderer<'a> {
         else {
             return;
         };
+        // Subagent run summary on the Agent tool-result cell: the transient
+        // panel drops a subagent the instant it finishes, so its final
+        // stats (`✓ Explore · 37 tools · 1m11s · ↑68.1k ↓468 · cache 95% ·
+        // $0.18`) surface here as the committed transcript record.
+        if projection.tool_name == coco_types::ToolName::Agent.as_str()
+            && let Some(summary) = self.subagent_summaries.and_then(|m| m.get(&tr.tool_use_id))
+        {
+            lines.push(self.agent_summary_line(summary));
+        }
         super::tool_result::render_tool_result_body(
             &self.tool_result_ctx(),
             &projection.tool_name,
@@ -389,6 +412,48 @@ impl<'a> CellsRenderer<'a> {
             tr.is_error,
             lines,
         );
+    }
+
+    /// `  └ ✓ Explore · 37 tools · 1m11s · ↑68.1k ↓468 · cache 95% · $0.18`
+    /// — the committed run summary for a finished subagent.
+    fn agent_summary_line(&self, s: &crate::state::session::SubagentRunSummary) -> Line<'static> {
+        use crate::presentation::activity::format_short_tokens;
+        let (glyph, tone) = if s.succeeded {
+            ("✓", self.styles.success())
+        } else {
+            ("✗", self.styles.error())
+        };
+        let mut parts: Vec<String> = Vec::new();
+        if !s.agent_type.is_empty() {
+            parts.push(s.agent_type.clone());
+        }
+        if s.tool_count > 0 {
+            parts.push(format!("{} tools", s.tool_count));
+        }
+        if s.duration_ms > 0 {
+            parts.push(format_duration_seconds(std::time::Duration::from_millis(
+                s.duration_ms.max(0) as u64,
+            )));
+        }
+        if s.input_tokens > 0 || s.output_tokens > 0 {
+            parts.push(format!(
+                "↑{} ↓{}",
+                format_short_tokens(s.input_tokens),
+                format_short_tokens(s.output_tokens)
+            ));
+            if s.input_tokens > 0 && s.cache_read_tokens > 0 {
+                let pct = (s.cache_read_tokens * 100 / s.input_tokens).clamp(0, 100);
+                parts.push(format!("cache {pct}%"));
+            }
+        }
+        if s.cost_usd > 0.0 {
+            parts.push(format!("${:.2}", s.cost_usd));
+        }
+        Line::from(vec![
+            Span::raw("  └ ").fg(tone),
+            Span::raw(format!("{glyph} ")).fg(tone),
+            Span::raw(parts.join(" · ")).fg(self.styles.dim()),
+        ])
     }
 
     /// Build the surface context the per-tool renderers paint into. Inline chat

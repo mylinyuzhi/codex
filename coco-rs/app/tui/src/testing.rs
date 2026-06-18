@@ -425,6 +425,7 @@ fn replay_options(
         kb_handle: None,
         replay_cache_policy: HistoryReplayCachePolicy::default(),
         reasoning_metadata: None,
+        subagent_summaries: None,
     }
 }
 

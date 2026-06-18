@@ -221,6 +221,7 @@ fn emit_append_only_accepts_finalized_transcript_renderer() {
                     kb_handle: None,
                     replay_cache_policy: HistoryReplayCachePolicy::default(),
                     reasoning_metadata: None,
+                    subagent_summaries: None,
                 },
             )
         })
