@@ -200,7 +200,7 @@ fn interaction_pane_bottom_reservation(
         + stash_rows;
     let avail_below_input = max_height.saturating_sub(other_fixed_rows);
     let bottom_height: u16 = if popup_active {
-        popup_row_budget(avail_below_input)
+        popup_row_budget(popup_items, avail_below_input)
     } else {
         status_height.min(avail_below_input)
     };
@@ -292,7 +292,7 @@ fn render_live_viewport(
         + stash_rows;
     let avail_below_input = area.height.saturating_sub(other_fixed_rows);
     let bottom_height: u16 = if popup_active {
-        popup_row_budget(avail_below_input)
+        popup_row_budget(popup_items, avail_below_input)
     } else {
         status_height.min(avail_below_input)
     };
@@ -452,8 +452,17 @@ fn render_live_viewport(
     }
 }
 
-fn popup_row_budget(avail_below_input: u16) -> u16 {
-    SuggestionPopup::DEFAULT_MAX_VISIBLE.min(avail_below_input)
+/// Rows to reserve for the active suggestion popup: as many as there are
+/// items, capped at `DEFAULT_MAX_VISIBLE` and by the space below the input.
+///
+/// Sizing to the item count — rather than always reserving the full cap —
+/// keeps the composer's vertical shift proportional to the popup (a 2-item
+/// popup shifts the input ~2 rows, not 10). Mirrors codex's content-based
+/// `calculate_required_height`. The widget renders exactly one row per item
+/// with no border/title/hint chrome, so item count is the exact row need.
+fn popup_row_budget(item_count: usize, avail_below_input: u16) -> u16 {
+    let rows = item_count.min(SuggestionPopup::DEFAULT_MAX_VISIBLE as usize) as u16;
+    rows.min(avail_below_input)
 }
 
 pub(crate) fn build_live_tail_lines(

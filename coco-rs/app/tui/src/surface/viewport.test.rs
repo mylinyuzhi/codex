@@ -50,18 +50,33 @@ fn interactive_viewport_desired_height_never_exceeds_cap() {
 }
 
 #[test]
-fn interactive_viewport_popup_height_is_stable_for_short_and_long_lists() {
+fn interactive_viewport_popup_height_tracks_item_count() {
+    // Content-sized popup (mirrors codex's `calculate_required_height`): the
+    // reserved rows — and thus the composer's vertical shift — scale with the
+    // item count, capped at DEFAULT_MAX_VISIBLE. A short list no longer
+    // reserves the full budget. Layout: 3 fixed composer rows + N popup rows.
     let short = state_with_popup_items(2);
     let medium = state_with_popup_items(5);
     let full = state_with_popup_items(SuggestionPopup::DEFAULT_MAX_VISIBLE as usize);
+    let over_cap = state_with_popup_items(SuggestionPopup::DEFAULT_MAX_VISIBLE as usize + 5);
 
-    let short_height = interactive_viewport_desired_height(&short, 48, 24, native_plan(), None);
-    let medium_height = interactive_viewport_desired_height(&medium, 48, 24, native_plan(), None);
-    let full_height = interactive_viewport_desired_height(&full, 48, 24, native_plan(), None);
-
-    assert_eq!(short_height, 13);
-    assert_eq!(medium_height, short_height);
-    assert_eq!(full_height, short_height);
+    assert_eq!(
+        interactive_viewport_desired_height(&short, 48, 24, native_plan(), None),
+        5
+    );
+    assert_eq!(
+        interactive_viewport_desired_height(&medium, 48, 24, native_plan(), None),
+        8
+    );
+    assert_eq!(
+        interactive_viewport_desired_height(&full, 48, 24, native_plan(), None),
+        13
+    );
+    // Beyond the cap the reservation clamps to DEFAULT_MAX_VISIBLE.
+    assert_eq!(
+        interactive_viewport_desired_height(&over_cap, 48, 24, native_plan(), None),
+        13
+    );
 }
 
 #[test]
