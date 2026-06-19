@@ -140,14 +140,22 @@ fn status_bar_splits_permission_pill_and_directory_onto_dynamic_lines() {
 }
 
 #[test]
-fn status_bar_collapses_to_single_line_in_default_state() {
+fn status_bar_surfaces_ask_mode_and_cycle_hint_in_default_state() {
     let _locale = locale_test_guard("en");
     let state = AppState::default();
-    assert_eq!(status_bar_height(&state), 1);
+    // Model line + the baseline permission line. No working dir → no line 3.
+    assert_eq!(status_bar_height(&state), 2);
     let StatusBarView::BuiltIn { lines } = status_bar_view(&state) else {
         panic!("expected built-in status bar");
     };
-    assert_eq!(lines.len(), 1);
+    assert_eq!(lines.len(), 2);
+    let line2 = lines[1]
+        .iter()
+        .map(|span| span.text.as_str())
+        .collect::<String>();
+    // Baseline mode is surfaced as `? ask` (own glyph, like other modes) plus
+    // the `·`-separated cycle hint shown uniformly across modes.
+    assert_eq!(line2, " ? ask · shift+tab to cycle");
 }
 
 #[test]

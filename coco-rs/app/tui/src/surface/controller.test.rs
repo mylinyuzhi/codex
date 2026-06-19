@@ -103,9 +103,11 @@ fn native_draw_emits_session_header_on_startup() {
 
 #[test]
 fn native_draw_appends_finalized_history_and_keeps_live_tail_in_viewport() {
-    let backend = TestBackend::new(48, 11);
+    // +1 row vs. the original 11/6 so the live tail keeps its size now that the
+    // baseline status bar occupies 2 rows (mode label + cycle hint).
+    let backend = TestBackend::new(48, 12);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
-    terminal.set_viewport_area(Rect::new(0, 5, 48, 6));
+    terminal.set_viewport_area(Rect::new(0, 5, 48, 7));
     let mut state = AppState::new();
     test_helpers::push_assistant_text(&mut state.session, "finalized");
     let mut streaming = StreamingState::new();
@@ -188,9 +190,10 @@ fn native_draw_defers_parallel_tool_batch_until_all_results_arrive() {
 
 #[test]
 fn native_draw_streams_in_viewport_then_appends_final_message_once() {
-    let backend = TestBackend::new(64, 18);
+    // +1 row vs. the original 18/6 to absorb the 2-row baseline status bar.
+    let backend = TestBackend::new(64, 19);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
-    terminal.set_viewport_area(Rect::new(0, 12, 64, 6));
+    terminal.set_viewport_area(Rect::new(0, 12, 64, 7));
     let mut state = AppState::new();
     let mut controller = NativeSurfaceController::default();
     controller
@@ -260,9 +263,10 @@ fn native_draw_keeps_stream_visible_with_stable_prefix_in_native_history() {
 
 #[test]
 fn native_draw_keeps_stream_visible_after_mid_stream_resize() {
-    let backend = TestBackend::new(64, 18);
+    // +1 row vs. the original 18/6 to absorb the 2-row baseline status bar.
+    let backend = TestBackend::new(64, 19);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
-    terminal.set_viewport_area(Rect::new(0, 12, 64, 6));
+    terminal.set_viewport_area(Rect::new(0, 12, 64, 7));
     let mut state = AppState::new();
     let mut controller = NativeSurfaceController::default();
     controller
@@ -275,7 +279,7 @@ fn native_draw_keeps_stream_visible_after_mid_stream_resize() {
     state.ui.streaming = Some(streaming);
     controller.draw(&mut terminal, &state).expect("stream draw");
 
-    terminal.set_viewport_area(Rect::new(0, 12, 32, 6));
+    terminal.set_viewport_area(Rect::new(0, 12, 32, 7));
     controller
         .draw(&mut terminal, &state)
         .expect("resize stream draw");
@@ -432,9 +436,10 @@ fn native_draw_appends_after_transcript_revision_changes() {
 
 #[test]
 fn native_draw_keeps_stream_visible_after_width_replay() {
-    let backend = TestBackend::new(64, 18);
+    // +1 row vs. the original 18/6 to absorb the 2-row baseline status bar.
+    let backend = TestBackend::new(64, 19);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
-    terminal.set_viewport_area(Rect::new(0, 12, 64, 6));
+    terminal.set_viewport_area(Rect::new(0, 12, 64, 7));
     let mut state = AppState::new();
     let mut controller = NativeSurfaceController::default();
     controller
@@ -450,7 +455,7 @@ fn native_draw_keeps_stream_visible_after_width_replay() {
     // A width change (terminal resize) reflows committed history — immediately
     // if the resized buffer forces it, otherwise after the debounce. Streaming
     // text remains viewport-only and must stay visible exactly once.
-    terminal.set_viewport_area(Rect::new(0, 12, 60, 6));
+    terminal.set_viewport_area(Rect::new(0, 12, 60, 7));
     let immediate = controller
         .draw(&mut terminal, &state)
         .expect("width change draw");
@@ -674,18 +679,19 @@ fn native_draw_keeps_input_bottom_stable_across_bottom_pinned_turn_states() {
         .draw(&mut terminal, &state)
         .expect("streaming draw");
     let input_bottom = streaming.layout.input.bottom();
-    assert_eq!(input_bottom, 23);
+    // 22 (not 23): the 2-row baseline status bar lifts the composer one row.
+    assert_eq!(input_bottom, 22);
 
     state.ui.streaming = None;
     test_helpers::push_assistant_text(&mut state.session, "first\n\nsecond\n\nthird");
-    apply_bottom_pinned_viewport(&mut terminal, /*height*/ 4);
+    apply_bottom_pinned_viewport(&mut terminal, /*height*/ 5);
     let turn_end = controller
         .draw(&mut terminal, &state)
         .expect("turn-end draw");
     assert_eq!(turn_end.layout.input.bottom(), input_bottom);
 
     state.session.prompt_suggestions = vec!["Run the focused surface tests".into()];
-    apply_bottom_pinned_viewport(&mut terminal, /*height*/ 4);
+    apply_bottom_pinned_viewport(&mut terminal, /*height*/ 5);
     let prompt_suggestion = controller
         .draw(&mut terminal, &state)
         .expect("prompt suggestion draw");
@@ -700,7 +706,7 @@ fn native_draw_keeps_input_bottom_stable_across_bottom_pinned_turn_states() {
         "[workspace]\nmembers = []",
         false,
     );
-    apply_bottom_pinned_viewport(&mut terminal, /*height*/ 4);
+    apply_bottom_pinned_viewport(&mut terminal, /*height*/ 5);
     let tool_result = controller
         .draw(&mut terminal, &state)
         .expect("tool-result draw");

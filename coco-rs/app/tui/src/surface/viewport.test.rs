@@ -35,7 +35,7 @@ fn interactive_viewport_desired_height_tracks_idle_composer() {
 
     assert_eq!(
         interactive_viewport_desired_height(&state, 48, 12, native_plan(), None),
-        4
+        5
     );
 }
 

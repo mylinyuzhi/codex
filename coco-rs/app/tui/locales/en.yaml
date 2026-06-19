@@ -700,7 +700,10 @@ task.type_remote: "remote"
 
 # ─── Permission mode banner ──────────────────────────────────
 permission_mode.banner_prefix: " ⚠ Permission: "
-permission_mode.default: "default"
+# The baseline mode. Named "ask" (not "default") because the name should say
+# what it does — prompt before sensitive actions — not just "the start value".
+# The wire/serde value stays `default`; this is the human-facing label only.
+permission_mode.default: "ask"
 permission_mode.accept_edits: "accept-edits"
 permission_mode.accept_edits_desc: " — file edits auto-approved. Reads and bash still prompt."
 permission_mode.plan: "plan"
@@ -714,9 +717,13 @@ permission_mode.auto_desc: " — auto-mode classifier in control. Review session
 permission_mode.bubble: "bubble"
 permission_mode.bubble_desc: " — escalating to parent agent for permission decisions."
 
-# Status-bar permission-mode labels. Mirror TS PromptInputFooterLeftSide
-# (`permissionModeTitle(mode).toLowerCase() + ' on'`). Default is omitted
-# — TS hides the mode indicator entirely when `hasActiveMode` is false.
+# Status-bar permission-mode labels. Override modes mirror TS
+# PromptInputFooterLeftSide (`permissionModeTitle(mode).toLowerCase() + ' on'`).
+# Unlike TS — which hides the indicator in the baseline mode — coco surfaces the
+# baseline as `ask` plus a shift+tab cycle hint, so the gesture is discoverable
+# from a fresh session.
+permission_mode.status.default: "ask"
+permission_mode.status.cycle_hint: "shift+tab to cycle"
 permission_mode.status.accept_edits: "accept edits on"
 permission_mode.status.plan: "plan mode on"
 permission_mode.status.bypass: "bypass permissions on"

@@ -245,13 +245,21 @@ fn separator(spans: &mut Vec<StatusSpan>) {
     spans.push(StatusSpan::new(" | ", StatusTone::Border));
 }
 
-/// Line 2: permission mode (`⏵⏵ auto mode on`) followed by the
-/// background-task pill (`· 1 agent · 2 shells`). Mirrors TS
-/// `PromptInputFooterLeftSide`. Empty in default mode with no running tasks.
+/// Line 2: permission mode + cycle hint (`? ask · shift+tab to cycle`,
+/// `⏵⏵ auto mode on · shift+tab to cycle`) followed by the background-task pill
+/// (`· 1 agent · 2 shells`). Always rendered — every mode (incl. the baseline)
+/// shows its glyph, label, and the shift+tab affordance uniformly.
 fn permission_and_tasks_line(state: &AppState) -> Vec<StatusSpan> {
     let mut spans = Vec::new();
     if let Some((symbol, label, tone)) = permission_mode_status(state.session.permission_mode) {
         spans.push(StatusSpan::new(format!(" {symbol} {label}"), tone));
+        // Every mode shows the cycle gesture, `·`-separated and dimmed, so the
+        // shift+tab affordance is uniform across modes.
+        spans.push(StatusSpan::new(" · ", StatusTone::Dim));
+        spans.push(StatusSpan::new(
+            t!("permission_mode.status.cycle_hint").to_string(),
+            StatusTone::Dim,
+        ));
     }
     if let Some(pill) = background_pill_label(state) {
         let lead = if spans.is_empty() { " " } else { " · " };
@@ -272,12 +280,14 @@ fn permission_and_tasks_line(state: &AppState) -> Vec<StatusSpan> {
     spans
 }
 
-/// Symbol + localized "… on" label + tone for the active permission mode.
-/// `⏸` for plan, `⏵⏵` for the auto-proceed modes, none for default. Tones
-/// match TS: auto → warning (yellow), bypass/dont-ask → error (red).
+/// Symbol + localized label + tone for the current permission mode.
+/// `?` for the baseline `ask` mode, `⏸` for plan, `⏵⏵` for the auto-proceed
+/// modes. The cycle hint is appended uniformly in [`permission_and_tasks_line`].
+/// Override-mode tones match TS: auto → warning (yellow), bypass/dont-ask →
+/// error (red); the baseline stays dim.
 fn permission_mode_status(mode: PermissionMode) -> Option<(&'static str, String, StatusTone)> {
     let (symbol, key, tone) = match mode {
-        PermissionMode::Default => return None,
+        PermissionMode::Default => ("?", "permission_mode.status.default", StatusTone::Dim),
         PermissionMode::AcceptEdits => (
             "⏵⏵",
             "permission_mode.status.accept_edits",
