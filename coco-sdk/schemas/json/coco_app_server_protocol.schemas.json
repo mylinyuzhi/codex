@@ -10708,6 +10708,13 @@
     "TaskProgressParams": {
       "description": "Matches TS `SDKTaskProgressMessage` (coreSchemas.ts:1750-1767).\nIn TS, `description` and `usage` are required; other fields optional.\nThe `workflow_progress` field carries the streaming state of local_workflow\ntasks \u2014 a delta batch of workflow state changes.",
       "properties": {
+        "agent_type": {
+          "description": "Declared subagent type (`Explore`/`Plan`/\u2026), mirrored from the\nprogress slot so the TUI can correct the `local_agent` fallback\nthat `TaskStarted` emits.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "description": {
           "type": "string"
         },
@@ -10881,7 +10888,29 @@
     },
     "TaskUsage": {
       "properties": {
+        "cache_read_tokens": {
+          "default": 0,
+          "format": "int64",
+          "type": "integer"
+        },
+        "cost_usd": {
+          "default": 0.0,
+          "description": "Real USD cost for completed subagent runs. `#[serde(default)]`\nkeeps older transcripts / mid-flight progress (which carry no\ncost) deserializing to `0.0`.",
+          "format": "double",
+          "type": "number"
+        },
         "duration_ms": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "input_tokens": {
+          "default": 0,
+          "description": "Input / output split + cache-read (the `\u2191in \u2193out` / cache-hit\ndimensions the panel and transcript summary show). `#[serde(default)]`\nfor back-compat with payloads that only carried `total_tokens`.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "output_tokens": {
+          "default": 0,
           "format": "int64",
           "type": "integer"
         },
@@ -12841,6 +12870,10 @@
         {
           "description": "Dispatcher-side breadcrumb for slash commands the runtime couldn't\nfully execute (missing handler, handler error, empty Prompt body,\ndialog wiring pending). The TUI translates `kind` via the i18n\ncatalog before rendering.",
           "properties": {
+            "args": {
+              "description": "Argument string the user typed after the command, used to render the\n`\u276f /name args` echo alongside the status. Empty when none was given.",
+              "type": "string"
+            },
             "kind": {
               "$ref": "#/$defs/SlashCommandStatusKind"
             },
@@ -12855,6 +12888,7 @@
           "required": [
             "type",
             "name",
+            "args",
             "kind"
           ],
           "type": "object"
@@ -13184,6 +13218,19 @@
           "required": [
             "type",
             "payload"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Open the interactive `/add-dir` overlay (no-argument form). The TUI\nshows a directory-path text input; confirm re-dispatches\n`/add-dir <path>` to reuse the validated session-add path. TS parity:\n`commands/add-dir/add-dir.tsx` \u2192 `<AddWorkspaceDirectory>`.",
+          "properties": {
+            "type": {
+              "const": "open_add_directory",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
           ],
           "type": "object"
         },

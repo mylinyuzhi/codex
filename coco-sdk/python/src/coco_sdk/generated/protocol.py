@@ -1858,6 +1858,7 @@ class TuiOnlyEventOpenContextUsage(BaseModel):
 class TuiOnlyEventSlashCommandStatus(BaseModel):
     model_config = {"populate_by_name": True}
     type_: Literal['slash_command_status'] = Field(default='slash_command_status', alias='type')
+    args: str
     kind: SlashCommandStatusKind
     name: str
 
@@ -1952,13 +1953,17 @@ class TuiOnlyEventOpenPermissionsEditor(BaseModel):
     type_: Literal['open_permissions_editor'] = Field(default='open_permissions_editor', alias='type')
     payload: PermissionsEditorPayload
 
+class TuiOnlyEventOpenAddDirectory(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['open_add_directory'] = Field(default='open_add_directory', alias='type')
+
 class TuiOnlyEventSkillOverridesSaved(BaseModel):
     model_config = {"populate_by_name": True}
     type_: Literal['skill_overrides_saved'] = Field(default='skill_overrides_saved', alias='type')
     result: SkillOverridesSaveResult
 
 TuiOnlyEvent = Annotated[
-    Union[TuiOnlyEventApprovalRequired, TuiOnlyEventQuestionAsked, TuiOnlyEventElicitationRequested, TuiOnlyEventSandboxApprovalRequired, TuiOnlyEventPermissionExplanationReady, TuiOnlyEventPluginDataReady, TuiOnlyEventOutputStylesReady, TuiOnlyEventAvailableCommandsRefreshed, TuiOnlyEventQueuedCommandEditReady, TuiOnlyEventQueuedCommandsEditReady, TuiOnlyEventQueuedCommandEditUnavailable, TuiOnlyEventOpenSessionBrowser, TuiOnlyEventRewindRowMetadataReady, TuiOnlyEventRewindRestorePreviewReady, TuiOnlyEventCompactionCircuitBreakerOpen, TuiOnlyEventMicroCompactionApplied, TuiOnlyEventSessionMemoryCompactApplied, TuiOnlyEventSpeculativeRolledBack, TuiOnlyEventSessionMemoryExtractionStarted, TuiOnlyEventSessionMemoryExtractionCompleted, TuiOnlyEventSessionMemoryExtractionFailed, TuiOnlyEventCronJobDisabled, TuiOnlyEventCronJobsMissed, TuiOnlyEventToolCallStreamStart, TuiOnlyEventToolCallDelta, TuiOnlyEventToolProgress, TuiOnlyEventToolInterruptibilityChanged, TuiOnlyEventToolExecutionAborted, TuiOnlyEventRewindCompleted, TuiOnlyEventSlashCommandResult, TuiOnlyEventOpenContextUsage, TuiOnlyEventSlashCommandStatus, TuiOnlyEventOpenRewindPicker, TuiOnlyEventOpenMemoryDialog, TuiOnlyEventCopyCommandRequested, TuiOnlyEventMemoryFileOpened, TuiOnlyEventMemoryFileOpenFailed, TuiOnlyEventPlanFileOpened, TuiOnlyEventPlanFileOpenFailed, TuiOnlyEventExternalEditorPrepare, TuiOnlyEventPromptEditorCompleted, TuiOnlyEventPromptEditorFailed, TuiOnlyEventBashCommandCompleted, TuiOnlyEventOpenModelPicker, TuiOnlyEventOpenSettings, TuiOnlyEventOpenThemePicker, TuiOnlyEventOpenSkillsDialog, TuiOnlyEventOpenPluginDialog, TuiOnlyEventOpenAgentsDialog, TuiOnlyEventOpenPermissionsEditor, TuiOnlyEventSkillOverridesSaved],
+    Union[TuiOnlyEventApprovalRequired, TuiOnlyEventQuestionAsked, TuiOnlyEventElicitationRequested, TuiOnlyEventSandboxApprovalRequired, TuiOnlyEventPermissionExplanationReady, TuiOnlyEventPluginDataReady, TuiOnlyEventOutputStylesReady, TuiOnlyEventAvailableCommandsRefreshed, TuiOnlyEventQueuedCommandEditReady, TuiOnlyEventQueuedCommandsEditReady, TuiOnlyEventQueuedCommandEditUnavailable, TuiOnlyEventOpenSessionBrowser, TuiOnlyEventRewindRowMetadataReady, TuiOnlyEventRewindRestorePreviewReady, TuiOnlyEventCompactionCircuitBreakerOpen, TuiOnlyEventMicroCompactionApplied, TuiOnlyEventSessionMemoryCompactApplied, TuiOnlyEventSpeculativeRolledBack, TuiOnlyEventSessionMemoryExtractionStarted, TuiOnlyEventSessionMemoryExtractionCompleted, TuiOnlyEventSessionMemoryExtractionFailed, TuiOnlyEventCronJobDisabled, TuiOnlyEventCronJobsMissed, TuiOnlyEventToolCallStreamStart, TuiOnlyEventToolCallDelta, TuiOnlyEventToolProgress, TuiOnlyEventToolInterruptibilityChanged, TuiOnlyEventToolExecutionAborted, TuiOnlyEventRewindCompleted, TuiOnlyEventSlashCommandResult, TuiOnlyEventOpenContextUsage, TuiOnlyEventSlashCommandStatus, TuiOnlyEventOpenRewindPicker, TuiOnlyEventOpenMemoryDialog, TuiOnlyEventCopyCommandRequested, TuiOnlyEventMemoryFileOpened, TuiOnlyEventMemoryFileOpenFailed, TuiOnlyEventPlanFileOpened, TuiOnlyEventPlanFileOpenFailed, TuiOnlyEventExternalEditorPrepare, TuiOnlyEventPromptEditorCompleted, TuiOnlyEventPromptEditorFailed, TuiOnlyEventBashCommandCompleted, TuiOnlyEventOpenModelPicker, TuiOnlyEventOpenSettings, TuiOnlyEventOpenThemePicker, TuiOnlyEventOpenSkillsDialog, TuiOnlyEventOpenPluginDialog, TuiOnlyEventOpenAgentsDialog, TuiOnlyEventOpenPermissionsEditor, TuiOnlyEventOpenAddDirectory, TuiOnlyEventSkillOverridesSaved],
     Field(discriminator='type_'),
 ]
 
@@ -2274,6 +2279,7 @@ class TaskProgressParams(BaseModel):
     description: str
     task_id: str
     usage: TaskUsage
+    agent_type: str | None = None
     last_tool_name: str | None = None
     recent_activities: list[TaskActivity] | None = None
     summary: str | None = None
@@ -4047,6 +4053,10 @@ class TaskUsage(BaseModel):
     duration_ms: int
     tool_uses: int
     total_tokens: int
+    cache_read_tokens: int = 0
+    cost_usd: float = 0.0
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 class TeammateIdleInput(BaseModel):
     cwd: str
