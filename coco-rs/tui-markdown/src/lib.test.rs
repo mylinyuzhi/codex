@@ -672,3 +672,75 @@ fn streaming_suppresses_mermaid_diagram() {
         "streaming should keep the verbatim source, got:\n{joined}"
     );
 }
+
+// ── Inline link destination rendering (G1 regression) ──
+//
+// Mirrors codex tui/src/markdown_render_tests.rs link coverage. coco has no
+// OSC 8 plumbing, so links degrade to the terminal-fallback form (the URL is
+// shown inline) rather than being silently dropped.
+
+#[test]
+fn inline_link_preserves_destination_url() {
+    let text = render_text("[click here](https://example.com/path)").join("\n");
+    assert!(text.contains("click here"), "missing link text: {text:?}");
+    assert!(
+        text.contains("https://example.com/path"),
+        "link destination dropped: {text:?}"
+    );
+}
+
+#[test]
+fn autolink_does_not_duplicate_destination() {
+    // An autolink's display text already equals its destination; rendering must
+    // not produce `url (url)`.
+    let text = render_text("<https://example.com>").join("\n");
+    assert_eq!(
+        text.matches("https://example.com").count(),
+        1,
+        "autolink destination duplicated: {text:?}"
+    );
+    assert!(!text.contains("(https://"), "spurious suffix: {text:?}");
+}
+
+#[test]
+fn bare_url_keeps_single_destination() {
+    // Robust whether or not pulldown GFM-autolinks the bare URL: either way the
+    // URL appears verbatim once and is never duplicated with a `(url)` suffix.
+    let text = render_text("see https://example.com now").join("\n");
+    assert!(
+        text.contains("https://example.com"),
+        "bare URL dropped: {text:?}"
+    );
+    assert!(!text.contains("(https://"), "bare URL duplicated: {text:?}");
+}
+
+#[test]
+fn mailto_link_shows_bare_address_without_scheme() {
+    let text = render_text("[Email me](mailto:user@example.com)").join("\n");
+    assert!(text.contains("Email me"), "missing link text: {text:?}");
+    assert!(
+        text.contains("user@example.com"),
+        "email address dropped: {text:?}"
+    );
+    assert!(
+        !text.contains("mailto:"),
+        "mailto scheme leaked into output: {text:?}"
+    );
+}
+
+#[test]
+fn inline_link_destination_uses_hyperlink_style() {
+    let theme = Theme::default();
+    let expected = UiStyles::new(&theme).hyperlink();
+    let lines = render_markdown(
+        "[click](https://example.com)",
+        MarkdownOptions::new(UiStyles::new(&theme), 80, SyntaxHighlighting::Enabled),
+        None,
+    );
+    let dest_span = lines
+        .iter()
+        .flat_map(|l| l.spans.iter())
+        .find(|s| s.content.contains("https://example.com"))
+        .expect("destination span present");
+    assert_eq!(dest_span.style.fg, Some(expected));
+}

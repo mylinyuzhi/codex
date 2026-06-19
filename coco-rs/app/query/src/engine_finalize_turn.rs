@@ -1261,18 +1261,11 @@ impl QueryEngine {
                         );
                         return;
                     }
-                    let prompt_id = uuid::Uuid::new_v4().to_string();
-                    let now = chrono::Utc::now().to_rfc3339();
+                    // The live suggestion surfaces via this notification
+                    // (TUI folds it into `session.prompt_suggestions`); coco
+                    // does not keep a parallel `ToolAppState.prompt_suggestion`
+                    // store — see the dropped write-only field.
                     let suggestion = generation.text.trim().to_string();
-                    let mut state = app_state.write().await;
-                    crate::prompt_suggestion::record_suggestion(
-                        &mut state,
-                        suggestion.clone(),
-                        prompt_id,
-                        now,
-                        generation.request_id,
-                    );
-                    drop(state);
                     let _delivered = emit_protocol(
                         &event_tx,
                         ServerNotification::PromptSuggestion {

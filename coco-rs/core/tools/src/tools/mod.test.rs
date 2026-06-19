@@ -251,3 +251,52 @@ async fn test_all_registered_tools_have_nonempty_spec_description() {
         );
     }
 }
+
+/// Guard against orphan modules: every non-test `.rs` file and every
+/// subdirectory module under `src/tools/` must be declared in `mod.rs`.
+///
+/// An un-`mod`'d file silently never compiles — taking its `*.test.rs`
+/// companion down with it and yielding a false-green suite (this is exactly how
+/// the dead `mcp_advanced` module hid). Mirrors codex's
+/// `tui/tests/manager_dependency_regression.rs`: scan the source tree and
+/// assert the wiring instead of trusting it.
+#[test]
+fn test_every_tools_module_is_declared_in_mod_rs() {
+    use std::fs;
+    use std::path::Path;
+
+    let tools_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tools");
+    let mod_rs = fs::read_to_string(tools_dir.join("mod.rs")).expect("read tools/mod.rs");
+
+    let mut expected: Vec<String> = Vec::new();
+    for entry in fs::read_dir(&tools_dir).expect("read src/tools") {
+        let entry = entry.expect("dir entry");
+        let file_type = entry.file_type().expect("file type");
+        if file_type.is_dir() {
+            // A subdirectory is a module iff it carries a `mod.rs`.
+            if entry.path().join("mod.rs").is_file() {
+                expected.push(entry.file_name().to_string_lossy().into_owned());
+            }
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        // Skip non-Rust, the module root itself, and `*.test.rs` companions
+        // (those are wired via `#[path]` inside their sibling, not `mod.rs`).
+        if !name.ends_with(".rs") || name == "mod.rs" || name.ends_with(".test.rs") {
+            continue;
+        }
+        expected.push(name.trim_end_matches(".rs").to_string());
+    }
+
+    let missing: Vec<&String> = expected
+        .iter()
+        .filter(|stem| !mod_rs.contains(&format!("mod {stem};")))
+        .collect();
+
+    assert!(
+        missing.is_empty(),
+        "orphan module(s) under src/tools/ not declared in mod.rs: {missing:?}\n\
+         An un-mod'd file never compiles and its *.test.rs companion is silently \
+         dead. Add `mod <name>;` to mod.rs or delete the file."
+    );
+}

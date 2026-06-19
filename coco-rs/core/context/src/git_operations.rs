@@ -55,11 +55,6 @@ pub fn parse_commit_sha(text: &str) -> Option<String> {
     None
 }
 
-/// Generate a co-authored-by line for commit attribution.
-pub fn co_authored_by_line(name: &str, email: &str) -> String {
-    format!("Co-Authored-By: {name} <{email}>")
-}
-
 /// Get the list of staged files.
 pub fn get_staged_files(cwd: &Path) -> Vec<String> {
     let output = Command::new("git")

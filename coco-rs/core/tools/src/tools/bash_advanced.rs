@@ -34,27 +34,6 @@ const MAX_IMAGE_FILE_SIZE: usize = 20 * 1024 * 1024;
 
 // ── Command classification sets ──
 
-static SEARCH_COMMANDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
-    [
-        "find", "grep", "rg", "ag", "ack", "locate", "which", "whereis",
-    ]
-    .into_iter()
-    .collect()
-});
-
-static READ_COMMANDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
-    [
-        "cat", "head", "tail", "less", "more", // view
-        "wc", "stat", "file", "strings", // analysis
-        "jq", "awk", "cut", "sort", "uniq", "tr", // data processing
-    ]
-    .into_iter()
-    .collect()
-});
-
-static LIST_COMMANDS: LazyLock<HashSet<&'static str>> =
-    LazyLock::new(|| ["ls", "tree", "du"].into_iter().collect());
-
 static SEMANTIC_NEUTRAL_COMMANDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     ["echo", "printf", "true", "false", ":"]
         .into_iter()
@@ -69,10 +48,6 @@ static SILENT_COMMANDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     .into_iter()
     .collect()
 });
-
-/// Commands that should not be auto-backgrounded.
-static DISALLOWED_AUTO_BACKGROUND: LazyLock<HashSet<&'static str>> =
-    LazyLock::new(|| ["sleep"].into_iter().collect());
 
 /// Common long-running commands (for analytics/classification).
 static COMMON_BACKGROUND_COMMANDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
@@ -103,106 +78,6 @@ static COMMON_BACKGROUND_COMMANDS: LazyLock<HashSet<&'static str>> = LazyLock::n
     .into_iter()
     .collect()
 });
-
-// ── Command classification ──
-
-/// Result of classifying a command as search, read, or list.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CommandClassification {
-    pub is_search: bool,
-    pub is_read: bool,
-    pub is_list: bool,
-}
-
-impl CommandClassification {
-    /// Whether the command is collapsible in the UI.
-    pub fn is_collapsible(&self) -> bool {
-        self.is_search || self.is_read || self.is_list
-    }
-}
-
-/// Classify a bash command as search, read, list, or none.
-///
-/// For pipelines, ALL non-neutral parts must be search/read/list for the
-/// whole command to be collapsible.
-pub fn classify_command(command: &str) -> CommandClassification {
-    let parts = split_command_with_operators(command);
-    if parts.is_empty() {
-        return CommandClassification {
-            is_search: false,
-            is_read: false,
-            is_list: false,
-        };
-    }
-
-    let mut has_search = false;
-    let mut has_read = false;
-    let mut has_list = false;
-    let mut has_non_neutral = false;
-    let mut skip_next_as_redirect = false;
-
-    for part in &parts {
-        if skip_next_as_redirect {
-            skip_next_as_redirect = false;
-            continue;
-        }
-
-        match part.as_str() {
-            ">" | ">>" | ">&" => {
-                skip_next_as_redirect = true;
-                continue;
-            }
-            "||" | "&&" | "|" | ";" => continue,
-            _ => {}
-        }
-
-        let base_command = part.split_whitespace().next().unwrap_or("");
-        if base_command.is_empty() {
-            continue;
-        }
-
-        if SEMANTIC_NEUTRAL_COMMANDS.contains(base_command) {
-            continue;
-        }
-
-        has_non_neutral = true;
-        let is_part_search = SEARCH_COMMANDS.contains(base_command);
-        let is_part_read = READ_COMMANDS.contains(base_command);
-        let is_part_list = LIST_COMMANDS.contains(base_command);
-
-        if !is_part_search && !is_part_read && !is_part_list {
-            return CommandClassification {
-                is_search: false,
-                is_read: false,
-                is_list: false,
-            };
-        }
-
-        if is_part_search {
-            has_search = true;
-        }
-        if is_part_read {
-            has_read = true;
-        }
-        if is_part_list {
-            has_list = true;
-        }
-    }
-
-    if !has_non_neutral {
-        return CommandClassification {
-            is_search: false,
-            is_read: false,
-            is_list: false,
-        };
-    }
-
-    CommandClassification {
-        is_search: has_search,
-        is_read: has_read,
-        is_list: has_list,
-    }
-}
 
 /// Check if a command is expected to produce no stdout on success.
 pub fn is_silent_command(command: &str) -> bool {
@@ -254,12 +129,6 @@ pub fn is_silent_command(command: &str) -> bool {
 
 // ── Auto-backgrounding ──
 
-/// Whether a command is allowed to be automatically backgrounded.
-pub fn is_auto_backgrounding_allowed(command: &str) -> bool {
-    let base = command.split_whitespace().next().unwrap_or("");
-    !DISALLOWED_AUTO_BACKGROUND.contains(base)
-}
-
 /// Detect standalone or leading `sleep N` patterns that should use Monitor.
 ///
 /// Returns a description of the blocked pattern, or `None` if allowed.
@@ -290,48 +159,6 @@ pub fn detect_blocked_sleep_pattern(command: &str) -> Option<String> {
 // Command-semantics interpretation lives in the single canonical
 // `coco_shell::semantics::interpret_command_result`. A duplicate implementation
 // previously lived here and was never wired — removed per the no-duplicate-helper rule.
-
-// ── Output processing ──
-
-/// Truncate output with intelligent boundaries (line-aware).
-pub fn truncate_output_intelligent(output: &str, max_bytes: usize) -> (String, bool) {
-    if output.len() <= max_bytes {
-        return (strip_empty_lines(output), false);
-    }
-
-    // Find the last newline within the budget to avoid splitting mid-line
-    let truncated = &output[..max_bytes];
-    let break_point = truncated.rfind('\n').map(|p| p + 1).unwrap_or(max_bytes);
-
-    let result = &output[..break_point];
-    let stripped = strip_empty_lines(result);
-    let note = format!(
-        "\n... (output truncated, {total} bytes total)",
-        total = output.len()
-    );
-    (format!("{stripped}{note}"), true)
-}
-
-/// Strip leading and trailing lines that contain only whitespace.
-pub fn strip_empty_lines(content: &str) -> String {
-    let lines: Vec<&str> = content.split('\n').collect();
-
-    let start = lines
-        .iter()
-        .position(|l| !l.trim().is_empty())
-        .unwrap_or(lines.len());
-    let end = lines
-        .iter()
-        .rposition(|l| !l.trim().is_empty())
-        .map(|e| e + 1)
-        .unwrap_or(0);
-
-    if start >= end {
-        return String::new();
-    }
-
-    lines[start..end].join("\n")
-}
 
 // ── Image output detection ──
 

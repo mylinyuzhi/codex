@@ -61,7 +61,6 @@ pub use app_state::AppStateReadHandle;
 pub use app_state::ElicitationGuard;
 pub use app_state::PendingPermissionGuard;
 pub use app_state::PendingPlanVerificationState;
-pub use app_state::PromptSuggestion;
 pub use app_state::ToolAppState;
 
 // Per-provider rate-limit state (lives on `ToolAppState.rate_limits`).

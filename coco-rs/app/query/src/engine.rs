@@ -224,8 +224,8 @@ pub struct QueryEngine {
     /// turn's last request, so post-turn forks (`/btw`,
     /// `promptSuggestion`, `postTurnSummary`) can share the parent's
     /// prompt cache by sending byte-identical request prefixes. Read
-    /// via [`Self::last_cache_safe_params`]; cleared by
-    /// [`Self::clear_cache_safe_params`] on `/clear` regen.
+    /// via [`Self::last_cache_safe_params`]; reset to `None` on each
+    /// engine rebuild.
     ///
     /// `Arc<RwLock<...>>` so observers (TUI status, transcript recorder)
     /// can read the slot without contending with the engine's writer side.

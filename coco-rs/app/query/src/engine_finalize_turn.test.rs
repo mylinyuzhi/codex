@@ -282,7 +282,7 @@ async fn build_suggestion_context_rate_limit_empty_provider_fails_open() {
 }
 
 #[tokio::test]
-async fn maybe_spawn_prompt_suggestion_records_and_emits_protocol_event() {
+async fn maybe_spawn_prompt_suggestion_emits_protocol_event() {
     let model = Arc::new(DummyModel);
     let model_runtimes = crate::test_support::model_runtime_registry(model);
     let tools = Arc::new(coco_tool_runtime::ToolRegistry::new());
@@ -320,18 +320,6 @@ async fn maybe_spawn_prompt_suggestion_records_and_emits_protocol_event() {
         }
         other => panic!("expected PromptSuggestion protocol event, got {other:?}"),
     }
-
-    let state = app_state.read().await;
-    let suggestion = state
-        .prompt_suggestion
-        .as_ref()
-        .expect("suggestion should be recorded in app state");
-    assert_eq!(suggestion.text, "run cargo check");
-    assert_eq!(
-        suggestion.generation_request_id.as_deref(),
-        Some("req-suggest")
-    );
-    drop(state);
 
     let prompt = dispatcher
         .prompt

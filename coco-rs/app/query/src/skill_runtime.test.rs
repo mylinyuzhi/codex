@@ -204,7 +204,7 @@ async fn test_inline_skill_substitutes_skill_dir_and_session_id() {
 
 #[tokio::test]
 async fn test_inline_skill_expands_arguments() {
-    // `expand_skill_prompt_simple` substitutes $ARGUMENTS with the
+    // `expand_skill_prompt` substitutes $ARGUMENTS with the
     // raw args string. Prove the substitution happens.
     let skill = sample_skill(
         "echo",

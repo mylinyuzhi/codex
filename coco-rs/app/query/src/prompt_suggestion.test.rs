@@ -5,48 +5,7 @@ use coco_messages::Message;
 use coco_messages::StopReason;
 use coco_messages::TextContent;
 use coco_types::TokenUsage;
-use coco_types::ToolAppState;
 use uuid::Uuid;
-
-fn default_state() -> ToolAppState {
-    ToolAppState::default()
-}
-
-#[test]
-fn test_record_then_mark_accepted() {
-    let mut state = default_state();
-    record_suggestion(
-        &mut state,
-        "show the diff".into(),
-        "p1".into(),
-        "2026-05-01T00:00:00Z".into(),
-        Some("turn-7".into()),
-    );
-    let s = state.prompt_suggestion.as_ref().unwrap();
-    assert_eq!(s.text, "show the diff");
-    assert_eq!(s.prompt_id, "p1");
-    assert!(s.accepted_at.is_none());
-
-    let did_mark = mark_accepted(&mut state, "2026-05-01T00:00:05Z".into());
-    assert!(did_mark);
-    let s = state.prompt_suggestion.as_ref().unwrap();
-    assert_eq!(s.accepted_at.as_deref(), Some("2026-05-01T00:00:05Z"));
-}
-
-#[test]
-fn test_mark_accepted_no_suggestion_returns_false() {
-    let mut state = default_state();
-    assert!(!mark_accepted(&mut state, "2026-05-01T00:00:00Z".into()));
-}
-
-#[test]
-fn test_clear_drops_suggestion() {
-    let mut state = default_state();
-    record_suggestion(&mut state, "x".into(), "p1".into(), "t".into(), None);
-    assert!(state.prompt_suggestion.is_some());
-    clear_suggestion(&mut state);
-    assert!(state.prompt_suggestion.is_none());
-}
 
 #[test]
 fn test_system_prompt_byte_faithful_with_ts() {
