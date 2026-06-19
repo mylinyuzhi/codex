@@ -1612,3 +1612,41 @@ async fn test_bash_read_outside_tree_not_fenced() {
         "out-of-tree read must not Ask, got {result:?}"
     );
 }
+
+// ── Out-of-tree write force-ask wiring (G4) ──
+//
+// A filesystem write whose target is OUTSIDE the allowed working dirs must
+// force `Ask` from `check_permissions` (evaluator step-1b), so it cannot be
+// auto-allowed by mode / allow-rules. `is_path_within_allowed_dirs` and
+// `extract_write_path_targets` are unit-tested elsewhere; this proves the Bash
+// tool actually wires them into its permission check.
+#[tokio::test]
+async fn test_bash_out_of_tree_write_forces_ask() {
+    let mut ctx = ToolUseContext::test_default();
+    // Pin cwd so the assertion does not depend on the test runner's cwd.
+    ctx.cwd_override = Some(std::env::temp_dir());
+
+    let result = <BashTool as DynTool>::check_permissions(
+        &BashTool,
+        &json!({"command": "cp secret.txt /opt/coco-oob-test/data.txt"}),
+        &ctx,
+    )
+    .await;
+    assert!(
+        matches!(
+            &result,
+            coco_types::ToolCheckResult::Ask { message, .. }
+                if message.contains("outside the allowed working")
+        ),
+        "out-of-tree write must force Ask: {result:?}"
+    );
+
+    // Negative control: an in-tree read-only command is not gated.
+    let benign =
+        <BashTool as DynTool>::check_permissions(&BashTool, &json!({"command": "ls -la"}), &ctx)
+            .await;
+    assert!(
+        matches!(benign, coco_types::ToolCheckResult::Passthrough),
+        "read-only command must pass through, got {benign:?}"
+    );
+}

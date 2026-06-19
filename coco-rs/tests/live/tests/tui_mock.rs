@@ -119,7 +119,6 @@ async fn test_tui_interrupt_inflight() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore = "harness lacks permission bridge wiring — see harness.rs:783"]
 async fn test_tui_permission_round_trip() -> Result<()> {
     tui::suite::permission_round_trip::run().await
 }

@@ -288,19 +288,6 @@ pub struct ToolAppState {
     /// reconstructed from prior delta attachments.
     pub last_announced_mcp_instructions: std::collections::HashMap<String, String>,
 
-    // ── Prompt suggestion (P5 / TS parity) ───────────────────────────
-    /// Most recently generated prompt suggestion, surfaced as dim
-    /// placeholder text in the input area. Populated by the post-turn
-    /// promptSuggestion service (`services/prompt-suggestion`); read
-    /// by the TUI input renderer to draw the suggestion behind the
-    /// user's cursor. `None` after `/clear` regen, sessions that have
-    /// the feature gate off, or when the model declined to suggest
-    /// anything.
-    ///
-    /// TS parity: `appState.promptSuggestion` written by
-    /// `services/PromptSuggestion/promptSuggestion.ts:203-212`.
-    pub prompt_suggestion: Option<PromptSuggestion>,
-
     // ── Agent progress summaries gate (TS parity) ──────────────────
     /// Whether per-spawn periodic AgentSummary timers should run.
     ///
@@ -438,31 +425,6 @@ impl Drop for ElicitationGuard {
     fn drop(&mut self) {
         self.counter.fetch_sub(1, Ordering::Relaxed);
     }
-}
-
-/// A user-prompt suggestion produced by the post-turn forked
-/// promptSuggestion service. Stored on [`ToolAppState`] so the TUI
-/// can render it behind the cursor and the SDK can emit it as
-/// metadata when the user accepts or ignores it on the next turn.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PromptSuggestion {
-    /// The suggestion text — typically 3-12 words, matching the
-    /// user's style.
-    pub text: String,
-    /// Stable id for telemetry. Generated when the suggestion is
-    /// written.
-    pub prompt_id: String,
-    /// Wall-clock timestamp the suggestion was shown to the user
-    /// (RFC-3339). Lets analytics measure dwell-to-accept latency.
-    pub shown_at: String,
-    /// Set when the user explicitly accepted the suggestion. None
-    /// while pending.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub accepted_at: Option<String>,
-    /// Optional id of the parent turn that drove the suggestion.
-    /// Used to correlate suggestion → cache-hit telemetry.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub generation_request_id: Option<String>,
 }
 
 // ────────────────────────────────────────────────────────────────

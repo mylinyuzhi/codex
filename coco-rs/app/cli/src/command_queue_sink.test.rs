@@ -21,7 +21,9 @@ async fn push_terminal_uses_later_priority() {
     let q = CommandQueue::new();
     let sink = CommandQueueNotificationSink::new(q.clone());
     sink.push(shell_terminal("a", None)).await;
-    let drained = q.dequeue_all(None).await;
+    let drained = q
+        .dequeue_matching(|c| !c.is_slash_command && c.agent_id.is_none())
+        .await;
     assert_eq!(drained.len(), 1);
     assert_eq!(drained[0].priority, QueuePriority::Later);
 }
@@ -41,7 +43,9 @@ async fn push_stall_uses_next_priority() {
         },
     })
     .await;
-    let drained = q.dequeue_all(None).await;
+    let drained = q
+        .dequeue_matching(|c| !c.is_slash_command && c.agent_id.is_none())
+        .await;
     assert_eq!(drained.len(), 1);
     assert_eq!(drained[0].priority, QueuePriority::Next);
     assert!(!drained[0].prompt.contains("<status>"));
@@ -98,7 +102,9 @@ async fn agent_terminal_envelope_includes_result_usage_worktree() {
         },
     })
     .await;
-    let drained = q.dequeue_all(None).await;
+    let drained = q
+        .dequeue_matching(|c| !c.is_slash_command && c.agent_id.is_none())
+        .await;
     assert_eq!(drained.len(), 1);
     let xml = &drained[0].prompt;
     assert!(xml.contains("<result>found 3 callers</result>"));

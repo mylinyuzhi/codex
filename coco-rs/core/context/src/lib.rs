@@ -26,7 +26,6 @@ pub mod prompt;
 pub mod prompt_suggestion;
 pub mod suggestions;
 pub mod user_input;
-pub mod vim_mode;
 
 pub use attachment::Attachment;
 pub use attachment::AttachmentBatch;

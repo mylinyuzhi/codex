@@ -979,3 +979,63 @@ fn subagent(
         cost_usd: 0.0,
     }
 }
+
+#[test]
+fn test_model_role_changed_folds_into_session_and_role_map() {
+    // G6: the engine→TUI half of the model-picker round-trip. `protocol.rs`
+    // folds `ModelRoleChanged` into `model_by_role` (every role) and mirrors
+    // the Main role into the status-bar fields. Previously untested.
+    let mut state = AppState::new();
+
+    handle_core_event(
+        &mut state,
+        CoreEvent::Protocol(ServerNotification::ModelRoleChanged(
+            coco_types::ModelRoleChangedParams {
+                role: coco_types::ModelRole::Main,
+                model_id: "claude-opus-4-8".into(),
+                provider: "anthropic".into(),
+                context_window: Some(200_000),
+                effort: Some(coco_types::ReasoningEffort::High),
+            },
+        )),
+    );
+    assert_eq!(state.session.model, "claude-opus-4-8");
+    assert_eq!(state.session.provider, "anthropic");
+    assert_eq!(
+        state.session.thinking_effort,
+        coco_types::ReasoningEffort::High
+    );
+    let main = state
+        .session
+        .model_by_role
+        .get(&coco_types::ModelRole::Main)
+        .expect("Main binding folded into model_by_role");
+    assert_eq!(main.model_id, "claude-opus-4-8");
+    assert_eq!(main.provider, "anthropic");
+    assert_eq!(main.context_window, Some(200_000));
+
+    // A non-Main role updates ONLY the role map — the status-bar fields
+    // (read directly from `session.model`) keep showing Main.
+    handle_core_event(
+        &mut state,
+        CoreEvent::Protocol(ServerNotification::ModelRoleChanged(
+            coco_types::ModelRoleChangedParams {
+                role: coco_types::ModelRole::Fast,
+                model_id: "claude-haiku-4-5".into(),
+                provider: "anthropic".into(),
+                context_window: Some(200_000),
+                effort: None,
+            },
+        )),
+    );
+    assert_eq!(
+        state.session.model, "claude-opus-4-8",
+        "non-Main role must not overwrite the status-bar model"
+    );
+    let fast = state
+        .session
+        .model_by_role
+        .get(&coco_types::ModelRole::Fast)
+        .expect("Fast binding folded into model_by_role");
+    assert_eq!(fast.model_id, "claude-haiku-4-5");
+}

@@ -1,77 +1,5 @@
 use super::*;
 
-// ── classify_command tests ──
-
-#[test]
-fn test_classify_search_command() {
-    let result = classify_command("grep -r 'pattern' src/");
-    assert!(result.is_search);
-    assert!(!result.is_read);
-    assert!(!result.is_list);
-    assert!(result.is_collapsible());
-}
-
-#[test]
-fn test_classify_read_command() {
-    let result = classify_command("cat file.rs");
-    assert!(!result.is_search);
-    assert!(result.is_read);
-    assert!(!result.is_list);
-    assert!(result.is_collapsible());
-}
-
-#[test]
-fn test_classify_list_command() {
-    let result = classify_command("ls -la");
-    assert!(!result.is_search);
-    assert!(!result.is_read);
-    assert!(result.is_list);
-    assert!(result.is_collapsible());
-}
-
-#[test]
-fn test_classify_pipeline_mixed_search_and_read() {
-    let result = classify_command("grep pattern file | sort | uniq");
-    assert!(result.is_search);
-    assert!(result.is_read);
-    assert!(!result.is_list);
-    assert!(result.is_collapsible());
-}
-
-#[test]
-fn test_classify_non_collapsible_command() {
-    let result = classify_command("npm install");
-    assert!(!result.is_collapsible());
-}
-
-#[test]
-fn test_classify_neutral_plus_read() {
-    // echo is neutral, ls is list — overall should be list
-    let result = classify_command("ls dir && echo '---' && ls dir2");
-    assert!(result.is_list);
-    assert!(result.is_collapsible());
-}
-
-#[test]
-fn test_classify_only_neutral() {
-    // Only neutral commands — not collapsible
-    let result = classify_command("echo hello");
-    assert!(!result.is_collapsible());
-}
-
-#[test]
-fn test_classify_pipeline_with_non_read() {
-    // cat is read but python is not — pipeline breaks collapsibility
-    let result = classify_command("cat file | python process.py");
-    assert!(!result.is_collapsible());
-}
-
-#[test]
-fn test_classify_empty_command() {
-    let result = classify_command("");
-    assert!(!result.is_collapsible());
-}
-
 // ── is_silent_command tests ──
 
 #[test]
@@ -98,36 +26,6 @@ fn test_non_silent_with_output() {
 // `coco_shell::semantics` (see `exec/shell/src/semantics.test.rs`); the
 // duplicate interpreter that lived here was removed.
 
-// ── truncate_output_intelligent tests ──
-
-#[test]
-fn test_truncate_short_output() {
-    let (result, truncated) = truncate_output_intelligent("hello\nworld\n", 1000);
-    assert!(!truncated);
-    assert_eq!(result, "hello\nworld");
-}
-
-#[test]
-fn test_truncate_long_output() {
-    let long = "a\n".repeat(100_000);
-    let (result, truncated) = truncate_output_intelligent(&long, 100);
-    assert!(truncated);
-    assert!(result.contains("output truncated"));
-    assert!(result.len() < long.len());
-}
-
-// ── strip_empty_lines tests ──
-
-#[test]
-fn test_strip_empty_lines_basic() {
-    assert_eq!(strip_empty_lines("\n\nhello\nworld\n\n"), "hello\nworld");
-}
-
-#[test]
-fn test_strip_empty_lines_all_empty() {
-    assert_eq!(strip_empty_lines("\n\n\n"), "");
-}
-
 // ── is_image_output tests ──
 
 #[test]
@@ -149,15 +47,6 @@ fn test_parse_data_uri() {
 #[test]
 fn test_parse_data_uri_invalid() {
     assert!(parse_data_uri("not a data uri").is_none());
-}
-
-// ── auto-backgrounding tests ──
-
-#[test]
-fn test_auto_background_allowed() {
-    assert!(is_auto_backgrounding_allowed("npm install"));
-    assert!(is_auto_backgrounding_allowed("cargo build"));
-    assert!(!is_auto_backgrounding_allowed("sleep 10"));
 }
 
 // ── detect_blocked_sleep_pattern tests ──

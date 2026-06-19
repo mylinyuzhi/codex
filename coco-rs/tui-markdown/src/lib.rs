@@ -462,6 +462,12 @@ fn normalize_reference_label(label: &str) -> Option<String> {
 // Writer
 // ─────────────────────────────────────────────────────────────────────────
 
+/// Inline-link render state captured between `Tag::Link` and `TagEnd::Link`.
+struct LinkRender {
+    dest_url: String,
+    text: String,
+}
+
 struct TableBuilder {
     aligns: Vec<Alignment>,
     header: Vec<String>,
@@ -500,6 +506,10 @@ struct Writer<'a> {
     code_buf: String,
 
     table: Option<TableBuilder>,
+    /// Active inline link: destination + accumulated display text. Closing the
+    /// link appends the destination inline (see `finish_link`) so the URL is
+    /// not silently dropped.
+    link: Option<LinkRender>,
 
     lead_marker: Option<Span<'static>>,
     /// Display width of `lead_marker` ("{glyph} "), used to align the first
@@ -535,6 +545,7 @@ impl<'a> Writer<'a> {
             code_lang: String::new(),
             code_buf: String::new(),
             table: None,
+            link: None,
             lead_marker,
             lead_marker_width,
             first_line_emitted: false,
@@ -805,11 +816,17 @@ impl<'a> Writer<'a> {
                     .fg(self.styles.strikethrough())
                     .add_modifier(Modifier::CROSSED_OUT),
             ),
-            Tag::Link { .. } => self.push_style(
-                Style::default()
-                    .fg(self.styles.hyperlink())
-                    .add_modifier(Modifier::UNDERLINED),
-            ),
+            Tag::Link { dest_url, .. } => {
+                self.link = Some(LinkRender {
+                    dest_url: dest_url.to_string(),
+                    text: String::new(),
+                });
+                self.push_style(
+                    Style::default()
+                        .fg(self.styles.hyperlink())
+                        .add_modifier(Modifier::UNDERLINED),
+                );
+            }
             // Suppress image markup; alt text (Text events) renders inline.
             Tag::Image { .. } => self.push_style(Style::default()),
             // Not enabled (math/deflist/super-sub/footnote/html-block/metadata);
@@ -872,10 +889,13 @@ impl<'a> Writer<'a> {
                     t.cur_row.push(cell);
                 }
             }
+            TagEnd::Link => {
+                self.pop_style();
+                self.finish_link();
+            }
             TagEnd::Emphasis
             | TagEnd::Strong
             | TagEnd::Strikethrough
-            | TagEnd::Link
             | TagEnd::Image
             | TagEnd::Superscript
             | TagEnd::Subscript => self.pop_style(),
@@ -900,8 +920,44 @@ impl<'a> Writer<'a> {
         if text.is_empty() {
             return;
         }
+        if let Some(link) = self.link.as_mut() {
+            link.text.push_str(text);
+        }
         self.spans
             .push(Span::styled(text.to_string(), self.cur_style));
+    }
+
+    /// Append the link destination inline at `TagEnd::Link` so the URL is not
+    /// silently dropped.
+    ///
+    /// coco's native paint engine has no OSC 8 plumbing — embedding escape
+    /// sequences in span content would corrupt width-aware wrapping — so links
+    /// degrade to the terminal-fallback form claude-code uses when hyperlinks
+    /// are unsupported: the destination is shown. A `mailto:` shows the bare
+    /// address; an autolink / bare URL (display text already equal to the
+    /// destination) is not duplicated.
+    fn finish_link(&mut self) {
+        let Some(link) = self.link.take() else {
+            return;
+        };
+        let dest = link.dest_url.trim();
+        if dest.is_empty() {
+            return;
+        }
+        let display_dest = dest.strip_prefix("mailto:").unwrap_or(dest);
+        let text = link.text.trim();
+        if text == display_dest {
+            return;
+        }
+        let suffix = if text.is_empty() {
+            display_dest.to_string()
+        } else {
+            format!(" ({display_dest})")
+        };
+        self.spans.push(Span::styled(
+            suffix,
+            Style::default().fg(self.styles.hyperlink()),
+        ));
     }
 
     fn on_inline_code(&mut self, code: &str) {

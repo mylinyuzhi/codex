@@ -312,24 +312,6 @@ impl CommandQueue {
         Some(matched)
     }
 
-    /// Remove and return all non-slash commands for the given agent.
-    pub async fn dequeue_all(&self, agent_id: Option<&str>) -> Vec<QueuedCommand> {
-        let mut queue = self.inner.lock().await;
-        let mut drained = Vec::new();
-        let mut i = 0;
-        while i < queue.len() {
-            if !queue[i].is_slash_command && queue[i].agent_id.as_deref() == agent_id {
-                drained.push(queue.remove(i));
-            } else {
-                i += 1;
-            }
-        }
-        if !drained.is_empty() {
-            self.changed.notify_waiters();
-        }
-        drained
-    }
-
     /// Clear the entire queue.
     pub async fn clear(&self) {
         let mut queue = self.inner.lock().await;

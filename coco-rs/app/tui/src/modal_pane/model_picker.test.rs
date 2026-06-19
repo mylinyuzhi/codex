@@ -167,3 +167,47 @@ fn filtered_models_matches_provider_display() {
     assert_eq!(filtered.len(), 1);
     assert_eq!(filtered[0].provider, "openai");
 }
+
+#[tokio::test]
+async fn confirm_emits_set_model_role_and_updates_main_model() {
+    // G6: the TUI→engine half of the model-picker round-trip. Selecting an
+    // available model must emit `SetModelRole` (so the engine actually
+    // rebinds the role) AND optimistically update the status-bar model for
+    // Main. Previously untested — a regression here means the picker UI
+    // updates but the next turn keeps using the old model.
+    let (tx, mut rx) = mpsc::channel::<UserCommand>(4);
+    let mut s = AppState::new();
+    let m = ModelPickerState {
+        role: ModelRole::Main,
+        entries: vec![entry(
+            "claude-opus-4-8",
+            &[ReasoningEffort::High],
+            Some(ReasoningEffort::High),
+        )],
+        filter: String::new(),
+        selected: 0,
+        effort: Some(ReasoningEffort::High),
+    };
+    super::confirm(&mut s, m, &tx).await;
+
+    match rx.try_recv() {
+        Ok(UserCommand::SetModelRole {
+            role,
+            provider,
+            model_id,
+            effort,
+        }) => {
+            assert_eq!(role, ModelRole::Main);
+            assert_eq!(provider, "test");
+            assert_eq!(model_id, "claude-opus-4-8");
+            assert_eq!(effort, Some(ReasoningEffort::High));
+        }
+        other => panic!("expected SetModelRole on the wire, got {other:?}"),
+    }
+    assert_eq!(
+        s.session.model, "claude-opus-4-8",
+        "Main selection should optimistically update the status-bar model"
+    );
+    // (The unavailable/blocked branch is covered by
+    // `confirm_model_picker_blocks_unavailable_provider`.)
+}

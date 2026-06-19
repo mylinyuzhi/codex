@@ -7,8 +7,8 @@
 //! `last_cache_safe_params` and calls [`try_generate_suggestion`].
 //! The function runs the 9-step guard sequence, and when accepted,
 //! the model's reply goes through the 12-rule filter
-//! ([`should_filter_suggestion`]). Surviving suggestions land on
-//! `ToolAppState.prompt_suggestion` via [`record_suggestion`].
+//! ([`should_filter_suggestion`]). Surviving suggestions are emitted
+//! to the TUI via `ServerNotification::PromptSuggestion`.
 //!
 //! ## Cache
 //!
@@ -29,7 +29,7 @@
 use std::collections::HashSet;
 
 use coco_messages::Message;
-use coco_types::{PromptSuggestion, TokenUsage, ToolAppState};
+use coco_types::TokenUsage;
 use once_cell::sync::Lazy;
 use regex::Regex;
 
@@ -534,42 +534,6 @@ pub fn parent_uncached_tokens(usage: &TokenUsage) -> i64 {
         .saturating_sub(usage.input_tokens.cache_read)
         .max(0)
         .saturating_add(usage.output_tokens.total)
-}
-
-// ── App-state mutators ────────────────────────────────────────
-
-/// Write the model's suggestion onto [`ToolAppState`].
-pub fn record_suggestion(
-    state: &mut ToolAppState,
-    text: String,
-    prompt_id: String,
-    now_iso: String,
-    generation_request_id: Option<String>,
-) {
-    state.prompt_suggestion = Some(PromptSuggestion {
-        text,
-        prompt_id,
-        shown_at: now_iso,
-        accepted_at: None,
-        generation_request_id,
-    });
-}
-
-/// Drop the suggestion. Called from `/clear` regen and from the
-/// TUI after the user submits any prompt.
-pub fn clear_suggestion(state: &mut ToolAppState) {
-    state.prompt_suggestion = None;
-}
-
-/// Mark the current suggestion as accepted. Returns true when there
-/// was a suggestion to mark; false otherwise.
-pub fn mark_accepted(state: &mut ToolAppState, now_iso: String) -> bool {
-    if let Some(s) = state.prompt_suggestion.as_mut() {
-        s.accepted_at = Some(now_iso);
-        true
-    } else {
-        false
-    }
 }
 
 #[cfg(test)]

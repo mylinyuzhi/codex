@@ -849,52 +849,6 @@ async fn test_cache_safe_params_populated_after_turn() {
 }
 
 #[tokio::test]
-async fn test_clear_cache_safe_params_drops_slot() {
-    // `/clear` regen path must clear the slot — otherwise a fork
-    // after `/clear` would target the pre-clear cache key, which
-    // wouldn't match the post-clear request shape.
-    let model = Arc::new(TextMock {
-        text: "Hello!".into(),
-    });
-    let client = crate::test_support::model_runtime_registry(model);
-    let tools = Arc::new(ToolRegistry::new());
-    let cancel = CancellationToken::new();
-    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
-
-    engine.run("hi").await.expect("turn must complete");
-    assert!(engine.last_cache_safe_params().await.is_some());
-
-    engine.clear_cache_safe_params().await;
-    assert!(
-        engine.last_cache_safe_params().await.is_none(),
-        "clear must drop the slot"
-    );
-}
-
-#[tokio::test]
-async fn test_cache_safe_params_handle_observes_writer_side() {
-    // `cache_safe_params_handle()` returns a clone of the Arc so an
-    // out-of-band observer (TUI status, transcript recorder) can
-    // poll the slot without contending with the engine writer.
-    let model = Arc::new(TextMock {
-        text: "Hello!".into(),
-    });
-    let client = crate::test_support::model_runtime_registry(model);
-    let tools = Arc::new(ToolRegistry::new());
-    let cancel = CancellationToken::new();
-    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
-
-    let handle = engine.cache_safe_params_handle();
-    assert!(handle.read().await.is_none());
-
-    engine.run("hi").await.expect("turn must complete");
-    assert!(
-        handle.read().await.is_some(),
-        "observer handle must see the updated slot"
-    );
-}
-
-#[tokio::test]
 async fn test_with_fallback_client_does_not_break_primary_path() {
     // Phase 8-β sanity: installing a fallback client via the
     // builder must NOT change behavior when the primary succeeds.

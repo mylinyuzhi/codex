@@ -1,5 +1,25 @@
 use super::*;
 
+/// Test-only convenience wrapper exercising the production `expand_skill_prompt`
+/// with only positional / `$ARGUMENTS` substitution (no dir/session/names). The
+/// production entry point is `expand_skill_prompt`; this keeps the
+/// expansion-behavior tests focused without hand-building `ExpandOptions`.
+fn expand_skill_prompt_simple(template: &str, args: &str) -> String {
+    expand_skill_prompt(
+        template,
+        &ExpandOptions {
+            args,
+            argument_names: &[],
+            skill_dir: None,
+            session_id: None,
+            base_dir: None,
+            plugin_root: None,
+            plugin_data_dir: None,
+            user_config: None,
+        },
+    )
+}
+
 // ── Argument expansion tests ──
 
 #[test]
@@ -204,107 +224,6 @@ fn test_normalize_skill_name() {
     assert_eq!(normalize_skill_name("  /review-pr  "), "review-pr");
 }
 
-#[test]
-fn test_validate_skill_name_valid() {
-    assert_eq!(validate_skill_name("/commit"), Ok("commit"));
-    assert_eq!(validate_skill_name("review-pr"), Ok("review-pr"));
-}
-
-#[test]
-fn test_validate_skill_name_empty() {
-    assert!(validate_skill_name("").is_err());
-    assert!(validate_skill_name("  ").is_err());
-    assert!(validate_skill_name("/").is_err());
-}
-
-#[test]
-fn test_validate_skill_name_invalid_chars() {
-    assert!(validate_skill_name("../escape").is_err());
-    assert!(validate_skill_name("null\0byte").is_err());
-}
-
-// ── Rule matching tests ──
-
-#[test]
-fn test_skill_matches_rule_exact() {
-    assert!(skill_matches_rule("commit", "commit"));
-    assert!(skill_matches_rule("commit", "/commit"));
-    assert!(!skill_matches_rule("commit", "review"));
-}
-
-#[test]
-fn test_skill_matches_rule_wildcard() {
-    assert!(skill_matches_rule("review-pr", "review:*"));
-    assert!(skill_matches_rule("review-code", "/review:*"));
-    assert!(!skill_matches_rule("commit", "review:*"));
-}
-
-// ── Execution mode tests ──
-
-#[test]
-fn test_determine_execution_mode_force_inline() {
-    let skill = ResolvedSkill {
-        name: "test".into(),
-        prompt: "do stuff".into(),
-        source: SkillSource::Bundled,
-        execution_mode: SkillExecutionMode::Forked,
-        model_override: None,
-        allowed_tools: vec![],
-        disallowed_tools: vec![],
-        allow_model_invocation: true,
-        effort: None,
-    };
-    assert_eq!(
-        determine_execution_mode(&skill, /*force_inline*/ true),
-        SkillExecutionMode::Inline
-    );
-    assert_eq!(
-        determine_execution_mode(&skill, /*force_inline*/ false),
-        SkillExecutionMode::Forked
-    );
-}
-
-// ── Output building tests ──
-
-#[test]
-fn test_build_inline_output() {
-    let skill = ResolvedSkill {
-        name: "commit".into(),
-        prompt: "create a commit".into(),
-        source: SkillSource::Bundled,
-        execution_mode: SkillExecutionMode::Inline,
-        model_override: Some("fast".into()),
-        allowed_tools: vec!["Bash".into(), "Read".into()],
-        disallowed_tools: vec![],
-        allow_model_invocation: true,
-        effort: None,
-    };
-    let output = build_inline_output(&skill);
-    assert!(output.success);
-    assert_eq!(output.command_name, "commit");
-    assert_eq!(output.status, SkillExecutionMode::Inline);
-    assert_eq!(output.model, Some("fast".into()));
-    assert_eq!(
-        output.allowed_tools,
-        Some(vec!["Bash".into(), "Read".into()])
-    );
-    assert!(output.result.is_none());
-    assert!(output.agent_id.is_none());
-}
-
-#[test]
-fn test_build_forked_output() {
-    let output = build_forked_output("review-pr", "agent-123", "PR looks good");
-    assert!(output.success);
-    assert_eq!(output.command_name, "review-pr");
-    assert_eq!(output.status, SkillExecutionMode::Forked);
-    assert_eq!(output.result, Some("PR looks good".into()));
-    assert_eq!(output.agent_id, Some("agent-123".into()));
-    assert!(output.allowed_tools.is_none());
-}
-
-// ── SkillSource tests ──
-
 // ── Plugin variable substitution tests ──
 
 #[test]
@@ -410,18 +329,4 @@ fn test_expand_skill_prompt_all_plugin_variables() {
         result,
         "Root: /plugins/test, Data: /data/test, URL: https://example.com, Token: [SENSITIVE:token]"
     );
-}
-
-// ── SkillSource tests ──
-
-#[test]
-fn test_skill_source_managed_variant() {
-    let source = SkillSource::Managed;
-    assert_eq!(source, SkillSource::Managed);
-}
-
-#[test]
-fn test_skill_source_mcp_variant() {
-    let source = SkillSource::Mcp;
-    assert_eq!(source, SkillSource::Mcp);
 }

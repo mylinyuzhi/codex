@@ -364,30 +364,11 @@ impl QueryEngine {
     // ── Post-turn cache-safe params (D8) ──
 
     /// Snapshot the current post-turn cache-safe params. `None` until
-    /// the first turn finalises, and after `clear_cache_safe_params`.
-    /// Future post-turn fork features (`/btw`, `promptSuggestion`,
-    /// `postTurnSummary`) read this to share the parent's prompt cache.
+    /// the first turn finalises. Post-turn fork features
+    /// (`promptSuggestion`, compaction, side-query) read this to share
+    /// the parent's prompt cache.
     pub async fn last_cache_safe_params(&self) -> Option<coco_types::CacheSafeParams> {
         self.last_cache_safe_params.read().await.clone()
-    }
-
-    /// Clone the `Arc<RwLock<...>>` so observers (TUI, transcript
-    /// recorder) can poll the slot without holding a `&QueryEngine`.
-    /// Read-only contract: callers MUST NOT replace the inner
-    /// `Option` from outside `QueryEngine` — use
-    /// [`Self::clear_cache_safe_params`] for the only legitimate
-    /// non-engine mutation.
-    pub fn cache_safe_params_handle(
-        &self,
-    ) -> std::sync::Arc<tokio::sync::RwLock<Option<coco_types::CacheSafeParams>>> {
-        self.last_cache_safe_params.clone()
-    }
-
-    /// Drop the cache-safe params slot. Called from `/clear`-style
-    /// regen paths so a fork after `/clear` doesn't accidentally
-    /// reuse the pre-clear cache key.
-    pub async fn clear_cache_safe_params(&self) {
-        *self.last_cache_safe_params.write().await = None;
     }
 
     /// Engine-internal writer for the cache-safe params slot. Called

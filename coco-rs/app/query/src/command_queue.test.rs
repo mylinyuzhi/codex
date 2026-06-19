@@ -125,26 +125,6 @@ async fn test_peek_does_not_remove() {
 }
 
 #[tokio::test]
-async fn test_dequeue_all() {
-    let queue = CommandQueue::new();
-    queue
-        .enqueue(QueuedCommand::new("a".into(), QueuePriority::Next))
-        .await;
-    queue
-        .enqueue(QueuedCommand::new("b".into(), QueuePriority::Later))
-        .await;
-    queue
-        .enqueue(QueuedCommand::new("/cmd".into(), QueuePriority::Now))
-        .await;
-
-    let all = queue.dequeue_all(None).await;
-    // Slash command excluded.
-    assert_eq!(all.len(), 2);
-    // Only slash command remains.
-    assert_eq!(queue.len().await, 1);
-}
-
-#[tokio::test]
 async fn test_dequeue_matching() {
     let queue = CommandQueue::new();
     queue
