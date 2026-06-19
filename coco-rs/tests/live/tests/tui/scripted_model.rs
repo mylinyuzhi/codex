@@ -40,6 +40,10 @@ use coco_llm_types::Usage;
 pub struct Reply {
     pub blocks: Vec<AssistantContentPart>,
     pub finish: StopReason,
+    /// Optional per-turn token usage. `None` ⇒ a tiny non-zero default.
+    /// Set via [`Reply::with_usage`] to drive token-pressure paths
+    /// (e.g. the auto-compact threshold) deterministically.
+    pub usage: Option<Usage>,
 }
 
 impl Reply {
@@ -49,6 +53,7 @@ impl Reply {
         Self {
             blocks: vec![AssistantContentPart::Text(TextPart::new(body))],
             finish: StopReason::EndTurn,
+            usage: None,
         }
     }
 
@@ -61,6 +66,7 @@ impl Reply {
                 AssistantContentPart::Text(TextPart::new(body)),
             ],
             finish: StopReason::EndTurn,
+            usage: None,
         }
     }
 
@@ -76,6 +82,7 @@ impl Reply {
                 call_id, tool_name, input,
             ))],
             finish: StopReason::ToolUse,
+            usage: None,
         }
     }
 
@@ -99,6 +106,7 @@ impl Reply {
         Self {
             blocks,
             finish: StopReason::ToolUse,
+            usage: None,
         }
     }
 
@@ -116,6 +124,7 @@ impl Reply {
                 AssistantContentPart::ToolCall(ToolCallPart::new(call_id, tool_name, input)),
             ],
             finish: StopReason::ToolUse,
+            usage: None,
         }
     }
 
@@ -125,7 +134,18 @@ impl Reply {
         Self {
             blocks: Vec::new(),
             finish: StopReason::EndTurn,
+            usage: None,
         }
+    }
+
+    /// Attach an explicit per-turn token usage to this reply. Lets a
+    /// scripted turn report a large `input_total` so the engine's
+    /// post-turn `tokens_with_last_usage()` crosses the auto-compact
+    /// threshold — the seam the offline auto-compact-trigger test drives.
+    /// Without this, `build_result` falls back to a tiny non-zero usage.
+    pub fn with_usage(mut self, input_total: u64, output_total: u64) -> Self {
+        self.usage = Some(Usage::new(input_total, output_total));
+        self
     }
 }
 
@@ -164,9 +184,11 @@ impl ScriptedModel {
 
     fn build_result(&self) -> LanguageModelGenerateResult {
         let reply = self.next_reply();
-        // Tiny non-zero usage so the cost tracker / TurnCompleted path
-        // doesn't take a "looks like an empty turn" early-exit branch.
-        let usage = Usage::new(8, 4);
+        // Per-turn usage when the reply set one (see `Reply::with_usage`);
+        // otherwise a tiny non-zero usage so the cost tracker /
+        // TurnCompleted path doesn't take a "looks like an empty turn"
+        // early-exit branch.
+        let usage = reply.usage.clone().unwrap_or_else(|| Usage::new(8, 4));
         LanguageModelGenerateResult {
             content: reply.blocks,
             usage,

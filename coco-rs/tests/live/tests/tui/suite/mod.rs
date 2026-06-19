@@ -3,6 +3,8 @@
 //!
 //! Top-level `tui_mock.rs` wires each suite to a `#[tokio::test]` entry.
 
+pub mod agent_team_spawn;
+pub mod auto_compact_trigger;
 pub mod bash_capture;
 pub mod boot_render;
 pub mod compact_round_trip;

@@ -76,7 +76,16 @@ image = { workspace = true, features = ["jpeg", "png", "webp"] }
 pretty_assertions.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
+# http_seam_tool_loop suite: a wiremock SSE server stands in for the real
+# Anthropic endpoint so the agent loop exercises the genuine
+# provider/codec/stream path offline. NOT a vercel-ai crate — the seam
+# guard only forbids `vercel-ai*` deps here; the real provider is built
+# through `coco_inference::model_factory` (the approved seam).
+wiremock.workspace = true
+tokio = { workspace = true, features = ["macros", "process", "rt-multi-thread", "sync", "time"] }
+# process_restart_resume suite: locate the built `coco` binary to spawn it
+# as a real subprocess (skips cleanly when the binary isn't built).
+coco-utils-cargo-bin.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
 uuid = { workspace = true, features = ["v4"] }
