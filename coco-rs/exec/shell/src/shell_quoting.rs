@@ -27,6 +27,86 @@ pub fn quote<S: AsRef<str>>(args: &[S]) -> String {
         .join(" ")
 }
 
+/// Quote arguments the way the npm `shell-quote` package's `quote()` does:
+/// quote/escape **only when a token needs it** (a bare token is returned
+/// verbatim). Use this to render model-facing synthetic command strings (e.g.
+/// the `ls <dir>` narration for an `@`-mentioned directory) byte-for-byte like
+/// the upstream TS implementation. For wrapping a *real* command for `eval`,
+/// use [`quote`] (which always single-quotes).
+pub fn quote_posix<S: AsRef<str>>(args: &[S]) -> String {
+    args.iter()
+        .map(|s| quote_posix_arg(s.as_ref()))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Per-argument logic mirroring `shell-quote`'s three branches.
+fn quote_posix_arg(s: &str) -> String {
+    let has_double = s.contains('"');
+    let has_single = s.contains('\'');
+    let has_ws = s.chars().any(char::is_whitespace);
+
+    if (has_double || has_ws) && !has_single {
+        // Single-quote; escape `'` and `\` (no `'` present in this branch).
+        let escaped = s.replace('\\', "\\\\").replace('\'', "\\'");
+        format!("'{escaped}'")
+    } else if has_double || has_single || has_ws {
+        // Double-quote; escape `"` `\` `$` `` ` `` `!`.
+        let mut out = String::with_capacity(s.len() + 2);
+        out.push('"');
+        for ch in s.chars() {
+            if matches!(ch, '"' | '\\' | '$' | '`' | '!') {
+                out.push('\\');
+            }
+            out.push(ch);
+        }
+        out.push('"');
+        out
+    } else {
+        // No whitespace/quotes: backslash-escape individual shell metachars.
+        // Bare paths (alphanumerics, `/`, `-`, `_`, `.`) pass through untouched.
+        let mut out = String::with_capacity(s.len());
+        for ch in s.chars() {
+            if is_posix_metachar(ch) {
+                out.push('\\');
+            }
+            out.push(ch);
+        }
+        out
+    }
+}
+
+/// The metacharacter set `shell-quote` backslash-escapes in unquoted tokens.
+fn is_posix_metachar(ch: char) -> bool {
+    matches!(
+        ch,
+        '#' | '!'
+            | '"'
+            | '$'
+            | '&'
+            | '\''
+            | '('
+            | ')'
+            | '*'
+            | ','
+            | ':'
+            | ';'
+            | '<'
+            | '='
+            | '>'
+            | '?'
+            | '@'
+            | '['
+            | '\\'
+            | ']'
+            | '^'
+            | '`'
+            | '{'
+            | '|'
+            | '}'
+    )
+}
+
 /// Detect a heredoc pattern in the command.
 ///
 /// Matches `<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<-EOF`, `<<-'EOF'`, `<<\EOF`.

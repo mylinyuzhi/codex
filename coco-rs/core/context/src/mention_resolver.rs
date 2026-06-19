@@ -177,23 +177,24 @@ async fn update_file_read_state(
     }
 }
 
-/// Resolve a directory mention: list entries up to max_entries.
+/// Resolve a directory mention: list entries up to `max_entries`.
+///
+/// Mirrors TS `processAtMentionedFiles`: bare entry names (no trailing `/`),
+/// and when the directory exceeds the cap a trailing `… and N more entries`
+/// line carrying the exact overflow count.
 fn resolve_directory(path: &Path, display_path: &str, max_entries: i32) -> Option<Attachment> {
-    let entries = std::fs::read_dir(path).ok()?;
-    let mut lines = Vec::new();
-    let mut count = 0;
+    let max_entries = max_entries.max(0) as usize;
+    let names: Vec<String> = std::fs::read_dir(path)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
 
-    for entry in entries {
-        if count >= max_entries {
-            lines.push(format!("... ({count}+ entries, truncated)"));
-            break;
-        }
-        if let Ok(e) = entry {
-            let name = e.file_name().to_string_lossy().into_owned();
-            let suffix = if e.path().is_dir() { "/" } else { "" };
-            lines.push(format!("{name}{suffix}"));
-            count += 1;
-        }
+    let total = names.len();
+    let mut lines: Vec<String> = names.into_iter().take(max_entries).collect();
+    if total > max_entries {
+        let remaining = total - max_entries;
+        lines.push(format!("… and {remaining} more entries"));
     }
 
     Some(Attachment::Directory(DirectoryAttachment {

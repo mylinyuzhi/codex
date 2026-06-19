@@ -86,7 +86,9 @@ fn attachment_to_messages_directory_emits_two_bash_reminders() {
 
     let call = extract_text_from_message(&msgs[0]);
     assert!(call.contains(&format!("Called the {} tool", bash_tool_name())));
-    assert!(call.contains("\"command\":\"ls dir\""));
+    // TS mirror: on-demand quoting — a metachar-free path stays bare.
+    assert!(call.contains("\"command\":\"ls /abs/dir\""));
+    assert!(call.contains("\"description\":\"Lists files in /abs/dir\""));
 
     let result = extract_text_from_message(&msgs[1]);
     assert!(result.contains(&format!("Result of calling the {} tool:", bash_tool_name())));
