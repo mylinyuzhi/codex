@@ -2249,6 +2249,7 @@ dependencies = [
  "coco-tools",
  "coco-tui",
  "coco-types",
+ "coco-utils-cargo-bin",
  "crossterm",
  "dotenvy",
  "futures",
@@ -2260,6 +2261,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]

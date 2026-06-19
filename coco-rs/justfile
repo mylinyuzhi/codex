@@ -14,6 +14,12 @@ fmt:
     # imports_granularity is nightly-only; filter the harmless stable warning.
     cargo fmt 2> >(grep -v 'imports_granularity = Item' >&2 || true)
 
+# Verify formatting without mutating (CI gate). Same nightly-only-warning
+# filter as `fmt`; fails on any unformatted file.
+fmt-check:
+    #!/usr/bin/env bash
+    cargo fmt --check 2> >(grep -v 'imports_granularity = Item' >&2 || true)
+
 # Check all crates (lib + bin)
 check *args:
     cargo check "$@"

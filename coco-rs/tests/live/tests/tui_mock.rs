@@ -127,3 +127,13 @@ async fn test_tui_permission_round_trip() -> Result<()> {
 async fn test_tui_compact_round_trip() -> Result<()> {
     tui::suite::compact_round_trip::run().await
 }
+
+#[tokio::test]
+async fn test_tui_auto_compact_trigger() -> Result<()> {
+    tui::suite::auto_compact_trigger::run().await
+}
+
+#[tokio::test]
+async fn test_tui_agent_team_spawn() -> Result<()> {
+    tui::suite::agent_team_spawn::run().await
+}

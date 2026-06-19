@@ -76,6 +76,17 @@ use tokio_util::sync::CancellationToken;
 use crate::common;
 use crate::tui::scripted_model::ScriptedModel;
 
+/// Builds a model-spawnable [`AgentHandle`](coco_tool_runtime::AgentHandle)
+/// from the harness's own scripted model + tool registry. Installed via
+/// [`TuiHarnessBuilder::with_agent_handle_factory`]; lets the
+/// agent-team suite spawn a real child `QueryEngine` that shares the
+/// parent's deterministic model. `FnOnce` because the harness builds the
+/// handle exactly once, after the registry exists.
+type AgentHandleFactory = Box<
+    dyn FnOnce(Arc<dyn LanguageModel>, Arc<ToolRegistry>) -> Arc<dyn coco_tool_runtime::AgentHandle>
+        + Send,
+>;
+
 /// Configuration knobs for [`TuiHarness::builder`]. Keep these tight
 /// to the testable surface — anything bigger belongs in production
 /// `QueryEngineConfig` plumbing, not in tests.
@@ -107,6 +118,11 @@ pub struct HarnessConfig {
     /// the dir here so they can compute the path *before* the harness
     /// boots. Ownership of cleanup transfers to the harness.
     pub workdir: Option<TempDir>,
+    /// When set, the harness builds an `AgentHandle` from this factory,
+    /// installs it on the engine, and registers the `Agent` tool — so the
+    /// scripted model can spawn a real child `QueryEngine`. `None` keeps
+    /// the default `NoOpAgentHandle` (spawn returns an error).
+    pub agent_handle_factory: Option<AgentHandleFactory>,
 }
 
 impl Default for HarnessConfig {
@@ -119,6 +135,7 @@ impl Default for HarnessConfig {
             hooks: Vec::new(),
             replies: Vec::new(),
             workdir: None,
+            agent_handle_factory: None,
         }
     }
 }
@@ -173,6 +190,25 @@ impl TuiHarnessBuilder {
         self
     }
 
+    /// Install a model-spawnable `AgentHandle` and register the `Agent`
+    /// tool. The factory receives the harness's scripted model (as
+    /// `Arc<dyn LanguageModel>`) and tool registry so the handle can spawn
+    /// child `QueryEngine`s that share the same deterministic model — the
+    /// seam the agent-team e2e drives instead of the default
+    /// `NoOpAgentHandle`.
+    pub fn with_agent_handle_factory(
+        mut self,
+        factory: impl FnOnce(
+            Arc<dyn LanguageModel>,
+            Arc<ToolRegistry>,
+        ) -> Arc<dyn coco_tool_runtime::AgentHandle>
+        + Send
+        + 'static,
+    ) -> Self {
+        self.cfg.agent_handle_factory = Some(Box::new(factory));
+        self
+    }
+
     pub async fn build(self) -> Result<TuiHarness> {
         TuiHarness::build(self.cfg).await
     }
@@ -219,7 +255,7 @@ impl TuiHarness {
         TuiHarnessBuilder::new()
     }
 
-    async fn build(cfg: HarnessConfig) -> Result<Self> {
+    async fn build(mut cfg: HarnessConfig) -> Result<Self> {
         let workdir = match cfg.workdir {
             Some(dir) => dir,
             None => common::tmpdir::make("coco-tests-tui-")
@@ -243,7 +279,20 @@ impl TuiHarness {
         tool_registry.register(Arc::new(coco_tools::WriteTool));
         tool_registry.register(Arc::new(coco_tools::EditTool));
         tool_registry.register(Arc::new(coco_tools::GlobTool));
+        // Expose the `Agent` tool only when a handle is installed, so the
+        // tool list stays identical for every other suite.
+        if cfg.agent_handle_factory.is_some() {
+            tool_registry.register(Arc::new(coco_tools::AgentTool));
+        }
         let tools = Arc::new(tool_registry);
+
+        // Build the model-spawnable agent handle (if any) from the
+        // harness's own scripted model + tool registry, so spawned
+        // children share the same deterministic model and tools.
+        let agent_handle = cfg
+            .agent_handle_factory
+            .take()
+            .map(|f| f(model.clone() as Arc<dyn LanguageModel>, tools.clone()));
 
         // Hook registry: install caller-supplied definitions. Empty by
         // default — most tests don't need hooks.
@@ -297,6 +346,13 @@ impl TuiHarness {
             ));
         let engine = QueryEngine::new(engine_cfg, model_runtimes, tools, cancel.clone(), hooks)
             .with_permission_bridge(bridge);
+        // Install the model-spawnable agent handle when the test provided
+        // one — replaces the default `NoOpAgentHandle` so `Agent`-tool
+        // spawns run a real child engine instead of returning an error.
+        let engine = match agent_handle {
+            Some(handle) => engine.with_agent_handle(handle),
+            None => engine,
+        };
         let engine = Arc::new(engine);
         let engine_for_driver = engine.clone();
         let event_tx_for_driver = event_tx.clone();
