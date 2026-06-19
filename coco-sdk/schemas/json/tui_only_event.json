@@ -708,6 +708,10 @@
       "description": "Dispatcher-side breadcrumb for slash commands the runtime couldn't\nfully execute (missing handler, handler error, empty Prompt body,\ndialog wiring pending). The TUI translates `kind` via the i18n\ncatalog before rendering.",
       "type": "object",
       "properties": {
+        "args": {
+          "description": "Argument string the user typed after the command, used to render the\n`❯ /name args` echo alongside the status. Empty when none was given.",
+          "type": "string"
+        },
         "kind": {
           "$ref": "#/$defs/SlashCommandStatusKind"
         },
@@ -722,6 +726,7 @@
       "required": [
         "type",
         "name",
+        "args",
         "kind"
       ]
     },
@@ -1051,6 +1056,19 @@
       "required": [
         "type",
         "payload"
+      ]
+    },
+    {
+      "description": "Open the interactive `/add-dir` overlay (no-argument form). The TUI\nshows a directory-path text input; confirm re-dispatches\n`/add-dir <path>` to reuse the validated session-add path. TS parity:\n`commands/add-dir/add-dir.tsx` → `<AddWorkspaceDirectory>`.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "open_add_directory"
+        }
+      },
+      "required": [
+        "type"
       ]
     },
     {

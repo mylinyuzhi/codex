@@ -5926,6 +5926,13 @@
       "description": "Matches TS `SDKTaskProgressMessage` (coreSchemas.ts:1750-1767).\nIn TS, `description` and `usage` are required; other fields optional.\nThe `workflow_progress` field carries the streaming state of local_workflow\ntasks — a delta batch of workflow state changes.",
       "type": "object",
       "properties": {
+        "agent_type": {
+          "description": "Declared subagent type (`Explore`/`Plan`/…), mirrored from the\nprogress slot so the TUI can correct the `local_agent` fallback\nthat `TaskStarted` emits.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "description": {
           "type": "string"
         },
@@ -6099,9 +6106,31 @@
     "TaskUsage": {
       "type": "object",
       "properties": {
+        "cache_read_tokens": {
+          "type": "integer",
+          "format": "int64",
+          "default": 0
+        },
+        "cost_usd": {
+          "description": "Real USD cost for completed subagent runs. `#[serde(default)]`\nkeeps older transcripts / mid-flight progress (which carry no\ncost) deserializing to `0.0`.",
+          "type": "number",
+          "format": "double",
+          "default": 0.0
+        },
         "duration_ms": {
           "type": "integer",
           "format": "int64"
+        },
+        "input_tokens": {
+          "description": "Input / output split + cache-read (the `↑in ↓out` / cache-hit\ndimensions the panel and transcript summary show). `#[serde(default)]`\nfor back-compat with payloads that only carried `total_tokens`.",
+          "type": "integer",
+          "format": "int64",
+          "default": 0
+        },
+        "output_tokens": {
+          "type": "integer",
+          "format": "int64",
+          "default": 0
         },
         "tool_uses": {
           "type": "integer",
