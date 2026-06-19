@@ -151,6 +151,55 @@ async fn submit_slash_dispatches_typed_command_without_chat_echo() {
 }
 
 #[tokio::test]
+async fn submit_exit_command_shuts_down_via_double_press_path() {
+    // `/exit` must funnel into the same shutdown mechanism as the Ctrl+C/Ctrl+D
+    // double-press exit — NOT the registry handler (which only prints text).
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("/exit");
+    state
+        .ui
+        .input
+        .textarea
+        .set_cursor(state.ui.input.text().len());
+
+    let (tx, mut rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::SubmitInput, &tx).await;
+
+    assert!(state.should_exit(), "/exit must quit the TUI");
+    match next_user_command(&mut rx) {
+        Ok(UserCommand::Shutdown { reason }) => {
+            assert_eq!(reason, ShutdownReason::SlashCommand);
+        }
+        other => panic!("expected Shutdown(SlashCommand) on the wire, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn submit_quit_alias_shuts_down() {
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("/quit");
+    state
+        .ui
+        .input
+        .textarea
+        .set_cursor(state.ui.input.text().len());
+
+    let (tx, mut rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::SubmitInput, &tx).await;
+
+    assert!(state.should_exit(), "/quit must quit the TUI");
+    assert!(
+        matches!(
+            next_user_command(&mut rx),
+            Ok(UserCommand::Shutdown {
+                reason: ShutdownReason::SlashCommand
+            })
+        ),
+        "/quit alias must shut down like /exit"
+    );
+}
+
+#[tokio::test]
 async fn autocomplete_tab_completes_selected_slash_without_submitting() {
     let mut state = AppState::new();
     state.session.available_commands = vec![SlashCommandInfo {

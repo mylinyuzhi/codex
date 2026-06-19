@@ -49,6 +49,7 @@ pub(crate) enum TextSurfaceContent<'a> {
     PluginDialog(&'a crate::state::PluginDialogState),
     AgentsDialog(&'a crate::state::AgentsDialogState),
     PermissionsEditor(&'a crate::state::PermissionsEditorState),
+    AddDirectory(&'a crate::state::AddDirectoryState),
 }
 
 pub(crate) fn prompt_text_surface(prompt: &PanePromptState) -> Option<TextSurfaceContent<'_>> {
@@ -88,6 +89,7 @@ pub(crate) fn modal_text_surface(modal: &ModalState) -> Option<TextSurfaceConten
         ModalState::PluginDialog(p) => TextSurfaceContent::PluginDialog(p),
         ModalState::AgentsDialog(a) => TextSurfaceContent::AgentsDialog(a),
         ModalState::PermissionsEditor(p) => TextSurfaceContent::PermissionsEditor(p),
+        ModalState::AddDirectory(a) => TextSurfaceContent::AddDirectory(a),
         ModalState::Doctor(d) => TextSurfaceContent::Doctor(d),
         ModalState::WorktreeExit(w) => TextSurfaceContent::WorktreeExit(w),
         ModalState::Bridge(b) => TextSurfaceContent::Bridge(b),
@@ -182,6 +184,9 @@ pub(crate) fn surface_content(
             state.clock.now_ms(),
         ),
         TextSurfaceContent::PermissionsEditor(p) => pickers::permissions_editor_content(p, styles),
+        TextSurfaceContent::AddDirectory(a) => {
+            crate::presentation::add_directory::add_directory_content(a, styles)
+        }
     }
 }
 

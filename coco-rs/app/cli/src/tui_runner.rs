@@ -1255,6 +1255,7 @@ async fn run_agent_driver(
                         emit_slash_status(
                             &event_tx,
                             name.as_str(),
+                            &args,
                             SlashCommandStatusKind::NoHandler,
                         )
                         .await;
@@ -2889,7 +2890,7 @@ async fn drain_queued_slash_commands(
         match outcome {
             SlashOutcome::Handled => {}
             SlashOutcome::NotFound => {
-                emit_slash_status(event_tx, name, SlashCommandStatusKind::NoHandler).await;
+                emit_slash_status(event_tx, name, args, SlashCommandStatusKind::NoHandler).await;
             }
             SlashOutcome::RunEngine { content, metadata } => {
                 let session_id = runtime.current_session_id().await;
@@ -3205,6 +3206,16 @@ async fn dispatch_slash_command(
             .await;
         return SlashOutcome::Handled;
     }
+    // `/add-dir` (no arg) opens the interactive directory-input overlay.
+    // `/add-dir <path>` falls through to the registry handler, which validates
+    // the path + emits the session-add sentinel. Mirrors TS `add-dir.tsx`:
+    // no-arg → `<AddWorkspaceDirectory>` form, arg → direct validate + add.
+    if name == "add-dir" && args.trim().is_empty() {
+        let _ = event_tx
+            .send(CoreEvent::Tui(TuiOnlyEvent::OpenAddDirectory))
+            .await;
+        return SlashOutcome::Handled;
+    }
     if name == "resume" {
         return dispatch_resume(args, runtime, event_tx).await;
     }
@@ -3264,7 +3275,7 @@ async fn dispatch_slash_command(
         if matches!(cmd.command_type, coco_types::CommandType::Prompt(_)) {
             return SlashOutcome::NotFound;
         }
-        emit_slash_status(event_tx, name, SlashCommandStatusKind::NoHandler).await;
+        emit_slash_status(event_tx, name, args, SlashCommandStatusKind::NoHandler).await;
         return SlashOutcome::Handled;
     };
 
@@ -3274,6 +3285,7 @@ async fn dispatch_slash_command(
             emit_slash_status(
                 event_tx,
                 name,
+                args,
                 SlashCommandStatusKind::Failed {
                     error: e.to_string(),
                 },
@@ -3339,7 +3351,7 @@ async fn dispatch_slash_command(
                 }
             }
             if buf.is_empty() {
-                emit_slash_status(event_tx, name, SlashCommandStatusKind::EmptyPrompt).await;
+                emit_slash_status(event_tx, name, args, SlashCommandStatusKind::EmptyPrompt).await;
                 SlashOutcome::Handled
             } else {
                 SlashOutcome::RunEngine {
@@ -3524,6 +3536,7 @@ async fn dispatch_slash_command(
                     emit_slash_status(
                         event_tx,
                         name,
+                        args,
                         SlashCommandStatusKind::DialogPending { dialog_kind },
                     )
                     .await;
@@ -4262,6 +4275,7 @@ async fn dispatch_permissions_mutation(
         emit_slash_status(
             event_tx,
             "permissions",
+            args,
             SlashCommandStatusKind::PermissionsUsageAllow,
         )
         .await;
@@ -4271,6 +4285,7 @@ async fn dispatch_permissions_mutation(
         emit_slash_status(
             event_tx,
             "permissions",
+            args,
             SlashCommandStatusKind::PermissionsUsageDeny,
         )
         .await;
@@ -4371,6 +4386,7 @@ async fn dispatch_context(
             emit_slash_status(
                 event_tx,
                 "context",
+                /*args*/ "",
                 SlashCommandStatusKind::Failed {
                     error: e.to_string(),
                 },
@@ -4407,6 +4423,7 @@ async fn dispatch_provider_login(args: &str, event_tx: &mpsc::Sender<CoreEvent>)
             emit_slash_status(
                 event_tx,
                 "login",
+                args,
                 SlashCommandStatusKind::Failed {
                     error: e.to_string(),
                 },
@@ -4427,6 +4444,7 @@ async fn dispatch_provider_logout(args: &str, event_tx: &mpsc::Sender<CoreEvent>
             emit_slash_status(
                 event_tx,
                 "logout",
+                args,
                 SlashCommandStatusKind::Failed {
                     error: e.to_string(),
                 },
@@ -4443,11 +4461,13 @@ async fn dispatch_provider_logout(args: &str, event_tx: &mpsc::Sender<CoreEvent>
 async fn emit_slash_status(
     event_tx: &mpsc::Sender<CoreEvent>,
     name: &str,
+    args: &str,
     kind: SlashCommandStatusKind,
 ) {
     let _ = event_tx
         .send(CoreEvent::Tui(TuiOnlyEvent::SlashCommandStatus {
             name: name.to_string(),
+            args: args.to_string(),
             kind,
         }))
         .await;

@@ -501,6 +501,16 @@ pub(super) fn handle(
             }
             true
         }
+        // `/add-dir` (no-arg) — open the interactive directory-input overlay.
+        // An already-open instance is left as-is (the user is mid-edit).
+        TuiOnlyEvent::OpenAddDirectory => {
+            if !matches!(state.ui.modal.as_ref(), Some(ModalState::AddDirectory(_))) {
+                state.ui.show_modal(ModalState::AddDirectory(
+                    crate::state::AddDirectoryState::new(),
+                ));
+            }
+            true
+        }
         // `/skills` dialog Enter result — CLI bridge has finished
         // (or failed) the SettingsWriter round-trip + RuntimeConfig
         // republish + CommandRegistry rebuild. Toast generation
@@ -621,15 +631,20 @@ pub(super) fn handle(
             crate::update::show::open_theme_picker(state);
             true
         }
-        TuiOnlyEvent::SlashCommandStatus { name, kind } => {
+        TuiOnlyEvent::SlashCommandStatus { name, args, kind } => {
             use coco_types::SlashCommandStatusKind;
-            let (level, text) = match kind {
+            // Render dispatcher statuses inline tool-style (`❯ /cmd args` +
+            // `⎿ …`) so they match the success path and a real tool result,
+            // rather than a detached system note. `Failed` is the only true
+            // error → stderr (error color); the rest are informational → stdout
+            // (dim), keyed off the same builders the success path uses.
+            let (is_error, text) = match kind {
                 SlashCommandStatusKind::NoHandler => (
-                    SystemMessageLevel::Warning,
+                    false,
                     t!("slash.status.no_handler", name = name.as_str()).to_string(),
                 ),
                 SlashCommandStatusKind::Failed { error } => (
-                    SystemMessageLevel::Error,
+                    true,
                     t!(
                         "slash.status.failed",
                         name = name.as_str(),
@@ -638,11 +653,11 @@ pub(super) fn handle(
                     .to_string(),
                 ),
                 SlashCommandStatusKind::EmptyPrompt => (
-                    SystemMessageLevel::Info,
+                    false,
                     t!("slash.status.empty_prompt", name = name.as_str()).to_string(),
                 ),
                 SlashCommandStatusKind::DialogPending { dialog_kind } => (
-                    SystemMessageLevel::Info,
+                    false,
                     t!(
                         "slash.status.dialog_pending",
                         name = name.as_str(),
@@ -650,16 +665,30 @@ pub(super) fn handle(
                     )
                     .to_string(),
                 ),
-                SlashCommandStatusKind::PermissionsUsageAllow => (
-                    SystemMessageLevel::Info,
-                    t!("slash.permissions.usage_allow").to_string(),
-                ),
-                SlashCommandStatusKind::PermissionsUsageDeny => (
-                    SystemMessageLevel::Info,
-                    t!("slash.permissions.usage_deny").to_string(),
-                ),
+                SlashCommandStatusKind::PermissionsUsageAllow => {
+                    (false, t!("slash.permissions.usage_allow").to_string())
+                }
+                SlashCommandStatusKind::PermissionsUsageDeny => {
+                    (false, t!("slash.permissions.usage_deny").to_string())
+                }
             };
-            enqueue_informational(state, level, "", text, command_tx);
+            let messages = if is_error {
+                coco_messages::build_slash_command_error_messages(&name, &args, &text)
+            } else {
+                coco_messages::build_slash_command_messages(
+                    &name, &args, &text, /*is_sensitive*/ false,
+                )
+            };
+            if let Err(e) =
+                command_tx.try_send(crate::command::UserCommand::PushSlashResult { messages })
+            {
+                tracing::warn!(
+                    target: "coco_tui::system_push",
+                    name,
+                    error = ?e,
+                    "SlashCommandStatus: failed to dispatch PushSlashResult",
+                );
+            }
             true
         }
     }

@@ -47,6 +47,12 @@ pub enum KeybindingContext {
     /// the keys map to input-style commands the editor's `intercept`
     /// consumes (Cursor* / InsertChar / SubmitInput).
     PermissionsEditor,
+    /// `/add-dir` (no-arg) directory-input overlay. Dedicated context (same
+    /// shape as [`Self::PermissionsEditor`]): a single-line text field whose
+    /// keys map to `Cursor* / InsertChar / SubmitInput / Cancel` for
+    /// `add_directory::intercept`. Global-only `context_stack` keeps chars /
+    /// arrows from resolving to filter / Surface* / y-n-a.
+    AddDirectory,
     /// Editable "always allow" prefix on a shell permission prompt. Active only
     /// while an allow row is focused (mirrors [`Self::PermissionsEditor`]): plain
     /// chars become `InsertChar` and arrows `Cursor*` so the rule field is
@@ -107,6 +113,10 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
             // `/permissions` editor — dedicated context for text input +
             // distinct nav (see the enum-variant doc).
             ModalState::PermissionsEditor(_) => KeybindingContext::PermissionsEditor,
+
+            // `/add-dir` overlay — dedicated single-text-input context (see the
+            // enum-variant doc); routes to `add_directory::map_key`.
+            ModalState::AddDirectory(_) => KeybindingContext::AddDirectory,
 
             // Background-tasks list/detail — dedicated nav context so ↑/↓/Enter/
             // x/← reach the dialog's intercept (see the enum-variant doc).
@@ -333,6 +343,7 @@ fn resolve_key(
             crate::modal_pane::settings::map_key(key)
         }
         KeybindingContext::PermissionsEditor => crate::modal_pane::permissions_editor::map_key(key),
+        KeybindingContext::AddDirectory => crate::modal_pane::add_directory::map_key(key),
         KeybindingContext::PermissionPrefixEdit => permission_prefix_edit_map_key(key),
         KeybindingContext::BackgroundTasks => background_tasks_map_key(key),
         KeybindingContext::Chat => map_global_key(state, key).or_else(|| map_input_key(state, key)),

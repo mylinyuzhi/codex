@@ -56,9 +56,14 @@ fn render_command_echo(text: &str, opts: SlashCommandRenderOptions<'_>) -> Vec<L
 }
 
 fn render_command_output(text: &str, opts: SlashCommandRenderOptions<'_>) -> Vec<Line<'static>> {
-    let body = coco_messages::extract_tag(text, coco_messages::LOCAL_COMMAND_STDOUT_TAG)
-        .or_else(|| coco_messages::extract_tag(text, coco_messages::LOCAL_COMMAND_STDERR_TAG))
-        .unwrap_or("");
+    // A `<local-command-stderr>` body means the command failed — render it in
+    // the error color as plain `⎿ error` rows (the slash analogue of a tool's
+    // error result). `<local-command-stdout>` keeps the markdown + dim path.
+    if let Some(err) = coco_messages::extract_tag(text, coco_messages::LOCAL_COMMAND_STDERR_TAG) {
+        return render_error_output(err, opts.styles.error());
+    }
+    let body =
+        coco_messages::extract_tag(text, coco_messages::LOCAL_COMMAND_STDOUT_TAG).unwrap_or("");
     if body.is_empty() {
         return Vec::new();
     }
@@ -75,6 +80,25 @@ fn render_command_output(text: &str, opts: SlashCommandRenderOptions<'_>) -> Vec
             line.spans
                 .insert(0, Span::raw(prefix).fg(opts.styles.dim()));
             line
+        })
+        .collect()
+}
+
+/// Render a stderr body as plain `⎿ error` rows in the given color. Kept
+/// markdown-free so error text (paths, reasons) shows verbatim like a tool
+/// result's error row.
+fn render_error_output(body: &str, color: ratatui::style::Color) -> Vec<Line<'static>> {
+    if body.is_empty() {
+        return Vec::new();
+    }
+    body.lines()
+        .enumerate()
+        .map(|(index, line)| {
+            let prefix = if index == 0 { "  └ " } else { "    " };
+            Line::from(vec![
+                Span::raw(prefix).fg(color),
+                Span::raw(line.to_string()).fg(color),
+            ])
         })
         .collect()
 }
