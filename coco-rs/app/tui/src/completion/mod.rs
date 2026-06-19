@@ -269,9 +269,9 @@ pub fn accept_suggestion(state: &mut AppState, mode: AcceptMode) -> Option<Compl
     };
 
     let insertion = if mode == AcceptMode::ExtendCommonPrefix {
-        common_path_prefix_completion(&sug).unwrap_or_else(|| selected_insertion(&sug, &item))
+        common_path_prefix_completion(&sug).unwrap_or_else(|| selected_insertion(&sug, &item, mode))
     } else {
-        selected_insertion(&sug, &item)
+        selected_insertion(&sug, &item, mode)
     };
 
     let text_len = state.ui.input.text().len();
@@ -320,12 +320,50 @@ pub fn accept_suggestion(state: &mut AppState, mode: AcceptMode) -> Option<Compl
     })
 }
 
-fn selected_insertion(sug: &ActiveSuggestions, item: &SuggestionItem) -> CompletionInsertion {
+/// Disposition of an accepted *directory* row. Files always finalize, so this
+/// only varies the directory case — see [`dir_accept_policy`].
+#[derive(Debug, Clone, Copy)]
+enum DirAccept {
+    /// Finalize as a mention: append a trailing space so the popup closes (the
+    /// trailing space leaves no live `@` token for re-detection to re-arm).
+    Finalize,
+    /// Drill in: append `/` with no trailing space, so the still-live token
+    /// re-opens the popup on the directory's contents.
+    Drill,
+}
+
+/// How an accepted directory splices into the prompt, mirroring TS
+/// `useTypeahead`:
+/// - **Enter** in the fuzzy `@` popup (`At`, TS `suggestionType: 'file'`)
+///   finalizes the directory as a mention. Fuzzy search returns the directory
+///   *itself* as a top hit, so re-searching the same token would loop — Enter
+///   must commit, not drill.
+/// - Everything else drills: **Tab** (common-prefix progress) and the
+///   path-traversal kinds (`Path` / `Directory`, TS `suggestionType:
+///   'directory'`), whose re-search lists the directory's *contents* and so
+///   makes real progress instead of looping.
+fn dir_accept_policy(kind: SuggestionKind, mode: AcceptMode) -> DirAccept {
+    match (kind, mode) {
+        (SuggestionKind::At, AcceptMode::AcceptSelected | AcceptMode::SubmitSelected) => {
+            DirAccept::Finalize
+        }
+        _ => DirAccept::Drill,
+    }
+}
+
+fn selected_insertion(
+    sug: &ActiveSuggestions,
+    item: &SuggestionItem,
+    mode: AcceptMode,
+) -> CompletionInsertion {
+    let dir_accept = dir_accept_policy(sug.kind, mode);
     match sug.kind {
         SuggestionKind::SlashCommand => insertion(format!("{} ", item.label), false, false),
         SuggestionKind::Symbol => insertion(format!("@#{} ", item.label), false, false),
-        SuggestionKind::Directory => format_path_insertion(item, "", &sug.query),
-        SuggestionKind::At | SuggestionKind::Path => format_at_insertion(item, &sug.query),
+        SuggestionKind::Directory => format_path_insertion(item, "", &sug.query, dir_accept),
+        SuggestionKind::At | SuggestionKind::Path => {
+            format_at_insertion(item, &sug.query, dir_accept)
+        }
         SuggestionKind::CustomTitle => insertion(item.label.clone(), false, false),
     }
 }
@@ -412,9 +450,13 @@ fn accepted_slash_command(state: &AppState, label: &str) -> Option<AcceptedSlash
         })
 }
 
-fn format_at_insertion(item: &SuggestionItem, query: &str) -> CompletionInsertion {
+fn format_at_insertion(
+    item: &SuggestionItem,
+    query: &str,
+    dir_accept: DirAccept,
+) -> CompletionInsertion {
     match item.metadata.as_ref() {
-        Some(SuggestionMeta::Path { .. }) => format_path_insertion(item, "@", query),
+        Some(SuggestionMeta::Path { .. }) => format_path_insertion(item, "@", query, dir_accept),
         Some(SuggestionMeta::Agent { .. }) => insertion(format!("@{} ", item.label), false, false),
         Some(SuggestionMeta::McpResource { server, uri }) => {
             insertion(format!("@{server}:{uri} "), false, false)
@@ -427,10 +469,15 @@ fn format_at_insertion(item: &SuggestionItem, query: &str) -> CompletionInsertio
     }
 }
 
-fn format_path_insertion(item: &SuggestionItem, prefix: &str, query: &str) -> CompletionInsertion {
+fn format_path_insertion(
+    item: &SuggestionItem,
+    prefix: &str,
+    query: &str,
+    dir_accept: DirAccept,
+) -> CompletionInsertion {
     match item.metadata.as_ref() {
         Some(SuggestionMeta::Path { is_directory }) => {
-            format_path_token(&item.label, prefix, query, *is_directory, !*is_directory)
+            format_path_token(&item.label, prefix, query, *is_directory, dir_accept)
         }
         _ => insertion(format!("{prefix}{} ", item.label), false, false),
     }
@@ -441,7 +488,7 @@ fn format_path_token(
     prefix: &str,
     query: &str,
     is_directory: bool,
-    final_accept: bool,
+    dir_accept: DirAccept,
 ) -> CompletionInsertion {
     let mut path = label.to_string();
     if is_directory && !path.ends_with('/') {
@@ -450,9 +497,20 @@ fn format_path_token(
     let force_quote = query.starts_with('"');
     let quoted = force_quote || path_needs_quotes(&path);
     let body = quote_path_token(&path, quoted);
-    let keep_popup = is_directory || !final_accept;
+
+    // A file always finalizes (trailing space, popup closes); a directory's
+    // disposition is set by `dir_accept` (trigger kind + keypress).
+    let (append_space, keep_popup) = if is_directory {
+        match dir_accept {
+            DirAccept::Finalize => (true, false),
+            DirAccept::Drill => (false, true),
+        }
+    } else {
+        (true, false)
+    };
+
     let mut replacement = format!("{prefix}{body}");
-    if final_accept {
+    if append_space {
         replacement.push(' ');
     }
     let cursor_position = if keep_popup && quoted {

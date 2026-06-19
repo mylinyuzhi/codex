@@ -659,6 +659,98 @@ async fn autocomplete_accepts_at_directory_and_keeps_completion_active() {
 }
 
 #[tokio::test]
+async fn autocomplete_submit_at_directory_finalizes_mention() {
+    // Regression: Enter on a directory in the fuzzy `@` popup must finalize it
+    // as a mention (trailing space, popup closed) — mirroring TS `handleEnter`
+    // file-mode. It previously drilled in (kept the popup open, no space) like
+    // Tab, leaving no way to confirm a directory selection.
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("@app");
+    state.ui.input.textarea.set_cursor("@app".len());
+    state.ui.completion.active = Some(ActiveSuggestions {
+        kind: SuggestionKind::At,
+        items: vec![SuggestionItem {
+            label: "app/cli/".into(),
+            description: None,
+            metadata: Some(SuggestionMeta::Path { is_directory: true }),
+        }],
+        selected: 0,
+        query: "app".into(),
+        trigger_pos: 0,
+    });
+
+    let (tx, _rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::AutocompleteSubmit, &tx).await;
+
+    assert_eq!(state.ui.input.text(), "@app/cli/ ");
+    assert_eq!(state.ui.input.textarea.cursor(), "@app/cli/ ".len());
+    assert!(
+        state.ui.completion.active.is_none(),
+        "finalizing a directory mention closes the popup"
+    );
+}
+
+#[tokio::test]
+async fn autocomplete_submit_at_directory_does_not_loop_on_identical_token() {
+    // Reproduces the no-op loop: the typed token already equals the directory's
+    // own path (the state the old drill-in logic got stuck in, because file
+    // search returns the directory itself as the top hit for that query).
+    // Enter must finalize + close, not re-insert the identical token.
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("@app/cli/");
+    state.ui.input.textarea.set_cursor("@app/cli/".len());
+    state.ui.completion.active = Some(ActiveSuggestions {
+        kind: SuggestionKind::At,
+        items: vec![SuggestionItem {
+            label: "app/cli/".into(),
+            description: None,
+            metadata: Some(SuggestionMeta::Path { is_directory: true }),
+        }],
+        selected: 0,
+        query: "app/cli/".into(),
+        trigger_pos: 0,
+    });
+
+    let (tx, _rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::AutocompleteSubmit, &tx).await;
+
+    assert_eq!(state.ui.input.text(), "@app/cli/ ");
+    assert!(state.ui.completion.active.is_none());
+}
+
+#[tokio::test]
+async fn autocomplete_submit_path_directory_drills_into_contents() {
+    // Contrast with the fuzzy `@` case above: Enter in path-traversal mode
+    // (`@./…`, `SuggestionKind::Path`) drills into the directory — appends `/`
+    // with NO trailing space, so the still-live token re-opens the popup on the
+    // directory's *contents*. Path search lists children (not the directory
+    // itself), so this makes progress instead of looping.
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("@./sr");
+    state.ui.input.textarea.set_cursor("@./sr".len());
+    state.ui.completion.active = Some(ActiveSuggestions {
+        kind: SuggestionKind::Path,
+        items: vec![SuggestionItem {
+            label: "./src".into(),
+            description: None,
+            metadata: Some(SuggestionMeta::Path { is_directory: true }),
+        }],
+        selected: 0,
+        query: "./sr".into(),
+        trigger_pos: 0,
+    });
+
+    let (tx, _rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::AutocompleteSubmit, &tx).await;
+
+    assert_eq!(state.ui.input.text(), "@./src/");
+    assert!(
+        state.ui.completion.active.is_some(),
+        "drilling keeps the popup live on the new path token"
+    );
+}
+
+#[tokio::test]
 async fn final_quoted_file_accept_closes_quote_and_appends_space() {
     let mut state = AppState::new();
     state.ui.input.textarea.set_text("@\"/tmp/my pro");
