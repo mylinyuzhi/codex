@@ -117,6 +117,14 @@ pub(super) async fn submit(state: &mut AppState, command_tx: &mpsc::Sender<UserC
         );
         state.ui.input.add_to_history(text.clone());
         persist_prompt_history(command_tx, text).await;
+        // `/exit` (alias `/quit`) shuts down through the same path as the
+        // Ctrl+C/Ctrl+D double-press exit, not the registry handler (which only
+        // prints "Exiting…"). Mirrors TS, where /exit funnels into the shared
+        // exit flow.
+        if super::is_exit_command(name.as_str()) {
+            super::shutdown_via_slash_command(state, command_tx).await;
+            return true;
+        }
         if let Err(e) = command_tx
             .send(UserCommand::ExecuteSlashCommand { name, args })
             .await

@@ -5,6 +5,7 @@
 //! view models, layout guards, and rendering helpers.
 
 pub(crate) mod activity;
+pub(crate) mod add_directory;
 pub(crate) mod agents_dialog;
 pub(crate) mod confirm;
 pub(crate) mod context_usage;

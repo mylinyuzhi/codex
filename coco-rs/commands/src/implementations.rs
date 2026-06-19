@@ -254,7 +254,7 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
         ),
         (
             names::ADD_DIR,
-            "Add a working directory",
+            "Add a new working directory",
             &[],
             add_dir_handler,
             true,

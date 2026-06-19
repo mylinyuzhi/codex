@@ -253,6 +253,11 @@ pub fn context_stack(ctx: TuiContext) -> Vec<KbContext> {
         // (and chars to filter / Y-N-A) before the editor's `intercept`
         // sees them as the `Cursor*` / `InsertChar` it expects.
         PermissionsEditor => vec![KbContext::Global],
+        // Global-only, same rationale as `PermissionsEditor`: the overlay's
+        // text input + nav come entirely from `add_directory::map_key`. No
+        // Select/Confirmation so chars/arrows aren't resolved to filter /
+        // Surface* / y-n-a before reaching the input map.
+        AddDirectory => vec![KbContext::Global],
         // Global-only, same rationale as `PermissionsEditor`: the prefix field's
         // nav + text input come entirely from `permission_prefix_edit_map_key`.
         // No Select/Confirmation so chars/arrows aren't resolved to filter /

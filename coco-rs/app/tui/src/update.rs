@@ -123,6 +123,14 @@ pub async fn handle_command(
         return changed;
     }
 
+    // The `/add-dir` overlay is a single directory-path text input with inline
+    // validation — same dedicated text-input routing as the permissions editor.
+    if let crate::modal_pane::add_directory::Handled::Yes(changed) =
+        crate::modal_pane::add_directory::intercept(state, &cmd, command_tx).await
+    {
+        return changed;
+    }
+
     // Inline edits to a shell prompt's editable "always allow" prefix are
     // consumed here so the keystrokes don't leak into the chat composer.
     if crate::bottom_pane::permission::intercept_prefix_edit(state, &cmd) {
@@ -998,6 +1006,12 @@ pub async fn handle_command(
             true
         }
         TuiCommand::ExecuteSlashCommand(name) => {
+            // `/exit` / `/quit` bound to a key (or chosen from the palette) take
+            // the shared shutdown path, same as the typed form in `edit::submit`.
+            if is_exit_command(name.as_str()) {
+                shutdown_via_slash_command(state, command_tx).await;
+                return true;
+            }
             let _ = command_tx
                 .send(UserCommand::ExecuteSlashCommand {
                     name,
@@ -1302,6 +1316,35 @@ async fn apply_exit_effect(
             state.quit();
         }
     }
+}
+
+/// Built-in exit command names (`exit` + its `quit` alias). Typed `/exit`
+/// shuts the REPL down through the SAME path as the Ctrl+C / Ctrl+D
+/// double-press exit — the registry handler only prints "Exiting…" and never
+/// tears the TUI down. Mirrors TS `commands/exit` (`immediate: true` →
+/// `gracefulShutdown`), whose own comment notes /exit, /quit, ctrl+c and
+/// ctrl+d all funnel through one exit path.
+pub(super) fn is_exit_command(name: &str) -> bool {
+    matches!(name, "exit" | "quit")
+}
+
+/// Shut down in response to a typed `/exit` / `/quit`, reusing the
+/// double-press exit mechanism (`UserCommand::Shutdown` + `state.quit()`) so
+/// the in-flight turn is drained and the terminal restored cleanly.
+pub(super) async fn shutdown_via_slash_command(
+    state: &mut AppState,
+    command_tx: &mpsc::Sender<UserCommand>,
+) {
+    tracing::info!(
+        exit_case = %ShutdownReason::SlashCommand,
+        "exit confirmed via slash command; shutting down"
+    );
+    let _ = command_tx
+        .send(UserCommand::Shutdown {
+            reason: ShutdownReason::SlashCommand,
+        })
+        .await;
+    state.quit();
 }
 
 async fn queue_current_input(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) -> bool {

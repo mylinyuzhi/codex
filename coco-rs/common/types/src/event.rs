@@ -1951,6 +1951,9 @@ pub enum TuiOnlyEvent {
     /// catalog before rendering.
     SlashCommandStatus {
         name: String,
+        /// Argument string the user typed after the command, used to render the
+        /// `❯ /name args` echo alongside the status. Empty when none was given.
+        args: String,
         kind: SlashCommandStatusKind,
     },
     /// Tell the TUI to open the rewind picker overlay.
@@ -2076,6 +2079,11 @@ pub enum TuiOnlyEvent {
     /// after each edit so the open overlay refreshes in place. TS parity:
     /// `commands/permissions/permissions.tsx` → `<PermissionRuleList>`.
     OpenPermissionsEditor { payload: PermissionsEditorPayload },
+    /// Open the interactive `/add-dir` overlay (no-argument form). The TUI
+    /// shows a directory-path text input; confirm re-dispatches
+    /// `/add-dir <path>` to reuse the validated session-add path. TS parity:
+    /// `commands/add-dir/add-dir.tsx` → `<AddWorkspaceDirectory>`.
+    OpenAddDirectory,
     /// Notify the TUI that a `/skills` dialog Enter has finished
     /// persisting (or failed). TUI renders the localized
     /// `Updated N / No changes / Failed: …` toast — keeping all

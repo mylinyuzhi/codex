@@ -61,6 +61,18 @@ pub fn format_local_command_stdout(value: &str) -> String {
     format!("<{LOCAL_COMMAND_STDOUT_TAG}>{body}</{LOCAL_COMMAND_STDOUT_TAG}>")
 }
 
+/// Wrap error text as a `<local-command-stderr>` body (empty → `(no content)`).
+/// The renderer paints stderr bodies in the error color so slash-command
+/// failures read like a tool result's `⎿ error` row.
+pub fn format_local_command_stderr(value: &str) -> String {
+    let body = if value.is_empty() {
+        NO_CONTENT_MESSAGE
+    } else {
+        value
+    };
+    format!("<{LOCAL_COMMAND_STDERR_TAG}>{body}</{LOCAL_COMMAND_STDERR_TAG}>")
+}
+
 /// Extract the inner (trimmed) text of the first `<tag>…</tag>` if present.
 pub fn extract_tag<'a>(content: &'a str, tag: &str) -> Option<&'a str> {
     let open = format!("<{tag}>");
@@ -100,6 +112,24 @@ pub fn build_slash_command_messages(
         ),
         slash_user_message(
             &format_local_command_stdout(output),
+            /*transcript_only*/ true,
+        ),
+    ]
+}
+
+/// Build the `❯ /cmd args` echo + `⎿ error` result for a slash command that
+/// failed (handler `Err`, missing handler, etc.), as transcript-only
+/// `Message::User`s. Identical to [`build_slash_command_messages`] except the
+/// result body is wrapped as `<local-command-stderr>`, so the renderer paints
+/// it in the error color — the slash-command analogue of a tool's `⎿ error`.
+pub fn build_slash_command_error_messages(name: &str, args: &str, error: &str) -> Vec<Message> {
+    vec![
+        slash_user_message(
+            &format_command_input(name, args),
+            /*transcript_only*/ true,
+        ),
+        slash_user_message(
+            &format_local_command_stderr(error),
             /*transcript_only*/ true,
         ),
     ]

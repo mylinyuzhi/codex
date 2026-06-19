@@ -54,6 +54,8 @@ pub enum ModalState {
     CopyPicker(CopyPickerState),
     TeamRoster(TeamRosterState),
     PluginHint(crate::state::plugin_dialog::PluginHintState),
+    /// `/add-dir` (no-arg) interactive directory-path input.
+    AddDirectory(surface_payloads::AddDirectoryState),
 }
 
 impl ModalState {
@@ -83,6 +85,7 @@ impl ModalState {
             | Self::CopyPicker(_)
             | Self::TeamRoster(_)
             | Self::PluginHint(_)
+            | Self::AddDirectory(_)
             | Self::IdleReturn(_) => 7,
             Self::Help => 8,
         }

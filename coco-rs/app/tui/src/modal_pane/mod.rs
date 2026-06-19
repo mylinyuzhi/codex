@@ -3,6 +3,7 @@
 //! `UiState` owns the modal slot; this module owns modal behavior. The update
 //! layer routes bottom-pane prompts first where required and falls through here.
 
+pub(crate) mod add_directory;
 pub(crate) mod model_picker;
 pub(crate) mod permissions_editor;
 pub(crate) mod settings;
@@ -256,6 +257,10 @@ fn picker_dismiss(modal: &ModalState) -> Option<PickerDismiss> {
         | M::BackgroundTasks(_)
         | M::TeamRoster(_)
         | M::PluginHint(_)
+        // `/add-dir` overlay runs its own Cancel (close + "Did not add…"
+        // result) inside `add_directory::intercept`, so the generic Esc route
+        // never reaches it.
+        | M::AddDirectory(_)
         | M::Feedback(_) => return None,
     })
 }

@@ -750,3 +750,24 @@ pub struct ThemePickerState {
     /// Theme setting active when the picker opened, restored on cancel.
     pub original_setting: crate::theme::ThemeSetting,
 }
+
+/// Interactive `/add-dir` (no-argument) overlay — a single-line directory-path
+/// input with inline validation. Mirrors TS `AddWorkspaceDirectory`: Enter
+/// validates the typed path and, on success, adds it to the session's working
+/// directories; an invalid path keeps the form open with [`Self::error`] set.
+/// Esc cancels. The actual add re-dispatches `/add-dir <path>` so the validated
+/// session-add path is reused, never duplicated.
+#[derive(Debug, Clone, Default)]
+pub struct AddDirectoryState {
+    /// Directory path the user is editing.
+    pub input: super::WizardTextField,
+    /// Localized validation error from the last failed confirm; cleared on the
+    /// next edit so the message never lingers past a fix.
+    pub error: Option<String>,
+}
+
+impl AddDirectoryState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
