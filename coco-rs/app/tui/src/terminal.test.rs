@@ -105,7 +105,7 @@ fn native_frame_overflow_shrink_defers_without_duplication() {
     assert_eq!(terminal.viewport_area(), Rect::new(0, 14, width, 10));
     assert_eq!(terminal.history_bottom_y(), 14);
     assert_eq!(decision.viewport, Rect::new(0, 14, width, 10));
-    assert_eq!(decision.deferred_shrink_rows, 6);
+    assert_eq!(decision.deferred_shrink_rows, 5);
     // No history row appears twice on screen (the duplication signature).
     let history_rows = (0..14)
         .map(|y| buffer_row(terminal.backend().buffer(), y))
@@ -132,8 +132,12 @@ fn sync_main_surface_uses_restored_inline_viewport_baseline() {
     let backend = TestBackend::new(width, height);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.sync_screen_size(size);
-    terminal.set_viewport_area(Rect::new(0, 20, width, 4));
-    terminal.note_history_rows_inserted(20);
+    // 19 history rows + a 5-row inline viewport (composer 3 + 2-row status bar:
+    // mode label + cycle hint) exactly fill the 24-row screen — the same
+    // history-adjacent exact fit the test was built around, shifted by the
+    // taller baseline status bar so the restored baseline stays stable.
+    terminal.set_viewport_area(Rect::new(0, 19, width, 5));
+    terminal.note_history_rows_inserted(19);
     let mut surface = NativeSurfaceController::default();
     let native_frame = surface.prepare_native_frame(&state, width, plan, Instant::now());
     let mut pin = ViewportPin::BottomPinned;
@@ -152,8 +156,8 @@ fn sync_main_surface_uses_restored_inline_viewport_baseline() {
     )
     .expect("sync");
 
-    assert_eq!(decision.previous_viewport, Rect::new(0, 20, width, 4));
-    assert_eq!(decision.viewport, Rect::new(0, 20, width, 4));
+    assert_eq!(decision.previous_viewport, Rect::new(0, 19, width, 5));
+    assert_eq!(decision.viewport, Rect::new(0, 19, width, 5));
 }
 
 #[test]
@@ -164,8 +168,10 @@ fn tui_alt_screen_leave_uses_restored_inline_viewport_baseline() {
     let backend = TestBackend::new(width, height);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.sync_screen_size(size);
-    terminal.set_viewport_area(Rect::new(0, 20, width, 4));
-    terminal.note_history_rows_inserted(20);
+    // 19 history rows + a 5-row inline viewport (composer 3 + 2-row status bar)
+    // exactly fill the 24-row screen, so the baseline survives the round-trip.
+    terminal.set_viewport_area(Rect::new(0, 19, width, 5));
+    terminal.note_history_rows_inserted(19);
     let mut tui = Tui::new_for_test(terminal, TerminalCompatibility::NativeScrollback);
 
     let mut modal_state = AppState::new();
@@ -182,9 +188,11 @@ fn tui_alt_screen_leave_uses_restored_inline_viewport_baseline() {
         .last_geometry_commit_for_test()
         .expect("restore frame geometry commit");
 
-    assert_eq!(decision.previous_viewport, Rect::new(0, 20, width, 4));
-    assert_eq!(decision.viewport, Rect::new(0, 20, width, 4));
-    assert_eq!(tui.terminal().viewport_area(), Rect::new(0, 20, width, 4));
+    // The pre-modal inline baseline (0,19,5) is preserved across the
+    // alt-screen round-trip.
+    assert_eq!(decision.previous_viewport, Rect::new(0, 19, width, 5));
+    assert_eq!(decision.viewport, Rect::new(0, 19, width, 5));
+    assert_eq!(tui.terminal().viewport_area(), Rect::new(0, 19, width, 5));
 }
 
 #[test]
@@ -222,7 +230,7 @@ fn overflow_shrink_defers_when_unbacked() {
 
     assert_eq!(pin, ViewportPin::BottomPinned);
     assert_eq!(decision.viewport, Rect::new(0, 14, width, 10));
-    assert_eq!(decision.deferred_shrink_rows, 6);
+    assert_eq!(decision.deferred_shrink_rows, 5);
     assert_eq!(terminal.viewport_area(), decision.viewport);
 }
 

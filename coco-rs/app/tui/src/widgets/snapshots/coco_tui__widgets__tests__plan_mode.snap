@@ -12,4 +12,4 @@ expression: output
 ❯                                                                               
 ────────────────────────────────────────────────────────────────────────────────
  opus-4 * auto | ↑0 ↓0 · cache 0/0% | ctx -- | →1 ←0                            
- ⏸ plan mode on
+ ⏸ plan mode on · shift+tab to cycle
