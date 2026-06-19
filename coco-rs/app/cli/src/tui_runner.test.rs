@@ -326,6 +326,33 @@ fn classify_sentinel_dream() {
 }
 
 #[test]
+fn classify_sentinel_btw() {
+    use coco_commands::handlers::btw::BTW_SENTINEL;
+    let text = format!("{BTW_SENTINEL} how does caching work?");
+    assert!(matches!(
+        classify_sentinel_trigger(&text),
+        Some(SentinelTrigger::Btw { request }) if request.question == "how does caching work?"
+    ));
+}
+
+#[test]
+fn classify_sentinel_btw_empty_question_is_none() {
+    use coco_commands::handlers::btw::BTW_SENTINEL;
+    let text = format!("{BTW_SENTINEL} ");
+    assert_eq!(classify_sentinel_trigger(&text), None);
+}
+
+#[test]
+fn first_user_prompt_title_uses_first_line_truncated() {
+    use coco_messages::create_user_message;
+    let msgs = vec![create_user_message("Build the auth flow\nmore detail")];
+    assert_eq!(
+        super::first_user_prompt_title(&msgs).as_deref(),
+        Some("Build the auth flow")
+    );
+}
+
+#[test]
 fn classify_sentinel_summary() {
     use coco_commands::handlers::summary::SUMMARY_SENTINEL;
     let text = format!("{SUMMARY_SENTINEL} \nWriting session memory…\n");

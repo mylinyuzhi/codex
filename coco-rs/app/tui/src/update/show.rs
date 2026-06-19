@@ -13,8 +13,6 @@ use crate::command::UserCommand;
 use crate::state::ActiveSuggestions;
 use crate::state::AppState;
 use crate::state::ComposerPopupState;
-use crate::state::ExportFormat;
-use crate::state::ExportState;
 use crate::state::GlobalSearchState;
 use crate::state::ModalState;
 use crate::state::ModelEntry;
@@ -314,18 +312,6 @@ pub(super) fn quick_open(state: &mut AppState) {
     state.ui.show_modal(ModalState::QuickOpen(QuickOpenState {
         filter: String::new(),
         files: Vec::new(),
-        selected: 0,
-    }));
-}
-
-/// Open the export state with the available formats.
-pub(super) fn export(state: &mut AppState) {
-    state.ui.show_modal(ModalState::Export(ExportState {
-        formats: vec![
-            ExportFormat::Markdown,
-            ExportFormat::Json,
-            ExportFormat::Text,
-        ],
         selected: 0,
     }));
 }

@@ -228,8 +228,6 @@ pub enum TuiCommand {
     ShowGlobalSearch,
     /// Show quick open (Ctrl+O).
     ShowQuickOpen,
-    /// Show export dialog.
-    ShowExport,
     /// Show rewind state (message selector). Triggered by double-Esc
     /// or `/rewind` command.
     ShowRewind,

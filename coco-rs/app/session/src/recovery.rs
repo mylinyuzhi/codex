@@ -479,12 +479,43 @@ pub fn can_resume_session(transcript_path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Fork a conversation — create a copy of the transcript for a new session.
-pub fn fork_conversation(source_path: &Path, dest_path: &Path) -> crate::Result<()> {
+/// Fork a conversation — copy the transcript into a new session file,
+/// relabeling every entry's `session_id` to `dest_session_id` so the fork's
+/// entries claim the new session (mirrors TS `createFork`, which rewrites each
+/// entry's `sessionId`). Message/parent UUIDs are kept verbatim — the chain is
+/// self-consistent within the copied file, and UUIDs are scoped per session.
+/// A line that fails to parse as JSON is copied through unchanged.
+pub fn fork_conversation(
+    source_path: &Path,
+    dest_path: &Path,
+    dest_session_id: &str,
+) -> crate::Result<()> {
     if let Some(parent) = dest_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::copy(source_path, dest_path)?;
+    let source = std::fs::read_to_string(source_path)?;
+    let mut out = String::with_capacity(source.len());
+    for line in source.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<serde_json::Value>(line) {
+            Ok(mut value) => {
+                if let Some(obj) = value.as_object_mut()
+                    && obj.contains_key("session_id")
+                {
+                    obj.insert(
+                        "session_id".to_string(),
+                        serde_json::Value::String(dest_session_id.to_string()),
+                    );
+                }
+                out.push_str(&serde_json::to_string(&value).unwrap_or_else(|_| line.to_string()));
+            }
+            Err(_) => out.push_str(line),
+        }
+        out.push('\n');
+    }
+    std::fs::write(dest_path, out)?;
     Ok(())
 }
 

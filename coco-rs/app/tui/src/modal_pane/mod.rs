@@ -516,18 +516,20 @@ pub(crate) async fn route_confirm(
             state.ui.finish_taken_modal();
         }
         ModalState::Export(e) => {
-            if let Some(fmt) = e.formats.get(e.selected as usize) {
-                let cmd = match fmt {
-                    ExportFormat::Markdown => "/export markdown",
-                    ExportFormat::Json => "/export json",
-                    ExportFormat::Text => "/export text",
+            if let Some(fmt) = e.formats.get(e.selected as usize)
+                && let Ok(name) = crate::state::SlashCommandName::new("export")
+            {
+                // Dispatch the bare format keyword; the CLI runner expands it
+                // to a timestamped default filename and writes the file.
+                let args = match fmt {
+                    ExportFormat::Markdown => "markdown",
+                    ExportFormat::Json => "json",
+                    ExportFormat::Text => "text",
                 };
                 let _ = command_tx
-                    .send(UserCommand::SubmitInput {
-                        user_message_id: uuid::Uuid::new_v4().to_string(),
-                        content: cmd.to_string(),
-                        display_text: None,
-                        images: Vec::new(),
+                    .send(UserCommand::ExecuteSlashCommand {
+                        name,
+                        args: args.to_string(),
                     })
                     .await;
             }

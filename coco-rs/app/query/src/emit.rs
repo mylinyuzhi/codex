@@ -224,6 +224,7 @@ fn tui_kind(evt: &TuiOnlyEvent) -> &'static str {
         TuiOnlyEvent::OpenAgentsDialog { .. } => "open_agents_dialog",
         TuiOnlyEvent::OpenPermissionsEditor { .. } => "open_permissions_editor",
         TuiOnlyEvent::OpenAddDirectory => "open_add_directory",
+        TuiOnlyEvent::OpenExport => "open_export",
         TuiOnlyEvent::SkillOverridesSaved { .. } => "skill_overrides_saved",
     }
 }

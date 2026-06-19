@@ -197,6 +197,7 @@ fn tui_event_variant(t: &coco_types::TuiOnlyEvent) -> &'static str {
         E::OpenAgentsDialog { .. } => "OpenAgentsDialog",
         E::OpenPermissionsEditor { .. } => "OpenPermissionsEditor",
         E::OpenAddDirectory => "OpenAddDirectory",
+        E::OpenExport => "OpenExport",
         E::SkillOverridesSaved { .. } => "SkillOverridesSaved",
         E::SlashCommandStatus { .. } => "SlashCommandStatus",
     }

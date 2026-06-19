@@ -13235,6 +13235,19 @@
           "type": "object"
         },
         {
+          "description": "Open the interactive `/export` format picker (no-argument form). The\nTUI shows the Markdown/JSON/Text chooser; confirm re-dispatches\n`/export <format>`, which the CLI runner renders from the live\n`MessageHistory` and writes to disk. (coco-specific: TS's\n`<ExportDialog>` instead offers clipboard-vs-file for a single plain-text\nformat; coco picks among Markdown/JSON/Text and writes to a file.)",
+          "properties": {
+            "type": {
+              "const": "open_export",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
           "description": "Notify the TUI that a `/skills` dialog Enter has finished\npersisting (or failed). TUI renders the localized\n`Updated N / No changes / Failed: \u2026` toast \u2014 keeping all\nuser-visible text generation on the UI side.",
           "properties": {
             "result": {

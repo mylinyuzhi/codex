@@ -129,12 +129,19 @@ fn fork_creates_new_id_and_copies_jsonl() {
         plan.destination_path.exists(),
         "fork copy must land on disk"
     );
-    // Same content as source — fork is byte-identical until the
-    // first new turn lands.
-    assert_eq!(
-        std::fs::read_to_string(&plan.destination_path).unwrap(),
-        std::fs::read_to_string(&plan.source_path).unwrap(),
-    );
+    // The transcript copies verbatim except each entry's `session_id`,
+    // which is relabeled to the freshly minted fork id so the fork owns
+    // its own identity — the source id must not survive.
+    let dest = std::fs::read_to_string(&plan.destination_path).unwrap();
+    for line in dest.lines().filter(|l| !l.trim().is_empty()) {
+        let entry: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert_eq!(
+            entry["session_id"], plan.session_id,
+            "every entry must carry the fork id, not the source id"
+        );
+    }
+    // Non-id content (per-entry uuids) is preserved verbatim.
+    assert!(dest.contains("src-u1") && dest.contains("src-a1"));
 }
 
 #[test]

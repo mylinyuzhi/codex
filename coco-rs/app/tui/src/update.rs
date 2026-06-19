@@ -914,10 +914,6 @@ pub async fn handle_command(
             show::quick_open(state);
             true
         }
-        TuiCommand::ShowExport => {
-            show::export(state);
-            true
-        }
         TuiCommand::ShowRewind => {
             show::rewind(state, command_tx).await;
             true

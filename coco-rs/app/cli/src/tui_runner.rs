@@ -2265,6 +2265,15 @@ enum SlashOutcome {
     /// Open a concrete session plan file through the same external
     /// editor terminal handoff used by prompt and memory editing.
     TriggerOpenPlanEditor { path: std::path::PathBuf },
+    /// Run a `/btw` side question as a one-shot fork that shares the
+    /// parent turn's prompt cache, then render the answer inline. Emitted
+    /// when the dispatcher sees `BTW_SENTINEL`; the runner reads
+    /// `runtime.last_cache_safe_params()` + the installed `ForkDispatcher`
+    /// (mirrors the SDK `/btw` short-circuit). The parent conversation is
+    /// untouched.
+    TriggerBtw {
+        request: coco_commands::handlers::btw::BtwRequest,
+    },
     /// Rebuild the slash-command registry from disk and atomically
     /// swap. Triggered by `/reload-plugins`.
     TriggerReloadPlugins,
@@ -2451,6 +2460,123 @@ async fn dispatch_resume(
     }
 
     SlashOutcome::Handled
+}
+
+/// `/branch` (alias `/fork`) — fork the current conversation at this point
+/// into a NEW session and switch to it live, mirroring TS `commands/branch`.
+/// Copies the current transcript to a fresh uuid via `fork_conversation` (the
+/// same primitive `--fork-session` uses), then hydrates the runtime onto the
+/// fork (the same in-session switch `/resume` performs via
+/// [`hydrate_resume_plan`]). The original session is left untouched on disk.
+async fn dispatch_branch(
+    args: &str,
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+) -> SlashOutcome {
+    let custom_title = args.trim().to_string();
+    let source_id = runtime.current_session_id().await;
+    if source_id.is_empty() {
+        emit_slash_text(event_tx, "branch", "", "No active session to branch from.").await;
+        return SlashOutcome::Handled;
+    }
+    let working_dir = runtime.original_cwd.clone();
+    let plan = tokio::task::spawn_blocking(move || -> anyhow::Result<ResumePlan> {
+        let store =
+            coco_session::TranscriptStore::new(coco_cli::paths::project_paths(&working_dir));
+        let source_path = store.transcript_path(&source_id);
+        if !coco_session::recovery::can_resume_session(&source_path) {
+            anyhow::bail!(
+                "nothing to branch yet — send a message first so there's a conversation to fork"
+            );
+        }
+        let dest_id = uuid::Uuid::new_v4().to_string();
+        let dest_path = store.transcript_path(&dest_id);
+        coco_session::recovery::fork_conversation(&source_path, &dest_path, &dest_id).map_err(
+            |e| {
+                anyhow::anyhow!(
+                    "fork copy {} → {} failed: {e}",
+                    source_path.display(),
+                    dest_path.display()
+                )
+            },
+        )?;
+        let conversation = coco_session::recovery::load_conversation_for_resume(&dest_path)?;
+        let prior_messages = conversation.messages.clone();
+        Ok(ResumePlan {
+            session_id: dest_id,
+            source_session_id: source_id,
+            source_path,
+            destination_path: dest_path,
+            prior_messages,
+            conversation,
+            is_fork: true,
+        })
+    })
+    .await;
+    match plan {
+        Ok(Ok(plan)) => {
+            let new_id = plan.session_id.clone();
+            let source_id = plan.source_session_id.clone();
+            // Derive the fork title: explicit arg, else the first user prompt
+            // (truncated), suffixed " (Branch)" — mirrors TS branch.ts. Done
+            // BEFORE hydrate moves `plan`.
+            let base_title = if custom_title.is_empty() {
+                first_user_prompt_title(&plan.prior_messages)
+            } else {
+                Some(custom_title)
+            };
+            hydrate_resume_plan(&plan, runtime, event_tx).await;
+            // Reconcile coordinator mode onto the fork, same as /resume — the
+            // fork inherits the source's persisted mode. Runs at a turn
+            // boundary so the next prompt assembly observes the flip.
+            if let Some(warning) = coco_cli::coordinator_mode_resume::reconcile_on_resume(
+                plan.conversation.mode.as_deref(),
+                &runtime.runtime_config.features,
+            ) {
+                emit_slash_text(event_tx, "branch", args, warning).await;
+            }
+            // The fork is now the live session, so persist_rename titles IT.
+            if let Some(base) = base_title {
+                let title = format!("{base} (Branch)");
+                if let Err(e) = coco_cli::session_rename::persist_rename(runtime, title).await {
+                    warn!(error = %e, "failed to set /branch fork title");
+                }
+            }
+            emit_slash_text(
+                event_tx,
+                "branch",
+                args,
+                &format!(
+                    "Branched into a new session ({new_id}). \
+                     To return to the original, /resume {source_id}."
+                ),
+            )
+            .await;
+        }
+        Ok(Err(e)) => {
+            emit_slash_text(event_tx, "branch", "", &format!("Failed to branch: {e}")).await;
+        }
+        Err(e) => {
+            emit_slash_text(event_tx, "branch", "", &format!("Branch task failed: {e}")).await;
+        }
+    }
+    SlashOutcome::Handled
+}
+
+/// Derive a short title from the first user message's text (first line,
+/// truncated), for naming a `/branch` fork when no explicit title is given.
+fn first_user_prompt_title(messages: &[coco_messages::Message]) -> Option<String> {
+    let text = messages.iter().find_map(|m| {
+        matches!(m, coco_messages::Message::User(_))
+            .then(|| coco_messages::wrapping::extract_text_from_message(m))
+            .filter(|t| !t.trim().is_empty())
+    })?;
+    let first_line = text.trim().lines().next().unwrap_or("").trim();
+    if first_line.is_empty() {
+        return None;
+    }
+    let truncated: String = first_line.chars().take(40).collect();
+    Some(truncated)
 }
 
 async fn load_resume_plan_for_target(
@@ -2649,6 +2775,9 @@ enum SentinelTrigger {
     },
     ReloadPlugins,
     ReloadHooks,
+    Btw {
+        request: coco_commands::handlers::btw::BtwRequest,
+    },
 }
 
 fn classify_sentinel_trigger(text: &str) -> Option<SentinelTrigger> {
@@ -2710,6 +2839,11 @@ fn classify_sentinel_trigger(text: &str) -> Option<SentinelTrigger> {
         && coco_commands::parse_reload_hooks_sentinel(text).is_some()
     {
         return Some(SentinelTrigger::ReloadHooks);
+    }
+    if text.starts_with(coco_commands::handlers::btw::BTW_SENTINEL)
+        && let Some(request) = coco_commands::handlers::btw::parse_btw_sentinel(text)
+    {
+        return Some(SentinelTrigger::Btw { request });
     }
     None
 }
@@ -2812,6 +2946,10 @@ async fn handle_slash_outcome(
         }
         SlashOutcome::TriggerSummary => {
             run_session_memory_force(runtime).await;
+            SlashFollowup::Done
+        }
+        SlashOutcome::TriggerBtw { request } => {
+            run_side_question(runtime, event_tx, request).await;
             SlashFollowup::Done
         }
         SlashOutcome::ShowCost => {
@@ -2922,6 +3060,9 @@ async fn drain_queued_slash_commands(
             }
             SlashOutcome::TriggerSummary => {
                 run_session_memory_force(runtime).await;
+            }
+            SlashOutcome::TriggerBtw { request } => {
+                run_side_question(runtime, event_tx, request).await;
             }
             SlashOutcome::ShowCost => {
                 let snapshot = runtime.session_usage_snapshot().await;
@@ -3216,6 +3357,26 @@ async fn dispatch_slash_command(
             .await;
         return SlashOutcome::Handled;
     }
+    // `/export` (no arg) opens the Markdown/JSON/Text format picker;
+    // `/export <format>` renders the live conversation history in that format
+    // and writes it to a file in the session's original cwd. The sync registry
+    // handler has no runtime access (can't reach `MessageHistory`), so the real
+    // export lives here. Mirrors TS `commands/export/export.tsx`.
+    if name == "export" {
+        if args.trim().is_empty() {
+            let _ = event_tx
+                .send(CoreEvent::Tui(TuiOnlyEvent::OpenExport))
+                .await;
+            return SlashOutcome::Handled;
+        }
+        return run_export(args, runtime, event_tx).await;
+    }
+    // `/branch` (alias `/fork`) forks the conversation at this point into a new
+    // session and switches to it live. The sync registry handler only echoes
+    // text — the real fork needs runtime + session-store access.
+    if matches!(name, "branch" | "fork") {
+        return dispatch_branch(args, runtime, event_tx).await;
+    }
     if name == "resume" {
         return dispatch_resume(args, runtime, event_tx).await;
     }
@@ -3324,6 +3485,7 @@ async fn dispatch_slash_command(
                     SentinelTrigger::AddDir { path } => SlashOutcome::TriggerAddDir { path },
                     SentinelTrigger::ReloadPlugins => SlashOutcome::TriggerReloadPlugins,
                     SentinelTrigger::ReloadHooks => SlashOutcome::TriggerReloadHooks,
+                    SentinelTrigger::Btw { request } => SlashOutcome::TriggerBtw { request },
                 };
             }
             emit_slash_text(event_tx, name, args, &text).await;
@@ -4026,6 +4188,82 @@ async fn run_session_memory_force(runtime: &Arc<crate::session_runtime::SessionR
         .session_memory
         .force(tokens, last_msg_id, had_tool_calls)
         .await;
+}
+
+/// `/btw <question>` runner — runs the side question as a one-shot, tool-less
+/// fork that shares the parent turn's prompt cache (`CacheSafeParams`) and
+/// renders the answer inline as the slash result. Shares the fork+extract
+/// logic with the SDK path via [`crate::side_question`]; the parent
+/// conversation is never mutated. Degrades to a hint line when no parent turn
+/// has finalised yet (incl. right after `/clear`) or the fork dispatcher is
+/// not installed.
+async fn run_side_question(
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+    request: coco_commands::handlers::btw::BtwRequest,
+) {
+    let answer = match runtime.last_cache_safe_params().await {
+        None => "(no parent turn yet — run a regular prompt first so /btw can share its cache)"
+            .to_string(),
+        Some(cache) => match runtime.current_fork_dispatcher().await {
+            None => "(fork dispatcher not installed — /btw requires CLI bootstrap)".to_string(),
+            Some(dispatcher) => {
+                crate::side_question::run_side_question_fork(&cache, &dispatcher, &request.question)
+                    .await
+            }
+        },
+    };
+    // Echo the question as the command args so the row reads `❯ /btw <q>`,
+    // and surface just the answer as the result body.
+    emit_slash_text(event_tx, "btw", &request.question, &answer).await;
+}
+
+/// `/export <filename>` runner — renders the live conversation `MessageHistory`
+/// (incl. tool activity) and writes it to a file in the session's original cwd,
+/// then confirms the path. The sync registry handler has no runtime access, so
+/// the real export lives here. Mirrors TS `commands/export/export.tsx`: the arg
+/// is a FILENAME and the file is written under the cwd. coco infers the format
+/// from the extension (`.md`→markdown, `.json`→json, else plain text) — TS
+/// exports plain text only. The no-arg format-picker modal re-enters here with
+/// a bare format keyword (`markdown`/`json`/`text`), for which a timestamped
+/// default filename is generated. (Clipboard export lives in `/copy`.)
+async fn run_export(
+    args: &str,
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+) -> SlashOutcome {
+    use crate::conversation_export::ExportFormat;
+    let arg = args.trim();
+    // A bare format keyword comes from the modal → timestamped default name;
+    // anything else is treated as the target filename (TS-style).
+    let (format, filename) = match ExportFormat::from_keyword(&arg.to_ascii_lowercase()) {
+        Some(format) => {
+            let ts = chrono::Local::now().format("%Y-%m-%d-%H%M%S");
+            (format, format!("conversation-{ts}.{}", format.ext()))
+        }
+        None => {
+            let format = ExportFormat::from_filename(arg);
+            // Append the inferred extension when the filename carries none.
+            let filename = if arg.contains('.') {
+                arg.to_string()
+            } else {
+                format!("{arg}.{}", format.ext())
+            };
+            (format, filename)
+        }
+    };
+    // Render under the lock, then drop it before the file write / await.
+    let body = {
+        let history = runtime.history.lock().await;
+        format.render(history.as_slice())
+    };
+    let path = runtime.original_cwd.join(&filename);
+    let message = match tokio::fs::write(&path, body).await {
+        Ok(()) => format!("Conversation exported to {}", path.display()),
+        Err(e) => format!("Failed to write export to {}: {e}", path.display()),
+    };
+    emit_slash_text(event_tx, "export", args, &message).await;
+    SlashOutcome::Handled
 }
 
 /// `/rename [name]` runner — resolves the new name (explicit or

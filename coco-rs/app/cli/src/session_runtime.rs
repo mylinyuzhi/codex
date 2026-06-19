@@ -412,6 +412,11 @@ pub struct RoleOverride {
     pub effort: Option<ReasoningEffort>,
 }
 
+/// Shared handle to a `QueryEngine`'s post-turn cache-safe-params slot, as
+/// returned by `QueryEngine::cache_safe_params_handle`. Kept as an alias so
+/// the runtime field that stores the latest one stays readable.
+type CacheParamsHandle = Arc<RwLock<Option<coco_types::CacheSafeParams>>>;
+
 /// All per-session state shared by both runners. Construction at startup
 /// is done once via [`SessionRuntime::build`]; per-turn engines are
 /// assembled via [`SessionRuntime::build_engine`].
@@ -596,6 +601,15 @@ pub struct SessionRuntime {
     /// `promptSuggestion` skips). Real impl lives in
     /// `app/cli/src/fork_dispatcher.rs`.
     fork_dispatcher: Arc<RwLock<Option<coco_query::forked_agent::ForkDispatcherRef>>>,
+    /// Latest per-turn engine's cache-safe-params handle, captured on every
+    /// `build_engine`. The `QueryEngine` is rebuilt each turn, but this `Arc`
+    /// is shared with the engine's slot, so it keeps observing the params the
+    /// engine writes at turn finalize and survives the engine drop. A
+    /// between-turns `/btw` reads it to share the parent turn's prompt cache
+    /// (the SDK path reads the same data off its persistent `engine`).
+    /// `None` until the first engine is built; the inner `Option` is `None`
+    /// until the first turn finalises (or after `/clear`).
+    last_engine_cache_handle: Arc<RwLock<Option<CacheParamsHandle>>>,
     /// Session-scoped abort token for the in-flight prompt-suggestion
     /// fork. When a new suggestion fork starts, we cancel the previous
     /// one so users rapidly cycling `/clear` don't accumulate fork tasks
@@ -1421,6 +1435,7 @@ impl SessionRuntime {
             skill_handle: Arc::new(RwLock::new(None)),
             skill_bash_cell: Arc::new(std::sync::RwLock::new(None)),
             fork_dispatcher: Arc::new(RwLock::new(None)),
+            last_engine_cache_handle: Arc::new(RwLock::new(None)),
             current_suggestion_abort: Arc::new(tokio::sync::Mutex::new(None)),
             task_runtime: Arc::new(RwLock::new(None)),
             task_list: Arc::new(RwLock::new(None)),
@@ -2102,6 +2117,12 @@ impl SessionRuntime {
         // Late-bind the session id so user-typed skill slash commands can
         // substitute `${CLAUDE_SESSION_ID}`.
         registry.set_session_id(self.session_id.read().await.clone());
+        // Capture this engine's cache-safe-params handle so a between-turns
+        // `/btw` fork can read the parent turn's `CacheSafeParams` even though
+        // the engine is rebuilt per turn. The handle is an `Arc` shared with
+        // the engine's slot — it keeps observing writes the engine makes at
+        // turn finalize and outlives the engine drop.
+        *self.last_engine_cache_handle.write().await = Some(engine.cache_safe_params_handle());
         engine
     }
 
@@ -2676,6 +2697,18 @@ impl SessionRuntime {
         &self,
     ) -> Option<coco_query::forked_agent::ForkDispatcherRef> {
         self.fork_dispatcher.read().await.clone()
+    }
+
+    /// Read the most recent turn's cache-safe params. `None` before the
+    /// first turn finalises (or after `/clear`). The TUI `/btw` dispatch
+    /// reads this to share the parent's prompt cache; the SDK path reads
+    /// the same data straight off its persistent `engine`.
+    pub async fn last_cache_safe_params(&self) -> Option<coco_types::CacheSafeParams> {
+        let handle = self.last_engine_cache_handle.read().await.clone();
+        match handle {
+            Some(h) => h.read().await.clone(),
+            None => None,
+        }
     }
 
     /// Install the background task runtime. Called once during CLI
@@ -3404,6 +3437,14 @@ impl SessionRuntime {
         // Step 2: reset session caches.
         *self.app_state.write().await = ToolAppState::default();
         self.reset_cache_break_detectors().await;
+        // Drop the captured post-turn cache-safe-params handle. Otherwise a
+        // `/btw` issued between this `/clear` and the first post-clear turn
+        // would read the dropped pre-clear engine's slot (still holding the
+        // discarded conversation in `fork_context_messages`) and fork against
+        // content the user just cleared. Nulling it makes `last_cache_safe_params`
+        // return `None`, so `/btw` shows the "no parent turn yet" hint until a
+        // fresh turn repopulates it. Matches the field/getter doc contract.
+        *self.last_engine_cache_handle.write().await = None;
         // Clear the per-agent skill announcement map so every skill
         // re-announces in the post-clear transcript's first listing pass.
         self.skill_manager.reset_announcements();

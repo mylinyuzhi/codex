@@ -27,8 +27,6 @@ Based on the above changes:
    ```
    git commit -m "$(cat <<'EOF'
    Commit message here.
-
-   Co-Authored-By: Claude <noreply@anthropic.com>
    EOF
    )"
    ```

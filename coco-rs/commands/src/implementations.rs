@@ -153,12 +153,12 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
         ),
         (
             names::BRANCH,
-            "Branch the current conversation",
+            "Branch the current conversation into a new session",
             &["fork"],
             branch_handler,
             true,
             LocalOnly,
-            Some("[name]"),
+            Some("[title]"),
         ),
         // /theme registered via `register_ts_parity_handlers` below — a custom
         // CommandHandler that returns `OpenDialog(ThemePicker)` on no args.
@@ -218,7 +218,7 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
         ),
         (
             names::EXPORT,
-            "Export conversation to a file or clipboard",
+            "Export the conversation to a file (format inferred from extension)",
             &[],
             export_handler,
             true,
@@ -640,7 +640,8 @@ fn builtin_argument_kind(name: &str, fallback: CommandArgumentKind) -> CommandAr
     match name {
         names::ADD_DIR => CommandArgumentKind::DirectoryPath,
         names::RESUME => CommandArgumentKind::SessionId,
-        names::EXPORT => CommandArgumentKind::FilePath,
+        // /export's arg is a format keyword (markdown|json|text), not a path —
+        // fall through to the free-text fallback completion.
         _ => fallback,
     }
 }
@@ -673,13 +674,14 @@ fn plan_handler(args: &str) -> String {
     }
 }
 
-fn branch_handler(args: &str) -> String {
-    let name = args.trim();
-    if name.is_empty() {
-        "Creating conversation branch at current point...".to_string()
-    } else {
-        format!("Creating conversation branch: {name}")
-    }
+// Fallback guidance only. In the TUI, `dispatch_slash_command` intercepts
+// `/branch` (alias `/fork`) before the registry and performs the real
+// conversation fork + live session switch (needs runtime + session-store
+// access the sync handler lacks). This body is the non-interactive fallback.
+fn branch_handler(_args: &str) -> String {
+    "/branch forks the current conversation into a new session and switches to it. \
+     Available in the interactive TUI."
+        .to_string()
 }
 
 fn copy_handler(args: &str) -> String {
@@ -741,7 +743,8 @@ fn sandbox_handler(args: &str) -> String {
 }
 
 fn usage_handler(_args: &str) -> String {
-    "Plan usage information not available (requires Claude AI subscription).".to_string()
+    "Plan usage information is not available. Use /cost to see this session's token usage and cost."
+        .to_string()
 }
 
 fn upgrade_handler(_args: &str) -> String {
@@ -1094,17 +1097,16 @@ pub fn parse_tag_sentinel(handler_output: &str) -> Option<String> {
     Some(parsed.args.to_string())
 }
 
-fn export_handler(args: &str) -> String {
-    let filename = args.trim();
-    if filename.is_empty() {
-        "Usage: /export [filename]\n\n\
-         Exports the current conversation.\n\
-         Formats: .md (markdown), .json (raw), .txt (plain text)\n\n\
-         If no filename is given, copies to clipboard."
-            .to_string()
-    } else {
-        format!("Exporting conversation to: {filename}")
-    }
+// Fallback guidance only. In the TUI, `dispatch_slash_command` intercepts
+// `/export` before the registry and performs the real render + file write
+// against the live `MessageHistory` (the sync handler has no runtime access),
+// so this body is never the success path — keep it honest about that.
+fn export_handler(_args: &str) -> String {
+    "Usage: /export [filename]\n\n\
+     Exports the current conversation to a file in the working directory.\n\
+     The format follows the extension: .md (Markdown), .json (JSON), else plain text.\n\
+     Run with no argument to pick a format interactively."
+        .to_string()
 }
 
 // ── Async handlers ──
@@ -1729,7 +1731,7 @@ pub fn register_ts_parity_handlers(
     register_static_prompt(
         registry,
         names::STATUSLINE,
-        "Set up Claude Code's status line UI",
+        "Set up coco's status line UI",
         "setting up statusLine",
         STATUSLINE_PROMPT,
         handlers::prompt_command::ArgsHandling::AppendUnderTask,
@@ -1827,7 +1829,6 @@ fn commit_push_pr_allowed_tools() -> Vec<String> {
         "Bash(gh pr merge:*)".to_string(),
         "ToolSearch".to_string(),
         "mcp__slack__send_message".to_string(),
-        "mcp__claude_ai_Slack__slack_send_message".to_string(),
     ]
 }
 

@@ -371,6 +371,18 @@ impl QueryEngine {
         self.last_cache_safe_params.read().await.clone()
     }
 
+    /// Clone the `Arc<RwLock<...>>` so observers (the TUI runtime, transcript
+    /// recorder) can poll the slot across the per-turn engine's lifetime
+    /// without holding a `&QueryEngine`. Read-only contract: external holders
+    /// observe the slot; the engine is the only writer (via
+    /// `save_cache_safe_params` at turn finalize). `/clear` drops the handle
+    /// at the runtime layer rather than mutating the inner slot.
+    pub fn cache_safe_params_handle(
+        &self,
+    ) -> std::sync::Arc<tokio::sync::RwLock<Option<coco_types::CacheSafeParams>>> {
+        self.last_cache_safe_params.clone()
+    }
+
     /// Engine-internal writer for the cache-safe params slot. Called
     /// from `finalize_turn_post_tools` after each successful turn —
     /// **not** part of the public API.

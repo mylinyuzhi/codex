@@ -2084,6 +2084,13 @@ pub enum TuiOnlyEvent {
     /// `/add-dir <path>` to reuse the validated session-add path. TS parity:
     /// `commands/add-dir/add-dir.tsx` → `<AddWorkspaceDirectory>`.
     OpenAddDirectory,
+    /// Open the interactive `/export` format picker (no-argument form). The
+    /// TUI shows the Markdown/JSON/Text chooser; confirm re-dispatches
+    /// `/export <format>`, which the CLI runner renders from the live
+    /// `MessageHistory` and writes to disk. (coco-specific: TS's
+    /// `<ExportDialog>` instead offers clipboard-vs-file for a single plain-text
+    /// format; coco picks among Markdown/JSON/Text and writes to a file.)
+    OpenExport,
     /// Notify the TUI that a `/skills` dialog Enter has finished
     /// persisting (or failed). TUI renders the localized
     /// `Updated N / No changes / Failed: …` toast — keeping all

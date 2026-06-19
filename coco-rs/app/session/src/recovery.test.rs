@@ -8,16 +8,25 @@ fn test_can_resume_nonexistent() {
 }
 
 #[test]
-fn test_fork_conversation() {
+fn test_fork_conversation_relabels_session_id() {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("source.jsonl");
     let dst = dir.path().join("dest.jsonl");
-    std::fs::write(&src, "{\"test\": true}\n").unwrap();
-    fork_conversation(&src, &dst).unwrap();
+    // Entry with a session_id is relabeled; a non-JSON line passes through.
+    std::fs::write(
+        &src,
+        "{\"session_id\":\"src-id\",\"uuid\":\"u1\"}\nnot json\n",
+    )
+    .unwrap();
+    fork_conversation(&src, &dst, "dest-id").unwrap();
     assert!(dst.exists());
-    assert_eq!(
-        std::fs::read_to_string(&dst).unwrap(),
-        std::fs::read_to_string(&src).unwrap()
+    let out = std::fs::read_to_string(&dst).unwrap();
+    let first: serde_json::Value = serde_json::from_str(out.lines().next().unwrap()).unwrap();
+    assert_eq!(first["session_id"], "dest-id");
+    assert_eq!(first["uuid"], "u1", "non-session fields preserved");
+    assert!(
+        out.lines().any(|l| l == "not json"),
+        "bad line passes through"
     );
 }
 

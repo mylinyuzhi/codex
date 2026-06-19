@@ -511,6 +511,24 @@ pub(super) fn handle(
             }
             true
         }
+        // `/export` (no-arg) — open the Markdown/JSON/Text format picker.
+        // Confirm re-dispatches `/export <format>`, which the CLI runner
+        // renders from the live `MessageHistory` and writes to disk.
+        TuiOnlyEvent::OpenExport => {
+            if !matches!(state.ui.modal.as_ref(), Some(ModalState::Export(_))) {
+                state.ui.show_modal(ModalState::Export(
+                    crate::state::surface_payloads::ExportState {
+                        formats: vec![
+                            crate::state::ExportFormat::Markdown,
+                            crate::state::ExportFormat::Json,
+                            crate::state::ExportFormat::Text,
+                        ],
+                        selected: 0,
+                    },
+                ));
+            }
+            true
+        }
         // `/skills` dialog Enter result — CLI bridge has finished
         // (or failed) the SettingsWriter round-trip + RuntimeConfig
         // republish + CommandRegistry rebuild. Toast generation
