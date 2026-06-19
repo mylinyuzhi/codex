@@ -192,10 +192,14 @@ pub fn attachment_to_messages(att: &Attachment) -> Vec<Message> {
             ]
         }
         Attachment::Directory(d) => {
+            // Mirror TS `messages.ts` directory case: `ls <quoted-abs-path>`
+            // with the absolute path (on-demand shell-quoting in the command —
+            // bare when no metachars — and the bare path in the description).
+            let quoted_path = coco_shell::shell_quoting::quote_posix(&[d.path.as_str()]);
             let call = format!(
                 "Called the {bash_tool} tool with the following input: \
-                 {{\"command\":\"ls {}\",\"description\":\"Lists files in {}\"}}",
-                d.display_path, d.display_path
+                 {{\"command\":\"ls {quoted_path}\",\"description\":\"Lists files in {}\"}}",
+                d.path
             );
             let result = format!("Result of calling the {bash_tool} tool:\n{}", d.content);
             vec![

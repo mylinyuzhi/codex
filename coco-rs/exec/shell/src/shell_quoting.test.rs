@@ -16,6 +16,21 @@ fn quote_joins_with_space() {
 }
 
 #[test]
+fn quote_posix_only_quotes_when_needed() {
+    // Bare path (alphanumerics, `/`, `-`, `_`, `.`) passes through untouched.
+    assert_eq!(quote_posix(&["/abs/dir-1_2.x"]), "/abs/dir-1_2.x");
+    // Whitespace → single-quote.
+    assert_eq!(quote_posix(&["/abs/my dir"]), "'/abs/my dir'");
+    // Contains `'` (no `"`/ws) → double-quote, `'` left as-is.
+    assert_eq!(quote_posix(&["/abs/it's"]), "\"/abs/it's\"");
+    // Unquoted metachars get backslash-escaped.
+    assert_eq!(quote_posix(&["a*b?c"]), "a\\*b\\?c");
+    // Joined with spaces, each arg quoted independently.
+    assert_eq!(quote_posix(&["/x", "b c"]), "/x 'b c'");
+    assert_eq!(quote_posix::<&str>(&[]), "");
+}
+
+#[test]
 fn heredoc_detection() {
     assert!(contains_heredoc("cat <<EOF\nhi\nEOF"));
     assert!(contains_heredoc("cat <<'EOF'\nhi\nEOF"));

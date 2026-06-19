@@ -107,6 +107,63 @@ async fn test_resolve_directory_mention() {
 }
 
 #[tokio::test]
+async fn test_resolve_directory_mention_omits_trailing_slash() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("root");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::create_dir(root.join("nested")).unwrap();
+    std::fs::write(root.join("file.txt"), "x").unwrap();
+
+    let mut state = FileReadState::new();
+    let options = MentionResolveOptions {
+        cwd: dir.path(),
+        max_dir_entries: 100,
+    };
+
+    let mentions = vec![make_mention("root", MentionType::FilePath)];
+    let attachments = resolve_mentions(&mentions, &mut state, &options).await;
+
+    match &attachments[0] {
+        // TS lists bare entry names — a subdirectory carries no trailing slash.
+        Attachment::Directory(d) => {
+            assert!(d.content.contains("nested"));
+            assert!(!d.content.contains("nested/"));
+            assert!(d.content.contains("file.txt"));
+        }
+        other => panic!("Expected Directory attachment, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_resolve_directory_mention_truncates_with_overflow_count() {
+    let dir = tempfile::tempdir().unwrap();
+    let big = dir.path().join("big");
+    std::fs::create_dir(&big).unwrap();
+    for i in 0..5 {
+        std::fs::write(big.join(format!("f{i}.txt")), "x").unwrap();
+    }
+
+    let mut state = FileReadState::new();
+    let options = MentionResolveOptions {
+        cwd: dir.path(),
+        max_dir_entries: 2,
+    };
+
+    let mentions = vec![make_mention("big", MentionType::FilePath)];
+    let attachments = resolve_mentions(&mentions, &mut state, &options).await;
+
+    match &attachments[0] {
+        // TS mirror: exact overflow count (`… and N more entries`), not a
+        // `1000+`-style cap marker. 2 listed names + 1 overflow line = 3.
+        Attachment::Directory(d) => {
+            assert!(d.content.contains("… and 3 more entries"));
+            assert_eq!(d.content.lines().count(), 3);
+        }
+        other => panic!("Expected Directory attachment, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn test_resolve_agent_mention() {
     let mut state = FileReadState::new();
     let options = MentionResolveOptions::default();
