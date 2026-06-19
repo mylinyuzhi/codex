@@ -70,12 +70,12 @@ fn interactive_viewport_popup_height_tracks_item_count() {
     );
     assert_eq!(
         interactive_viewport_desired_height(&full, 48, 24, native_plan(), None),
-        13
+        11
     );
     // Beyond the cap the reservation clamps to DEFAULT_MAX_VISIBLE.
     assert_eq!(
         interactive_viewport_desired_height(&over_cap, 48, 24, native_plan(), None),
-        13
+        11
     );
 }
 

@@ -97,8 +97,9 @@ pub struct SuggestionPopup<'a> {
 impl<'a> SuggestionPopup<'a> {
     /// Default cap on visible rows. Callers that drive their own row
     /// reservation (e.g. the TUI's vertical layout) should override via
-    /// `max_visible` so the widget can't overflow the slot.
-    pub const DEFAULT_MAX_VISIBLE: u16 = 10;
+    /// `max_visible` so the widget can't overflow the slot. Matches codex's
+    /// `MAX_POPUP_ROWS` so the popup's vertical footprint is consistent.
+    pub const DEFAULT_MAX_VISIBLE: u16 = 8;
 
     pub fn new(items: &'a [SuggestionItem], styles: UiStyles<'a>) -> Self {
         Self {
