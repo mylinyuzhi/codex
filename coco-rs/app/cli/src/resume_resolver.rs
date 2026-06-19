@@ -124,7 +124,7 @@ pub fn resolve(cli: &Cli, memory_base: &Path, cwd: &Path) -> Result<Option<Resum
             .clone()
             .unwrap_or_else(|| Uuid::new_v4().to_string());
         let dest_path = dest_store.transcript_path(&dest_id);
-        fork_conversation(&source_path, &dest_path).map_err(|e| {
+        fork_conversation(&source_path, &dest_path, &dest_id).map_err(|e| {
             anyhow::anyhow!(
                 "fork copy {} → {} failed: {e}",
                 source_path.display(),

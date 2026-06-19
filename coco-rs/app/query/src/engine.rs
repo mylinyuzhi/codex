@@ -224,8 +224,9 @@ pub struct QueryEngine {
     /// turn's last request, so post-turn forks (`/btw`,
     /// `promptSuggestion`, `postTurnSummary`) can share the parent's
     /// prompt cache by sending byte-identical request prefixes. Read
-    /// via [`Self::last_cache_safe_params`]; reset to `None` on each
-    /// engine rebuild.
+    /// via [`Self::last_cache_safe_params`]. The slot lives and dies with
+    /// the per-turn engine; `/clear` drops the observing handle at the
+    /// runtime layer (see `SessionRuntime::clear_conversation`).
     ///
     /// `Arc<RwLock<...>>` so observers (TUI status, transcript recorder)
     /// can read the slot without contending with the engine's writer side.

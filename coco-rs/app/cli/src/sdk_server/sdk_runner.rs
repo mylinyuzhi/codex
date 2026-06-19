@@ -354,62 +354,26 @@ impl TurnRunner for QueryEngineRunner {
             // the parent's history and cache slot are untouched.
             if let Some(req) = coco_commands::handlers::btw::parse_btw_sentinel(&prompt) {
                 let cache = engine.last_cache_safe_params().await;
+                // Shares the fork+extract logic with the TUI path
+                // (`crate::side_question`): tool-less one-shot fork sharing the
+                // parent cache, answer flattened across all per-block messages.
                 let response_text = match cache {
-                    None => format!(
-                        "{}\n(no parent turn yet — run a regular prompt first so /btw can share its cache)",
-                        req.display_text
-                    ),
+                    None => {
+                        "(no parent turn yet — run a regular prompt first so /btw can share its cache)"
+                            .to_string()
+                    }
                     Some(cache) => match runtime.current_fork_dispatcher().await {
-                        None => format!(
-                            "{}\n(fork dispatcher not installed — /btw requires CLI bootstrap)",
-                            req.display_text
-                        ),
+                        None => {
+                            "(fork dispatcher not installed — /btw requires CLI bootstrap)"
+                                .to_string()
+                        }
                         Some(dispatcher) => {
-                            let mut options =
-                                coco_query::forked_agent::ForkedAgentOptions::for_label(
-                                    coco_types::ForkLabel::SideQuestion,
-                                );
-                            options.can_use_tool = Some(coco_query::forked_agent::deny_all_handle(
-                                "side question: tools disabled",
-                            ));
-                            match dispatcher
-                                .dispatch(&cache, &options, &req.question, None)
-                                .await
-                            {
-                                Ok(result) => {
-                                    // P1 single-message walk; PR 4a will
-                                    // promote this to the full
-                                    // multi-message text walk pattern.
-                                    let text = result
-                                        .messages
-                                        .iter()
-                                        .rev()
-                                        .find_map(|m| match m.as_ref() {
-                                            coco_messages::Message::Assistant(a) => {
-                                                match &a.message {
-                                                    coco_llm_types::LlmMessage::Assistant {
-                                                        content,
-                                                        ..
-                                                    } => content.iter().rev().find_map(|p| {
-                                                        match p {
-                                                    coco_llm_types::AssistantContentPart::Text(
-                                                        t,
-                                                    ) => Some(t.text.clone()),
-                                                    _ => None,
-                                                }
-                                                    }),
-                                                    _ => None,
-                                                }
-                                            }
-                                            _ => None,
-                                        })
-                                        .unwrap_or_default();
-                                    format!("{}\n\n{}", req.display_text, text)
-                                }
-                                Err(e) => {
-                                    format!("{}\n(side-question failed: {e})", req.display_text)
-                                }
-                            }
+                            crate::side_question::run_side_question_fork(
+                                &cache,
+                                &dispatcher,
+                                &req.question,
+                            )
+                            .await
                         }
                     },
                 };

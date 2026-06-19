@@ -228,7 +228,7 @@ async fn add_server(input: &str) -> crate::Result<String> {
         serde_json::from_str::<serde_json::Value>(&content)
             .unwrap_or_else(|_| serde_json::json!({}))
     } else {
-        // Ensure .claude directory exists
+        // Ensure .coco directory exists
         tokio::fs::create_dir_all(".coco").await?;
         serde_json::json!({})
     };

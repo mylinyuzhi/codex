@@ -41,7 +41,9 @@ use coco_session::SessionManager;
 
 mod bin_handlers;
 mod tui_runner;
+use coco_cli::conversation_export;
 use coco_cli::session_runtime;
+use coco_cli::side_question;
 
 #[tokio::main]
 async fn main() -> Result<()> {

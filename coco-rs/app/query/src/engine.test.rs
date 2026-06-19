@@ -849,6 +849,29 @@ async fn test_cache_safe_params_populated_after_turn() {
 }
 
 #[tokio::test]
+async fn test_cache_safe_params_handle_observes_writer_side() {
+    // `cache_safe_params_handle()` returns a clone of the Arc so an
+    // out-of-band observer (TUI status, transcript recorder) can
+    // poll the slot without contending with the engine writer.
+    let model = Arc::new(TextMock {
+        text: "Hello!".into(),
+    });
+    let client = crate::test_support::model_runtime_registry(model);
+    let tools = Arc::new(ToolRegistry::new());
+    let cancel = CancellationToken::new();
+    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
+
+    let handle = engine.cache_safe_params_handle();
+    assert!(handle.read().await.is_none());
+
+    engine.run("hi").await.expect("turn must complete");
+    assert!(
+        handle.read().await.is_some(),
+        "observer handle must see the updated slot"
+    );
+}
+
+#[tokio::test]
 async fn test_with_fallback_client_does_not_break_primary_path() {
     // Phase 8-β sanity: installing a fallback client via the
     // builder must NOT change behavior when the primary succeeds.

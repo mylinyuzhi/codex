@@ -1,13 +1,16 @@
 //! `/btw <question>` — by-the-way side-channel question.
 //!
 //! Asks a quick side question that shares the parent session's prompt
-//! cache via [`coco_query::forked_agent`]. Output goes back to the
-//! user as a single assistant message; the parent conversation is
-//! unaffected.
+//! cache via [`coco_query::forked_agent`]. The fork is tool-less and
+//! one-shot; the parent conversation is never mutated.
 //!
-//! coco-rs surfaces the answer inline
-//! (TUI shows it as a regular assistant message; SDK consumers see
-//! it on the existing message stream).
+//! The answer is surfaced as **model-invisible** content so it never
+//! re-enters the LLM's view of the main conversation (the "without
+//! interrupting" contract): the TUI renders it as a transcript-only
+//! slash result, the SDK pushes a meta message. Intentional divergence
+//! from TS, whose modal is fully ephemeral — coco has no modal, so the
+//! answer stays visible in scrollback (and the JSONL) but out of the
+//! model's context.
 //!
 //! ## Sentinel pattern
 //!
@@ -17,19 +20,17 @@
 //!
 //! ```text
 //! __COCO_BTW_NOW__ <question>
-//! <status text shown to the user>
 //! ```
 //!
-//! Runners parse the first line via [`parse_btw_sentinel`], drop it
-//! from displayed output, and drive
-//! `coco_query::forked_agent::build_query_config` against the engine's
-//! `last_cache_safe_params`. If a runner doesn't recognise the
-//! sentinel it falls back to displaying both lines — no crash, just a
-//! no-op (the runner that doesn't know the protocol simply renders
-//! the verbatim text).
+//! Both runner surfaces consume it: the TUI via
+//! `tui_runner::run_side_question` (classified in
+//! `classify_sentinel_trigger`) and the SDK via the `parse_btw_sentinel`
+//! short-circuit in `sdk_runner`. Both delegate the fork + answer
+//! extraction to `coco_cli::side_question`. Headless `-p` mode does not
+//! expand registry slash commands, so it never reaches this handler.
 
-/// Sentinel prefix runners recognise on the handler's first output
-/// line. Text after the prefix (until newline) is the user's question.
+/// Sentinel prefix runners recognise on the handler output. Text after
+/// the prefix (until newline) is the user's question.
 pub const BTW_SENTINEL: &str = "__COCO_BTW_NOW__";
 
 /// Parsed `/btw` request extracted from handler output.
@@ -37,37 +38,28 @@ pub const BTW_SENTINEL: &str = "__COCO_BTW_NOW__";
 pub struct BtwRequest {
     /// The user's `/btw <question>` argument, trimmed.
     pub question: String,
-    /// Remaining lines of the handler output (status text shown
-    /// verbatim while the fork is running).
-    pub display_text: String,
 }
 
 /// Parse a [`BTW_SENTINEL`]-prefixed handler output. Returns `None`
-/// when the input does not begin with the sentinel.
+/// when the input does not begin with the sentinel or carries no question.
 #[must_use]
 pub fn parse_btw_sentinel(handler_output: &str) -> Option<BtwRequest> {
-    let mut lines = handler_output.splitn(2, '\n');
-    let first = lines.next()?;
-    let rest = lines.next().unwrap_or("");
-    let after = first.strip_prefix(BTW_SENTINEL)?;
-    let question = after.trim().to_string();
+    let first = handler_output.lines().next()?;
+    let question = first.strip_prefix(BTW_SENTINEL)?.trim().to_string();
     if question.is_empty() {
         return None;
     }
-    Some(BtwRequest {
-        question,
-        display_text: rest.to_string(),
-    })
+    Some(BtwRequest { question })
 }
 
-/// Sync handler — emits the sentinel + a one-line status. The runner
+/// Sync handler — emits the sentinel carrying the question. The runner
 /// picks up the sentinel and drives the actual fork.
 pub fn handler(args: &str) -> String {
     let question = args.trim();
     if question.is_empty() {
         return "Usage: /btw <question> — Ask a quick side question without interrupting the main conversation.".to_string();
     }
-    format!("{BTW_SENTINEL} {question}\nAsking… (this won't affect the main conversation)")
+    format!("{BTW_SENTINEL} {question}")
 }
 
 #[cfg(test)]
