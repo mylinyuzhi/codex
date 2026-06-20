@@ -20,15 +20,16 @@ fn height_is_zero_when_empty() {
 }
 
 #[test]
-fn height_is_one_row_per_command() {
-    assert_eq!(QueueStatusWidget::height(&queued(1)), 1);
-    assert_eq!(QueueStatusWidget::height(&queued(3)), 3);
+fn height_is_one_row_per_command_plus_top_margin() {
+    // +1 for the blank top-margin row (TS marginTop={1}).
+    assert_eq!(QueueStatusWidget::height(&queued(1)), 2);
+    assert_eq!(QueueStatusWidget::height(&queued(3)), 4);
 }
 
 #[test]
-fn height_caps_at_max_rows() {
+fn height_caps_at_max_rows_plus_margin() {
     assert_eq!(
         QueueStatusWidget::height(&queued(MAX_ROWS + 5)),
-        MAX_ROWS as u16
+        (MAX_ROWS + 1) as u16
     );
 }

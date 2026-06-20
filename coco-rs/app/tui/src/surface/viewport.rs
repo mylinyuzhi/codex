@@ -152,10 +152,23 @@ fn input_height_for_state(state: &AppState) -> u16 {
         state.ui.interaction.active_prompt,
         Some(PanePromptState::Question(_))
     ) {
-        0
-    } else {
-        3.min(constants::MAX_INPUT_HEIGHT as u16)
+        return 0;
     }
+    // Grow the composer with its hard line breaks (mirrors TS, whose TextInput
+    // expands with content) so recalled multi-message edits and multi-line input
+    // show on separate rows. Capped at MAX_INPUT_HEIGHT content rows (then the
+    // composer scrolls). +2 for the top/bottom borders.
+    let max_content = (constants::MAX_INPUT_HEIGHT as usize)
+        .saturating_sub(2)
+        .max(1);
+    let line_count = state
+        .ui
+        .input
+        .text()
+        .split('\n')
+        .count()
+        .clamp(1, max_content);
+    line_count as u16 + 2
 }
 
 #[allow(clippy::too_many_arguments)]

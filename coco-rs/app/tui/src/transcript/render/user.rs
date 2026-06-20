@@ -56,11 +56,18 @@ pub(super) fn try_render(
                 lines.extend(rendered);
                 return Some(());
             }
-            // Subtle background tint behind user prompt rows. The background
-            // must paint the full row width rather than just the glyphs — the
-            // bg must therefore live on the `Line`, not on individual spans.
-            for line in text.lines() {
-                let span = Span::raw(format!("❯ {line}")).fg(w.styles.user_message());
+            // One logical message = one `❯` (mirrors TS `HighlightedThinkingText`,
+            // which renders the pointer once and lets the whole multi-line text
+            // flow under it). Continuation rows align to the content column with a
+            // 2-space gutter, so a recalled multi-message edit reads as a single
+            // prompt with line breaks — not several `❯` submissions.
+            //
+            // Subtle background tint behind user prompt rows. The background must
+            // paint the full row width rather than just the glyphs — the bg must
+            // therefore live on the `Line`, not on individual spans.
+            for (idx, line) in text.lines().enumerate() {
+                let gutter = if idx == 0 { "❯ " } else { "  " };
+                let span = Span::raw(format!("{gutter}{line}")).fg(w.styles.user_message());
                 let mut chat_line = Line::from(span);
                 if let Some(bg) = w.styles.user_message_bg() {
                     chat_line = chat_line.style(ratatui::style::Style::default().bg(bg));

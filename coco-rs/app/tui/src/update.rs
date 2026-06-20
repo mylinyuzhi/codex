@@ -751,7 +751,7 @@ pub async fn handle_command(
             }
             true
         }
-        TuiCommand::AgentSwitcherNav(delta) => {
+        TuiCommand::AgentSwitcherNav(_) => {
             // Reached only when the switcher isn't focused yet (the focus
             // intercept above consumes it once focused). Shift+↑/↓ parks focus
             // on the switcher — but only when there are agents to switch
@@ -761,7 +761,12 @@ pub async fn handle_command(
             let count = state.session.switcher_agents().len();
             if count > 0 && !state.ui.coordinator_mode_active {
                 state.ui.focus = FocusTarget::AgentSwitcher;
-                state.ui.agent_switcher_selected = if delta < 0 { count - 1 } else { 0 };
+                // First press just parks focus on the switcher and lands on the
+                // first agent — there is no synthetic `◯ main`/leader row to
+                // step off (unlike TS `stepTeammateSelection`, which parks on
+                // the leader), so entry must select a real agent. Direction is
+                // ignored on entry; once focused, `↑/↓` step from index 0.
+                state.ui.agent_switcher_selected = 0;
             }
             true
         }

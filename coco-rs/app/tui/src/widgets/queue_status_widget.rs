@@ -35,17 +35,33 @@ impl<'a> QueueStatusWidget<'a> {
         Self { queued, styles }
     }
 
-    /// Rows this strip occupies — one per queued command, capped at [`MAX_ROWS`]
-    /// (the cap row doubles as the "+N more" summary). The sizing pass in
+    /// Rows this strip occupies: one blank top-margin row (TS `marginTop={1}`,
+    /// separating the queue from the subagent/spinner panel above) plus one row
+    /// per queued command, capped at [`MAX_ROWS`] (the cap row doubles as the
+    /// "+N more" summary). Zero when the queue is empty. The sizing pass in
     /// `surface::viewport` reads this so it reserves the matching height.
     pub fn height(queued: &VecDeque<QueuedCommandDisplay>) -> u16 {
-        queued.len().min(MAX_ROWS) as u16
+        if queued.is_empty() {
+            0
+        } else {
+            (queued.len().min(MAX_ROWS) + 1) as u16
+        }
     }
 }
 
 impl Widget for QueueStatusWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         if area.height == 0 || self.queued.is_empty() {
+            return;
+        }
+        // Leading blank row = TS `marginTop={1}` separating the queue from the
+        // subagent/spinner panel above; the previews paint from the next row.
+        let area = Rect {
+            y: area.y.saturating_add(1),
+            height: area.height.saturating_sub(1),
+            ..area
+        };
+        if area.height == 0 {
             return;
         }
         let dim = Style::default().fg(self.styles.dim());

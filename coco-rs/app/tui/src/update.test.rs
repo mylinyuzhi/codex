@@ -1485,6 +1485,49 @@ async fn background_all_tasks_optimistically_flips_running_subagents() {
 }
 
 #[tokio::test]
+async fn shift_up_first_press_selects_first_agent_then_steps() {
+    // Shift+↑ from the composer must park focus on the switcher AND land on
+    // the FIRST agent (index 0), regardless of direction — the coco-rs switcher
+    // has no synthetic `◯ main`/leader row to step off, so entry must select a
+    // real agent immediately (one press = visible selection, not two).
+    let mut state = AppState::new();
+    let running = |id: &str| crate::state::session::SubagentInstance {
+        kind: crate::state::SubagentKind::Subagent,
+        agent_id: id.into(),
+        agent_type: "Explore".into(),
+        description: "scan".into(),
+        status: crate::state::SubagentStatus::Running,
+        color: None,
+        team_name: None,
+        started_at_ms: None,
+        last_tool_name: None,
+        tool_count: 0,
+        total_tokens: 0,
+        is_backgrounded: false,
+        recent_activities: Vec::new(),
+        final_message: None,
+        completed_at_ms: None,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        cost_usd: 0.0,
+    };
+    state.session.subagents.push(running("a0"));
+    state.session.subagents.push(running("a1"));
+    state.session.subagents.push(running("a2"));
+    let (tx, _rx) = drained_channel();
+
+    // First Shift+↑ (delta = -1): focus parks on the switcher, selection = 0.
+    handle_command(&mut state, TuiCommand::AgentSwitcherNav(-1), &tx).await;
+    assert_eq!(state.ui.focus, crate::state::FocusTarget::AgentSwitcher);
+    assert_eq!(state.ui.agent_switcher_selected, 0);
+
+    // Once focused, Shift+↓ steps down to the next agent.
+    handle_command(&mut state, TuiCommand::AgentSwitcherNav(1), &tx).await;
+    assert_eq!(state.ui.agent_switcher_selected, 1);
+}
+
+#[tokio::test]
 async fn background_all_tasks_no_op_when_nothing_running() {
     // No foreground tasks → Ctrl+B emits nothing and changes no state.
     let mut state = AppState::new();

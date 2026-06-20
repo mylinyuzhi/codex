@@ -117,3 +117,37 @@ fn input_render_model_hides_stale_inline_ghost() {
 
     assert!(model.inline_ghost.is_none());
 }
+
+#[test]
+fn input_render_model_multiline_tracks_cursor_row_and_col() {
+    let mut input = input("ab\ncde");
+    input.textarea.set_cursor(input.text().len());
+
+    let model = InputRenderModel::build(&input, false, None, false, None);
+
+    assert_eq!(model.display_text, "ab\ncde");
+    assert_eq!(model.cursor_row, 1, "cursor is on the second line");
+    assert_eq!(model.cursor_col, 3, "cursor is after 'cde' (3 cols)");
+}
+
+#[test]
+fn input_render_model_multiline_cursor_on_first_line() {
+    let mut input = input("ab\ncde");
+    input.textarea.set_cursor(1); // after 'a'
+
+    let model = InputRenderModel::build(&input, false, None, false, None);
+
+    assert_eq!(model.cursor_row, 0);
+    assert_eq!(model.cursor_col, 1);
+}
+
+#[test]
+fn scroll_offset_keeps_cursor_within_window() {
+    // Everything fits → no scroll.
+    assert_eq!(super::scroll_offset(0, 3, 5), 0);
+    assert_eq!(super::scroll_offset(2, 3, 5), 0);
+    // Cursor past the window → scroll so the cursor is the last visible row.
+    assert_eq!(super::scroll_offset(4, 10, 3), 2);
+    // Clamp to the max scroll (can't scroll past the last full window).
+    assert_eq!(super::scroll_offset(9, 10, 3), 7);
+}
