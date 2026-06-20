@@ -880,6 +880,22 @@ pub async fn handle_command(
             interaction::confirm(state, command_tx).await;
             true
         }
+        TuiCommand::PermissionScrollUp => {
+            let max = permission_body_scroll_bound(state);
+            state
+                .ui
+                .interaction
+                .scroll_permission(-constants::SCROLL_PAGE_STEP, max);
+            true
+        }
+        TuiCommand::PermissionScrollDown => {
+            let max = permission_body_scroll_bound(state);
+            state
+                .ui
+                .interaction
+                .scroll_permission(constants::SCROLL_PAGE_STEP, max);
+            true
+        }
         TuiCommand::CopyPickerWriteToFile => {
             match state.ui.take_modal() {
                 Some(ModalState::CopyPicker(cp)) => {
@@ -1194,6 +1210,19 @@ pub async fn handle_command(
         crate::autocomplete::refresh_suggestions(state);
     }
     changed
+}
+
+/// Loose upper bound for the active permission prompt's body scroll offset.
+/// The render pass clamps precisely against the wrapped body height; this only
+/// keeps the raw counter from running away on repeated `PageDown`.
+fn permission_body_scroll_bound(state: &AppState) -> u16 {
+    match state.ui.interaction.active_prompt.as_ref() {
+        Some(crate::state::PanePromptState::Permission(p)) => {
+            let lines = crate::presentation::request::permission_body_line_count(p);
+            u16::try_from(lines.saturating_mul(2)).unwrap_or(u16::MAX)
+        }
+        _ => 0,
+    }
 }
 
 fn accept_prompt_suggestion(state: &mut AppState) -> bool {

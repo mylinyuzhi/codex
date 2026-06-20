@@ -2337,7 +2337,18 @@ impl SessionRuntime {
         let app_state = app_state_override.unwrap_or_else(|| self.app_state.clone());
         engine = engine.with_file_read_state(self.file_read_state.clone());
         engine = engine.with_app_state(app_state.clone());
-        let auto_active = app_state
+        // `auto_mode_state` is a SESSION-GLOBAL flag shared by every engine in
+        // this runtime. It is NO LONGER the classifier gate — that now reads the
+        // per-call `permission_context.mode` (see `tool_call_preparer`, TS
+        // parity), so a stale/raced flag can't suppress the classifier. The flag
+        // survives only for the Plan→Auto bridge, denial-streak reset, and TUI
+        // display. Sync it from the session's authoritative `self.app_state`
+        // (NOT the per-build `app_state` override): a fork/skill/compaction
+        // sub-engine carrying a non-Auto override would otherwise clobber it.
+        // Every build re-syncs from the single source, covering all mode-change
+        // funnels (TUI + SDK) uniformly without threading the flag through each.
+        let auto_active = self
+            .app_state
             .read()
             .await
             .permission_mode

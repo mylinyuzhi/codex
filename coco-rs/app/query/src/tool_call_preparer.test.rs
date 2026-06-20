@@ -427,3 +427,50 @@ async fn bypass_mode_preserves_ask_for_ask_user_question() {
          overlay still fires. got {decision:?}"
     );
 }
+
+// ── auto-mode classifier gate: per-call context mode, not a shared flag ──
+
+#[test]
+fn should_auto_classify_reads_per_call_mode_not_shared_flag() {
+    use coco_permissions::AutoModeState;
+    use coco_types::PermissionMode;
+    use std::sync::Arc;
+
+    // Regression for the subagent clobber bug: a shared `AutoModeState` flipped
+    // INACTIVE by a concurrent fork/sub-engine build must NOT suppress the
+    // classifier for a call whose per-call context mode is `Auto`.
+    let inactive = Arc::new(AutoModeState::new()); // is_active() == false
+    assert!(
+        should_auto_classify(PermissionMode::Auto, Some(&inactive)),
+        "Auto mode must classify regardless of the shared flag"
+    );
+    // Even with NO shared state at all, Auto classifies.
+    assert!(should_auto_classify(PermissionMode::Auto, None));
+
+    // Non-auto modes never classify.
+    for mode in [
+        PermissionMode::Default,
+        PermissionMode::AcceptEdits,
+        PermissionMode::BypassPermissions,
+        PermissionMode::DontAsk,
+    ] {
+        assert!(!should_auto_classify(mode, Some(&inactive)), "{mode:?}");
+    }
+}
+
+#[test]
+fn should_auto_classify_plan_bridges_only_when_flag_active() {
+    use coco_permissions::AutoModeState;
+    use coco_types::PermissionMode;
+    use std::sync::Arc;
+
+    // TS parity: `mode === 'plan' && isAutoModeActive()`. Plan bridges to the
+    // classifier ONLY when the narrowly-scoped auto flag is set.
+    let inactive = Arc::new(AutoModeState::new());
+    assert!(!should_auto_classify(PermissionMode::Plan, Some(&inactive)));
+    assert!(!should_auto_classify(PermissionMode::Plan, None));
+
+    let active = Arc::new(AutoModeState::new());
+    active.set_active(true);
+    assert!(should_auto_classify(PermissionMode::Plan, Some(&active)));
+}
