@@ -338,6 +338,13 @@ fn render_live_viewport(
         // clock subtracts paused time (permission-prompt blocks). The
         // turn-start anchor is on the running-turn record itself —
         // no Option<Instant> threading required.
+        // Owned here so the borrow outlives the `StatusIndicatorView`
+        // (`verb: &'a str`). Empty unless the user just hit Esc/Ctrl+C.
+        let interrupting_verb = state
+            .ui
+            .ephemeral
+            .is_interrupting()
+            .then(|| crate::i18n::t!("status.interrupting").to_string());
         let view = if state.ui.ephemeral.turn_active() {
             let elapsed_ms = state.ui.ephemeral.elapsed_ms(std::time::Instant::now());
             let effort = state.session.thinking_effort;
@@ -359,7 +366,10 @@ fn render_live_viewport(
                 .map(|a| a.total_tokens)
                 .sum();
             coco_tui_ui::widgets::StatusIndicatorView {
-                verb: state.ui.ephemeral.current_verb().unwrap_or("Working"),
+                verb: interrupting_verb
+                    .as_deref()
+                    .or_else(|| state.ui.ephemeral.current_verb())
+                    .unwrap_or("Working"),
                 elapsed_ms,
                 // Input doesn't stream, so there's no live estimate (unlike
                 // output). Surface the known prompt-token count from the

@@ -429,6 +429,11 @@ pub async fn handle_command(
                 && (state.is_streaming() || state.session.is_busy())
             {
                 state.ui.esc_tracker.reset();
+                // Flip the spinner verb to "Interrupting…" on this frame —
+                // the abort propagates async and the turn only clears on
+                // the engine's terminal event, which can be seconds away
+                // for worktree-isolated subagents.
+                state.ui.ephemeral.mark_interrupting();
                 let _ = command_tx
                     .send(UserCommand::Interrupt(TurnAbortReason::UserCancel))
                     .await;
@@ -1259,6 +1264,7 @@ async fn apply_exit_effect(
                 exit_case = "interrupt_active_turn",
                 "exit key interrupted active turn"
             );
+            state.ui.ephemeral.mark_interrupting();
             let _ = command_tx
                 .send(UserCommand::Interrupt(TurnAbortReason::UserCancel))
                 .await;

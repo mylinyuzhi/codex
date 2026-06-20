@@ -56,6 +56,15 @@ pub(crate) struct RunningTurn {
     /// turn. Converted to an approximate output-token count for the
     /// live spinner; exact completed usage remains on `SessionState`.
     output_chars: i64,
+    /// Set the moment the user requests cancellation (Esc / Ctrl+C),
+    /// so the spinner can switch its verb to "Interrupting…"
+    /// synchronously on the keypress — decoupled from the slower
+    /// async teardown that only clears the turn on the terminal
+    /// `TurnEnded(Interrupted)` event. Mirrors TS `resetLoadingState`
+    /// running on the keypress while `abortController.abort()`
+    /// propagates in the background. Auto-cleared when `end_turn`
+    /// takes the whole [`RunningTurn`].
+    interrupting: bool,
 }
 
 /// All UI-only ephemera that previously lived on `SessionState`.
@@ -97,6 +106,7 @@ impl UiEphemeralState {
             total_paused_ms: 0,
             pause_started_at: None,
             output_chars: 0,
+            interrupting: false,
         });
         self.last_total_paused_ms = 0;
     }
@@ -156,6 +166,32 @@ impl UiEphemeralState {
     /// `Some(verb)` while a turn is running; `None` otherwise.
     pub(crate) fn current_verb(&self) -> Option<&'static str> {
         self.turn.as_ref().map(|t| t.verb)
+    }
+
+    /// Flag the running turn as cancellation-requested. Idempotent and
+    /// a no-op when no turn is running. Lets the spinner reflect the
+    /// interrupt on the same frame as the keypress, before the engine
+    /// confirms teardown with `TurnEnded(Interrupted)`.
+    pub(crate) fn mark_interrupting(&mut self) {
+        if let Some(turn) = self.turn.as_mut() {
+            let already = turn.interrupting;
+            turn.interrupting = true;
+            // Log only on the transition so a repeated Esc/Ctrl+C doesn't
+            // spam — the first line's timestamp diffed against the engine's
+            // `TurnEnded(Interrupted)` is the "Interrupting…" visible window.
+            if !already {
+                tracing::debug!(
+                    target: "coco_tui::interrupt",
+                    "ui: spinner verb → interrupting (cancel requested mid-turn)"
+                );
+            }
+        }
+    }
+
+    /// `true` once the user has requested cancellation for the running
+    /// turn and the engine has not yet emitted the terminal event.
+    pub(crate) fn is_interrupting(&self) -> bool {
+        self.turn.as_ref().is_some_and(|t| t.interrupting)
     }
 
     /// Add streamed assistant text to the running-turn token estimate.
