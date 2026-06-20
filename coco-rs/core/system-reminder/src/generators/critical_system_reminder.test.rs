@@ -85,13 +85,3 @@ async fn respects_config_flag() {
     c.attachments.critical_system_reminder = false;
     assert!(!CriticalSystemReminderGenerator.is_enabled(&c));
 }
-
-#[tokio::test]
-async fn has_no_throttle() {
-    assert_eq!(
-        CriticalSystemReminderGenerator
-            .throttle_config()
-            .min_turns_between,
-        0
-    );
-}

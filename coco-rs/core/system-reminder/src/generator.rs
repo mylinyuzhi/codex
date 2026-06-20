@@ -17,7 +17,6 @@
 //!   handle multi-tool-round turns correctly. See
 //!   `app/query/plan_mode_reminder.rs:384` for the precedent.
 
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::path::PathBuf;
 
@@ -30,7 +29,6 @@ use coco_types::TodoRecord;
 use uuid::Uuid;
 
 use crate::error::Result;
-use crate::throttle::ThrottleConfig;
 use crate::types::AttachmentType;
 use crate::types::ReminderTier;
 use crate::types::SystemReminder;
@@ -43,13 +41,12 @@ use coco_config::SystemReminderConfig;
 ///
 /// 1. [`is_enabled`](Self::is_enabled) — config gate.
 /// 2. [`tier`](Self::tier) — skip if subagent and tier is `MainAgentOnly`, etc.
-/// 3. [`throttle_config_for_context`](Self::throttle_config_for_context) +
-///    `ThrottleManager::should_generate` — rate-limit gate.
-/// 4. [`generate`](Self::generate) — produce `Some(SystemReminder)` or `None`.
+/// 3. [`generate`](Self::generate) — produce `Some(SystemReminder)` or `None`.
 ///
-/// Generators may return `Ok(None)` to skip without advancing the throttle
-/// state; returning `Ok(Some(..))` causes the orchestrator to bump
-/// `session_count` + `last_generated_turn`.
+/// Cadence is no longer an orchestrator concern: generators that throttle
+/// (plan-mode / auto-mode steady-state, todo / task / verify nudges) derive
+/// their own gate from history-scan counters pre-computed on
+/// [`GeneratorContext`], so returning `Ok(None)` simply skips this turn.
 #[async_trait]
 pub trait AttachmentGenerator: Send + Sync + Debug {
     /// Stable identifier (snake_case or PascalCase — used for tracing only).
@@ -66,20 +63,6 @@ pub trait AttachmentGenerator: Send + Sync + Debug {
 
     /// Config gate. Return false to disable this generator for the session.
     fn is_enabled(&self, config: &SystemReminderConfig) -> bool;
-
-    /// Static throttle config. Override with a [`ThrottleConfig::plan_mode`] /
-    /// [`ThrottleConfig::todo_reminder`] / … preset.
-    fn throttle_config(&self) -> ThrottleConfig {
-        ThrottleConfig::default()
-    }
-
-    /// Context-aware throttle config. Default delegates to
-    /// [`throttle_config`](Self::throttle_config). Override when a user-
-    /// configurable throttle (e.g. memory scan interval) lives in
-    /// [`GeneratorContext`].
-    fn throttle_config_for_context(&self, _ctx: &GeneratorContext<'_>) -> ThrottleConfig {
-        self.throttle_config()
-    }
 
     /// Produce the reminder for this turn (or `None`).
     ///
@@ -400,26 +383,31 @@ pub struct GeneratorContext<'a> {
     /// Skill-discovery suggestion from `coco-skills` (UserPrompt tier).
     pub skill_discovery: Option<SkillDiscoveryPayload>,
 
-    // ── Pre-computed flags (filled by orchestrator before generate()) ──
-    /// Per-reminder Full-vs-Sparse decision. The orchestrator consults the
-    /// [`ThrottleManager`](crate::throttle::ThrottleManager) *before* running
-    /// generators so the Full/Sparse choice stays stable for the whole turn
-    /// even if the manager mutates between calls.
-    pub full_content_flags: HashMap<AttachmentType, bool>,
+    // ── History-derived plan/auto cadence (filled by the engine turn-scan) ──
+    /// Human turns since the last `plan_mode` attachment in history. `None`
+    /// means no prior plan-mode attachment this segment (first plan turn →
+    /// always emit); `Some(n)` emits only when `n` ≥ the plan-mode cadence.
+    /// Replaces the old in-memory throttle's `last_generated_turn` — history
+    /// is the source of truth, so cadence survives compaction.
+    pub plan_mode_turns_since_attachment: Option<i32>,
+
+    /// Count of `plan_mode` attachments since the last `plan_mode_exit`,
+    /// driving the Full-vs-Sparse cycle (the Nth since exit is Full).
+    pub plan_mode_attachments_since_exit: i32,
+
+    /// Human turns since the last `auto_mode` attachment. `None` = first
+    /// auto-mode turn (always emit). Mirrors the plan-mode pair above.
+    pub auto_mode_turns_since_attachment: Option<i32>,
+
+    /// Count of `auto_mode` attachments since the last `auto_mode_exit`
+    /// (Full-vs-Sparse cycle).
+    pub auto_mode_attachments_since_exit: i32,
 }
 
 impl<'a> GeneratorContext<'a> {
     /// Start a builder bound to a config reference.
     pub fn builder(config: &'a SystemReminderConfig) -> GeneratorContextBuilder<'a> {
         GeneratorContextBuilder::new(config)
-    }
-
-    /// Look up the pre-computed Full-vs-Sparse flag for this reminder.
-    /// Defaults to `true` (Full) when the orchestrator didn't pre-compute
-    /// — this matches the "always Full" semantics of
-    /// `full_content_every_n = None`.
-    pub fn should_use_full_content(&self, at: AttachmentType) -> bool {
-        self.full_content_flags.get(&at).copied().unwrap_or(true)
     }
 }
 
@@ -501,7 +489,10 @@ pub struct GeneratorContextBuilder<'a> {
     already_read_file_paths: Vec<PathBuf>,
     edited_image_file_paths: Vec<PathBuf>,
     skill_discovery: Option<SkillDiscoveryPayload>,
-    full_content_flags: HashMap<AttachmentType, bool>,
+    plan_mode_turns_since_attachment: Option<i32>,
+    plan_mode_attachments_since_exit: i32,
+    auto_mode_turns_since_attachment: Option<i32>,
+    auto_mode_attachments_since_exit: i32,
 }
 
 impl<'a> GeneratorContextBuilder<'a> {
@@ -580,7 +571,10 @@ impl<'a> GeneratorContextBuilder<'a> {
             already_read_file_paths: Vec::new(),
             edited_image_file_paths: Vec::new(),
             skill_discovery: None,
-            full_content_flags: HashMap::new(),
+            plan_mode_turns_since_attachment: None,
+            plan_mode_attachments_since_exit: 0,
+            auto_mode_turns_since_attachment: None,
+            auto_mode_attachments_since_exit: 0,
         }
     }
 
@@ -953,16 +947,23 @@ impl<'a> GeneratorContextBuilder<'a> {
         self
     }
 
-    /// Replace the full-content flag map wholesale (used by tests).
-    pub fn full_content_flags(mut self, flags: HashMap<AttachmentType, bool>) -> Self {
-        self.full_content_flags = flags;
+    pub fn plan_mode_turns_since_attachment(mut self, n: Option<i32>) -> Self {
+        self.plan_mode_turns_since_attachment = n;
         self
     }
 
-    /// Insert a single full-content flag (used by the orchestrator's
-    /// per-generator pre-compute loop).
-    pub fn set_full_content(mut self, at: AttachmentType, is_full: bool) -> Self {
-        self.full_content_flags.insert(at, is_full);
+    pub fn plan_mode_attachments_since_exit(mut self, n: i32) -> Self {
+        self.plan_mode_attachments_since_exit = n;
+        self
+    }
+
+    pub fn auto_mode_turns_since_attachment(mut self, n: Option<i32>) -> Self {
+        self.auto_mode_turns_since_attachment = n;
+        self
+    }
+
+    pub fn auto_mode_attachments_since_exit(mut self, n: i32) -> Self {
+        self.auto_mode_attachments_since_exit = n;
         self
     }
 
@@ -1040,7 +1041,10 @@ impl<'a> GeneratorContextBuilder<'a> {
             already_read_file_paths: self.already_read_file_paths,
             edited_image_file_paths: self.edited_image_file_paths,
             skill_discovery: self.skill_discovery,
-            full_content_flags: self.full_content_flags,
+            plan_mode_turns_since_attachment: self.plan_mode_turns_since_attachment,
+            plan_mode_attachments_since_exit: self.plan_mode_attachments_since_exit,
+            auto_mode_turns_since_attachment: self.auto_mode_turns_since_attachment,
+            auto_mode_attachments_since_exit: self.auto_mode_attachments_since_exit,
         }
     }
 }

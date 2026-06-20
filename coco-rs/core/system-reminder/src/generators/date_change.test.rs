@@ -46,8 +46,3 @@ async fn respects_config_flag() {
     c.attachments.date_change = false;
     assert!(!DateChangeGenerator.is_enabled(&c));
 }
-
-#[tokio::test]
-async fn has_no_throttle() {
-    assert_eq!(DateChangeGenerator.throttle_config().min_turns_between, 0);
-}

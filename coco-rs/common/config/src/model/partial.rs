@@ -46,6 +46,11 @@ pub struct PartialModelInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<Vec<Capability>>,
 
+    /// Exclude this model from prompt-cache-break detection. See
+    /// [`super::ModelInfo::cache_break_detection_excluded`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_break_detection_excluded: Option<bool>,
+
     // === Sampling ===
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
@@ -112,6 +117,7 @@ impl PartialModelInfo {
                 max_output_tokens_escalate: None,
                 timeout_secs: None,
                 capabilities: None,
+                cache_break_detection_excluded: None,
                 temperature: None,
                 top_p: None,
                 top_k: None,
@@ -146,6 +152,7 @@ impl PartialModelInfo {
         merge_opt!(max_output_tokens_escalate);
         merge_opt!(timeout_secs);
         merge_opt!(capabilities);
+        merge_opt!(cache_break_detection_excluded);
         merge_opt!(temperature);
         merge_opt!(top_p);
         merge_opt!(top_k);

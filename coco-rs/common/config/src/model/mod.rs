@@ -57,6 +57,14 @@ pub struct ModelInfo {
     // === Capabilities ===
     pub capabilities: Option<Vec<Capability>>,
 
+    /// Exclude this model from prompt-cache-break detection. A few models
+    /// (e.g. Anthropic Haiku) have server-side caching behavior whose
+    /// `cache_read` token drops are noise rather than real prefix breaks,
+    /// so the detector skips them to avoid false-positive break signals.
+    /// Default `false`. Declared on the model registry so
+    /// `services/inference` never has to match against a model id.
+    pub cache_break_detection_excluded: bool,
+
     // === Sampling — `Option` carries wire semantics ("let provider default") ===
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,
@@ -113,6 +121,7 @@ impl Default for ModelInfo {
             max_output_tokens_escalate: None,
             timeout_secs: None,
             capabilities: None,
+            cache_break_detection_excluded: false,
             temperature: None,
             top_p: None,
             top_k: None,
@@ -197,6 +206,7 @@ impl ModelInfo {
             max_output_tokens_escalate: partial.max_output_tokens_escalate,
             timeout_secs: partial.timeout_secs,
             capabilities: partial.capabilities,
+            cache_break_detection_excluded: partial.cache_break_detection_excluded.unwrap_or(false),
             temperature: partial.temperature,
             top_p: partial.top_p,
             top_k: partial.top_k,

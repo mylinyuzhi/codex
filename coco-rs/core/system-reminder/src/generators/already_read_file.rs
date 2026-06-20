@@ -25,7 +25,6 @@ use async_trait::async_trait;
 use crate::error::Result;
 use crate::generator::AttachmentGenerator;
 use crate::generator::GeneratorContext;
-use crate::throttle::ThrottleConfig;
 use crate::types::AlreadyReadFileMeta;
 use crate::types::AttachmentType;
 use crate::types::ReminderMetadata;
@@ -47,10 +46,6 @@ impl AttachmentGenerator for AlreadyReadFileGenerator {
 
     fn is_enabled(&self, config: &SystemReminderConfig) -> bool {
         config.attachments.already_read_file
-    }
-
-    fn throttle_config(&self) -> ThrottleConfig {
-        ThrottleConfig::none()
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {

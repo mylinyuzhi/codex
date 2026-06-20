@@ -15,22 +15,20 @@
 //! 1. [`SystemReminderConfig::enabled`] — master switch.
 //! 2. [`AttachmentGenerator::is_enabled`] — per-generator config flag.
 //! 3. [`ReminderTier`] — filter subagent-only / user-prompt-only generators.
-//! 4. [`ThrottleManager::should_generate`] — rate-limit gate.
 //!
-//! Full-content decisions are **pre-computed** before running generators so
-//! a generator observing "I'm Full" always sees the throttle state from the
-//! start of the turn, even if another generator mutates the manager mid-turn.
+//! Per-reminder cadence (plan/auto throttle, todo/task/verify silence
+//! windows, Full-vs-Sparse) is owned by each generator's `generate()`, gated
+//! on history-scan counters the engine pre-computes onto `GeneratorContext`.
+//! The orchestrator no longer holds any throttle state.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use futures::future;
 use tracing::debug;
-use tracing::trace;
 
 use crate::generator::AttachmentGenerator;
 use crate::generator::GeneratorContext;
-use crate::throttle::ThrottleManager;
 use crate::types::ContentBlock;
 use crate::types::ReminderOutput;
 use crate::types::ReminderTier;
@@ -40,11 +38,12 @@ use coco_config::SystemReminderConfig;
 
 const REMINDER_LOG_PREVIEW_CHARS: usize = 40;
 
-/// The orchestrator owns the generator registry + throttle state for one
-/// session. It's constructed once and reused across turns.
+/// The orchestrator owns the generator registry for one session. It's
+/// constructed once and reused across turns. Reminder cadence is no longer
+/// held here — throttled generators (plan/auto/todo/task/verify) derive it
+/// from history-scan counters on `GeneratorContext`.
 pub struct SystemReminderOrchestrator {
     generators: Vec<Arc<dyn AttachmentGenerator>>,
-    throttle: ThrottleManager,
     timeout: Duration,
     config: SystemReminderConfig,
 }
@@ -71,7 +70,6 @@ impl SystemReminderOrchestrator {
         };
         Self {
             generators: Vec::new(),
-            throttle: ThrottleManager::new(),
             timeout: Duration::from_millis(timeout_ms as u64),
             config,
         }
@@ -174,18 +172,6 @@ impl SystemReminderOrchestrator {
         );
     }
 
-    /// Borrow the throttle manager. Exposed so the engine can inject external
-    /// trigger events (`set_trigger_turn` for cooldown-gated reminders).
-    pub fn throttle(&self) -> &ThrottleManager {
-        &self.throttle
-    }
-
-    /// Reset all throttle state. Call at session start or after a compaction
-    /// boundary when reminder cadence should restart from scratch.
-    pub fn reset_throttle(&self) {
-        self.throttle.reset();
-    }
-
     /// The configured per-generator timeout.
     pub fn timeout(&self) -> Duration {
         self.timeout
@@ -221,30 +207,16 @@ impl SystemReminderOrchestrator {
 
     /// Run every applicable generator and collect the reminders they produce.
     ///
-    /// `ctx` is taken by value so the orchestrator can pre-compute per-
-    /// generator `full_content` flags into `ctx.full_content_flags` before
-    /// running any generator. Generators then read the pre-computed flag via
-    /// [`GeneratorContext::should_use_full_content`].
-    pub async fn generate_all(&self, mut ctx: GeneratorContext<'_>) -> Vec<SystemReminder> {
+    /// Generators self-gate on cadence inside `generate()` using the
+    /// history-scan counters the engine put on `ctx`, so the orchestrator
+    /// only applies the config + tier filters here.
+    pub async fn generate_all(&self, ctx: GeneratorContext<'_>) -> Vec<SystemReminder> {
         if !self.config.enabled {
             debug!("system reminders disabled globally");
             return Vec::new();
         }
 
-        // Pre-compute Full/Sparse flags. Locking the throttle here is cheap
-        // (one lookup per generator with `full_content_every_n`) and keeps
-        // the decision stable for the entire turn.
-        for g in &self.generators {
-            let cfg = g.throttle_config_for_context(&ctx);
-            if cfg.full_content_every_n.is_some() {
-                let is_full = self
-                    .throttle
-                    .should_use_full_content(g.attachment_type(), &cfg);
-                ctx.full_content_flags.insert(g.attachment_type(), is_full);
-            }
-        }
-
-        // Filter by config + tier + throttle.
+        // Filter by config + tier.
         let applicable: Vec<_> = self
             .generators
             .iter()
@@ -295,8 +267,7 @@ impl SystemReminderOrchestrator {
             };
 
         let mut reminders = Vec::new();
-        for (at, reminder) in results.into_iter().flatten() {
-            self.throttle.mark_generated(at, ctx.turn_number);
+        for (_at, reminder) in results.into_iter().flatten() {
             reminders.push(reminder);
         }
 
@@ -313,7 +284,8 @@ impl SystemReminderOrchestrator {
         reminders
     }
 
-    /// Combined gate: runs when config, tier and throttle all agree.
+    /// Combined gate: runs when config and tier agree. Per-reminder cadence
+    /// is the generator's own concern (history-scan inside `generate()`).
     #[allow(clippy::borrowed_box)]
     fn should_run(&self, g: &dyn AttachmentGenerator, ctx: &GeneratorContext<'_>) -> bool {
         if !g.is_enabled(&self.config) {
@@ -331,18 +303,6 @@ impl SystemReminderOrchestrator {
                     return false;
                 }
             }
-        }
-        let throttle_cfg = g.throttle_config_for_context(ctx);
-        if !self
-            .throttle
-            .should_generate(g.attachment_type(), &throttle_cfg, ctx.turn_number)
-        {
-            trace!(
-                generator = g.name(),
-                human_turn = ctx.turn_number,
-                "generator throttled"
-            );
-            return false;
         }
         true
     }

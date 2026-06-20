@@ -122,6 +122,13 @@ pub struct QueryEngineConfig {
     pub max_output_tokens: i64,
     /// Maximum budget in USD (None = unlimited).
     pub max_budget_usd: Option<f64>,
+    /// Per-turn output-token budget surfaced to the model via the
+    /// `output_token_usage` reminder (`turn / budget · session`). Mirrors
+    /// claude-code's `output_config.task_budget.total` — a programmatic/SDK
+    /// param with no CLI flag in TS. `None` (default) leaves the reminder
+    /// dormant. Informational only here; API-side enforcement
+    /// (Anthropic `task-budgets` beta) is a separate provider concern.
+    pub output_token_budget: Option<i64>,
     /// Enable streaming tool execution (tools execute during API streaming).
     pub streaming_tool_execution: bool,
     /// Whether this is a non-interactive (SDK/script) session. Drives
@@ -372,6 +379,7 @@ impl Default for QueryEngineConfig {
             context_window: DEFAULT_CONTEXT_WINDOW,
             max_output_tokens: 16_384,
             max_budget_usd: None,
+            output_token_budget: None,
             // Phase 9 landed: safe tools start mid-stream via
             // StreamingHandle, unsafe tools queue for commit_flush.
             // Default ON — the batched-at-end fallback path stays

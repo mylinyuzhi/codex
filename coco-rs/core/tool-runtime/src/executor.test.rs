@@ -414,9 +414,9 @@ async fn test_execute_with_serial_tool_applies_patch_before_next_context() {
         ToolCallPlan::Runnable(prepared_from(u2, "u2", 1)),
     ];
 
-    // u1 writes plan_mode_attachment_count = 7. When u2's run_one
+    // u1 writes has_exited_plan_mode = true. When u2's run_one
     // fires, we read shared state and capture what we saw.
-    let observed_by_u2: Arc<Mutex<Option<i64>>> = Arc::new(Mutex::new(None));
+    let observed_by_u2: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
     let observed_by_u2_clone = observed_by_u2.clone();
     let app_state_read = app_state.clone();
 
@@ -430,12 +430,12 @@ async fn test_execute_with_serial_tool_applies_patch_before_next_context() {
                 let model_index = prepared.model_index;
                 if tool_use_id == "u1" {
                     unstamped_with_patch(&tool_use_id, model_index, |state| {
-                        state.plan_mode_attachment_count = 7;
+                        state.has_exited_plan_mode = true;
                     })
                 } else {
                     // u2 snapshots the state it sees. Must already
                     // reflect u1's patch.
-                    let snap = app_state_read.read().await.plan_mode_attachment_count;
+                    let snap = app_state_read.read().await.has_exited_plan_mode;
                     *observed.lock().unwrap() = Some(snap);
                     empty_unstamped(&tool_use_id, model_index)
                 }
@@ -447,7 +447,7 @@ async fn test_execute_with_serial_tool_applies_patch_before_next_context() {
 
     assert_eq!(
         *observed_by_u2.lock().unwrap(),
-        Some(7),
+        Some(true),
         "u2 must observe u1's patch — serial tools apply between calls"
     );
 }

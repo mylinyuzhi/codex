@@ -113,6 +113,10 @@ pub(super) fn models() -> Vec<(&'static str, PartialModelInfo)> {
                 base_instructions: Some(super::DEFAULT_BASE_INSTRUCTIONS.into()),
                 context_window: Some(PositiveTokens::new(200_000)),
                 max_output_tokens: Some(PositiveTokens::new(8_192)),
+                // Haiku's server-side cache_read drops are noise, not real
+                // prefix breaks — exclude it from cache-break detection so
+                // the detector doesn't emit false positives.
+                cache_break_detection_excluded: Some(true),
                 capabilities: Some(vec![
                     Capability::TextGeneration,
                     Capability::Streaming,

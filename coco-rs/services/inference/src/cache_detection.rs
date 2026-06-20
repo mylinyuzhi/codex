@@ -71,6 +71,8 @@ struct PromptSnapshot {
     system_char_count: i64,
     /// Model ID.
     model: String,
+    /// Whether this model is excluded from cache-break detection.
+    cache_break_detection_excluded: bool,
     /// Whether fast mode was active.
     fast_mode: bool,
     /// Sorted beta header list (Anthropic-only; empty for other providers).
@@ -305,12 +307,6 @@ const TRACKED_SOURCE_PREFIXES: &[&str] = &[
     "agent:builtin",
 ];
 
-/// Models excluded from cache break detection. Haiku has different caching
-/// behavior, so its drops are noise.
-fn is_excluded_model(model: &str) -> bool {
-    model.contains("haiku")
-}
-
 fn signed_delta(delta: i64) -> String {
     if delta > 0 {
         format!("+{delta}")
@@ -364,6 +360,10 @@ pub struct PromptStateInput {
     pub system_char_count: i64,
     /// Model ID.
     pub model: String,
+    /// Whether this model is excluded from cache-break detection (its
+    /// `cache_read` drops are noise). Resolved from `ModelInfo` by the
+    /// caller so this crate never matches against a model id.
+    pub cache_break_detection_excluded: bool,
     /// Query source identifier.
     pub query_source: String,
     /// Optional agent id for per-instance subagent isolation.
@@ -408,13 +408,14 @@ impl CacheBreakDetector {
     /// Detects what changed from the previous call and stores pending changes
     /// for phase 2 to use.
     pub fn record_prompt_state(&mut self, input: PromptStateInput) {
-        // Skip excluded models in phase 1 too, otherwise haiku-only
-        // sessions would accumulate snapshots that phase 2 always
-        // discards. Eviction is bounded but the entry still costs
-        // memory + a hash compare per call.
-        if is_excluded_model(&input.model) {
-            return;
-        }
+        // Record EVERY model, including cache-break-excluded ones (Haiku).
+        // Phase 1 must keep the snapshot's model + exclusion flag current so
+        // that on a same-source model swap (e.g. fast-mode Sonnet→Haiku) the
+        // post-call phase-2 check sees the *current* model's exclusion rather
+        // than a stale one. Skipping excluded models here would freeze the
+        // snapshot on the previous model and resurrect the very false positive
+        // the exclusion exists to suppress. Matches the TS detector, which
+        // also records all models and gates exclusively in phase 2.
         let key = match tracking_key(&input.query_source, input.agent_id.as_deref()) {
             Some(k) => k,
             None => return,
@@ -446,6 +447,7 @@ impl CacheBreakDetector {
                         per_tool_schema_sizes: input.per_tool_schema_sizes,
                         system_char_count: input.system_char_count,
                         model: input.model,
+                        cache_break_detection_excluded: input.cache_break_detection_excluded,
                         fast_mode: input.fast_mode,
                         betas: input.betas,
                         extra_body_hash: input.extra_body_hash,
@@ -595,6 +597,7 @@ impl CacheBreakDetector {
             snapshot.per_tool_schema_sizes = input.per_tool_schema_sizes;
             snapshot.system_char_count = input.system_char_count;
             snapshot.model = input.model;
+            snapshot.cache_break_detection_excluded = input.cache_break_detection_excluded;
             snapshot.fast_mode = input.fast_mode;
             snapshot.betas = input.betas;
             snapshot.extra_body_hash = input.extra_body_hash;
@@ -648,9 +651,9 @@ impl CacheBreakDetector {
             }
         };
 
-        // Excluded model — skip detection entirely (haiku has different
-        // server-side caching behavior, drops are noise).
-        if is_excluded_model(&snapshot.model) {
+        // Excluded model — skip detection entirely (its server-side
+        // caching behavior makes cache_read drops noise, not real breaks).
+        if snapshot.cache_break_detection_excluded {
             self.pending_changes.remove(&key);
             return CacheBreakResult {
                 state: CacheState::Cold,

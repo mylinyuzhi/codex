@@ -81,6 +81,21 @@ fn count_attachments_containing<M: std::borrow::Borrow<Message>>(
         .count()
 }
 
+/// Count `plan_mode` reminder attachments in the transcript. Cadence is now
+/// history-derived, so the transcript — not an app_state counter — is the
+/// source of truth for "how many plan-mode reminders fired".
+fn count_plan_mode_attachments<M: std::borrow::Borrow<Message>>(messages: &[M]) -> usize {
+    messages
+        .iter()
+        .filter(|m| {
+            matches!(
+                m.borrow(),
+                Message::Attachment(a) if a.kind == coco_types::AttachmentKind::PlanMode
+            )
+        })
+        .count()
+}
+
 fn attachment_texts<M: std::borrow::Borrow<Message>>(messages: &[M]) -> Vec<String> {
     messages
         .iter()
@@ -292,21 +307,15 @@ async fn tool_rounds_do_not_advance_cadence_within_single_human_turn() {
     let result = run_plan_mode_turn(model, params).await;
     assert_eq!(result.response_text, "explored");
 
-    // TS parity: across 5 Read iterations within one human turn, only
-    // the FIRST plan-mode attachment fired (turn_start's first-entry
-    // branch — `attachment_count == 0`). No Sparse reminder should
-    // have fired on iterations 2-5 just because tool rounds advanced
-    // the engine's `turn` counter.
-    let guard = app_state.read().await;
+    // TS parity: across 5 Read iterations within one human turn, only the
+    // FIRST plan-mode attachment fired. History-derived cadence sees no new
+    // human-turn user message across the tool-result rounds, so
+    // `human_turns_since_attachment_opt(PlanMode)` stays `Some(0)` and blocks
+    // re-firing — no Sparse reminder on iterations 2-5.
+    let plan_attachments = count_plan_mode_attachments(&result.final_messages);
     assert_eq!(
-        guard.plan_mode_attachment_count, 1,
-        "tool-result rounds must not advance the cadence counter; got {}",
-        guard.plan_mode_attachment_count
-    );
-    assert_eq!(
-        guard.plan_mode_turns_since_last_attachment, 0,
-        "turns-since-last must stay at 0 across tool-result rounds \
-         when the human-turn UUID doesn't change"
+        plan_attachments, 1,
+        "tool-result rounds must not re-fire the plan-mode reminder; got {plan_attachments}"
     );
 }
 
@@ -357,7 +366,7 @@ async fn cadence_across_six_human_turns() {
     );
     let r1 = run_plan_mode_turn(make_model("stage 1 done"), turn1).await;
     assert_eq!(r1.response_text, "stage 1 done");
-    let count_after_1 = app_state.read().await.plan_mode_attachment_count;
+    let count_after_1 = count_plan_mode_attachments(&r1.final_messages);
     assert_eq!(count_after_1, 1, "turn 1 must emit attachment #1");
 
     // Turns 2..=5 — each appends a new user message on top of the
@@ -379,7 +388,7 @@ async fn cadence_across_six_human_turns() {
         .next_turn(messages, prompt);
         let r = run_plan_mode_turn(make_model(reply), params).await;
         messages = r.final_messages;
-        let count = app_state.read().await.plan_mode_attachment_count;
+        let count = count_plan_mode_attachments(&messages);
         assert_eq!(
             count, 1,
             "turn {turn_no} must NOT emit a new attachment (throttled)"
@@ -398,7 +407,7 @@ async fn cadence_across_six_human_turns() {
     .next_turn(messages, "final push");
     let r6 = run_plan_mode_turn(make_model("stage 6 done"), turn6).await;
 
-    let count_after_6 = app_state.read().await.plan_mode_attachment_count;
+    let count_after_6 = count_plan_mode_attachments(&r6.final_messages);
     assert_eq!(
         count_after_6, 2,
         "turn 6 must emit attachment #2 (Sparse); got count={count_after_6}"

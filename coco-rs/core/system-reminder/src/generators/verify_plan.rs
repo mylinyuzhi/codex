@@ -26,7 +26,6 @@ use async_trait::async_trait;
 use crate::error::Result;
 use crate::generator::AttachmentGenerator;
 use crate::generator::GeneratorContext;
-use crate::throttle::ThrottleConfig;
 use crate::types::AttachmentType;
 use crate::types::SystemReminder;
 use coco_config::SystemReminderConfig;
@@ -58,10 +57,6 @@ impl AttachmentGenerator for VerifyPlanReminderGenerator {
 
     fn is_enabled(&self, config: &SystemReminderConfig) -> bool {
         config.attachments.verify_plan_reminder
-    }
-
-    fn throttle_config(&self) -> ThrottleConfig {
-        ThrottleConfig::verify_plan_reminder()
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {

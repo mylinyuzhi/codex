@@ -32,7 +32,9 @@ use crate::turn_counting::TASK_MANAGEMENT_TOOLS;
 use crate::turn_counting::count_assistant_turns_since_any_tool;
 use crate::turn_counting::count_assistant_turns_since_attachment;
 use crate::turn_counting::count_assistant_turns_since_tool;
+use crate::turn_counting::count_attachments_since_attachment;
 use crate::turn_counting::count_human_turns_since_attachment;
+use crate::turn_counting::human_turns_since_attachment_opt;
 use crate::types::SystemReminder;
 use coco_config::SystemReminderConfig;
 
@@ -45,7 +47,8 @@ pub struct TurnReminderInput<'a> {
     // ── Configuration + turn identity ──
     /// Root reminder config (per-generator toggles + timeout + critical text).
     pub config: &'a SystemReminderConfig,
-    /// Current LLM-iteration counter — used by [`ThrottleManager`] gates.
+    /// Current human-turn counter. Retained as a log/diagnostic correlation
+    /// field; reminder cadence is history-derived, not driven by this number.
     pub turn_number: i32,
 
     // ── Agent identity ──
@@ -312,6 +315,25 @@ pub async fn run_turn_reminders(
     let turns_since_last_task_reminder =
         count_assistant_turns_since_attachment(messages, AttachmentKind::TaskReminder);
 
+    // Plan-mode / auto-mode steady-state cadence is now history-derived
+    // (replacing the in-memory throttle): human turns since the last
+    // attachment (`None` = first turn in this mode → always emit), plus the
+    // attachment count since the last exit for the Full-vs-Sparse cycle.
+    let plan_mode_turns_since_attachment =
+        human_turns_since_attachment_opt(messages, AttachmentKind::PlanMode);
+    let plan_mode_attachments_since_exit = count_attachments_since_attachment(
+        messages,
+        AttachmentKind::PlanMode,
+        AttachmentKind::PlanModeExit,
+    );
+    let auto_mode_turns_since_attachment =
+        human_turns_since_attachment_opt(messages, AttachmentKind::AutoMode);
+    let auto_mode_attachments_since_exit = count_attachments_since_attachment(
+        messages,
+        AttachmentKind::AutoMode,
+        AttachmentKind::AutoModeExit,
+    );
+
     let builder = GeneratorContext::builder(config)
         .turn_number(turn_number)
         .is_main_agent(!is_sub_agent)
@@ -344,6 +366,10 @@ pub async fn run_turn_reminders(
         .coordinator_worker_context(coordinator_worker_context)
         .has_pending_plan_verification(has_pending_plan_verification)
         .turns_since_plan_exit(turns_since_plan_exit)
+        .plan_mode_turns_since_attachment(plan_mode_turns_since_attachment)
+        .plan_mode_attachments_since_exit(plan_mode_attachments_since_exit)
+        .auto_mode_turns_since_attachment(auto_mode_turns_since_attachment)
+        .auto_mode_attachments_since_exit(auto_mode_attachments_since_exit)
         .total_cost_usd(total_cost_usd)
         .max_budget_usd(max_budget_usd)
         .output_tokens_turn(output_tokens_turn)

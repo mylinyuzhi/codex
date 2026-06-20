@@ -99,8 +99,7 @@ async fn none_when_both_date_and_worker_context_unset() {
 }
 
 #[tokio::test]
-async fn fires_every_turn_via_core_tier_no_throttle() {
-    assert_eq!(UserContextGenerator.throttle_config().min_turns_between, 0);
+async fn fires_every_turn_via_core_tier() {
     assert_eq!(
         UserContextGenerator.attachment_type().tier(),
         crate::types::ReminderTier::Core

@@ -133,6 +133,57 @@ pub fn count_human_turns_since_attachment<M: Borrow<Message>>(
     0
 }
 
+/// Like [`count_human_turns_since_attachment`] but distinguishes "no prior
+/// attachment" (`None`) from "0 human turns since the most recent one"
+/// (`Some(0)`). Mirrors TS `getPlanModeAttachmentTurnCount`'s
+/// `{ turnCount, foundPlanModeAttachment }` pair: the caller emits
+/// unconditionally on the first plan/auto turn (`None`) and otherwise gates on
+/// the turn count. This replaces the in-memory throttle's `last_generated_turn`
+/// for the plan-mode / auto-mode cadence — history is the source of truth, so
+/// cadence survives compaction (old markers vanish → re-emission is valid).
+pub fn human_turns_since_attachment_opt<M: Borrow<Message>>(
+    messages: &[M],
+    kind: AttachmentKind,
+) -> Option<i32> {
+    let mut count: i32 = 0;
+    for msg in messages.iter().rev() {
+        if matches!(msg.borrow(), Message::User(_)) {
+            count = count.saturating_add(1);
+        }
+        if let Message::Attachment(attachment) = msg.borrow()
+            && attachment.kind == kind
+        {
+            return Some(count);
+        }
+    }
+    None
+}
+
+/// Count attachments of `count_kind` scanning backwards, stopping at the most
+/// recent `reset_kind` marker (exclusive). Used for the plan-mode / auto-mode
+/// Full-vs-Sparse cycle: the Nth attachment since the last exit is Full.
+/// Mirrors TS `countPlanModeAttachmentsSinceLastExit`. Re-entering plan/auto
+/// mode (a `reset_kind` exit banner in history) restarts the Full/Sparse
+/// cycle, and compaction naturally resets it too.
+pub fn count_attachments_since_attachment<M: Borrow<Message>>(
+    messages: &[M],
+    count_kind: AttachmentKind,
+    reset_kind: AttachmentKind,
+) -> i32 {
+    let mut count: i32 = 0;
+    for msg in messages.iter().rev() {
+        if let Message::Attachment(attachment) = msg.borrow() {
+            if attachment.kind == reset_kind {
+                break;
+            }
+            if attachment.kind == count_kind {
+                count = count.saturating_add(1);
+            }
+        }
+    }
+    count
+}
+
 /// Count assistant turns since the most recent attachment of `kind`.
 ///
 /// Scans backwards, skips thinking-only assistant messages, stops at the
