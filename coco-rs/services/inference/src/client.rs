@@ -228,6 +228,11 @@ pub(crate) struct ApiClient {
     /// 401/403 triggers one forced token refresh + retry. Bound by
     /// `model_factory::build_api_client` to `resolver.refresh_now(provider)`.
     refresh_hook: Option<crate::credentials::RefreshHook>,
+    /// Per-provider streaming idle-timeout backstop. `None` = disabled (the
+    /// default — soft stall warn only). Set from
+    /// `ProviderClientOptions.stream_idle_timeout_secs` via
+    /// [`Self::with_stream_idle_timeout`]; applied in [`Self::query_stream`].
+    stream_idle_timeout: Option<std::time::Duration>,
 }
 
 impl ApiClient {
@@ -257,7 +262,20 @@ impl ApiClient {
             usage: Arc::new(Mutex::new(UsageAccumulator::new())),
             cache_break_detector: None,
             refresh_hook: None,
+            stream_idle_timeout: None,
         }
+    }
+
+    /// Set the per-provider streaming idle-timeout backstop. A non-positive /
+    /// `None` value leaves it disabled (the default). Sourced from
+    /// `ProviderClientOptions.stream_idle_timeout_secs`.
+    #[must_use]
+    pub(crate) fn with_stream_idle_timeout(mut self, secs: Option<i64>) -> Self {
+        self.stream_idle_timeout = secs
+            .filter(|&s| s > 0)
+            .and_then(|s| u64::try_from(s).ok())
+            .map(std::time::Duration::from_secs);
+        self
     }
 
     /// Install a reactive-401 refresh hook. When the underlying model returns an
@@ -688,8 +706,12 @@ impl ApiClient {
         &self,
         params: &QueryParams,
     ) -> Result<tokio::sync::mpsc::Receiver<crate::stream::StreamEvent>, InferenceError> {
-        self.query_stream_with_config(params, crate::stream::default_process_stream_config())
-            .await
+        let mut config = crate::stream::default_process_stream_config();
+        // Per-provider opt-in hard idle backstop (default disabled).
+        if let Some(timeout) = self.stream_idle_timeout {
+            config = config.with_idle_timeout(timeout);
+        }
+        self.query_stream_with_config(params, config).await
     }
 
     /// Execute a streaming query with explicit stream processor config.

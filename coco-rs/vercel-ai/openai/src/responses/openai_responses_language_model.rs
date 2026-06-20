@@ -35,6 +35,7 @@ use vercel_ai_provider_utils::post_stream_to_api_with_client_tapped;
 use crate::openai_capabilities::SystemMessageMode;
 use crate::openai_capabilities::get_capabilities;
 use crate::openai_config::OpenAIConfig;
+use crate::openai_config::ResponsesStorePolicy;
 use crate::openai_error::OpenAIFailedResponseHandler;
 
 use super::convert_responses_usage::convert_openai_responses_usage;
@@ -48,7 +49,11 @@ use super::openai_responses_api::ResponseOutputItem;
 use super::openai_responses_api::ResponsesStreamEvent;
 use super::openai_responses_options::extract_responses_options;
 use super::prepare_tools::prepare_responses_tools;
+use super::provider_metadata::build_compaction_provider_metadata;
+use super::provider_metadata::build_reasoning_provider_metadata;
 use super::provider_metadata::build_responses_provider_metadata;
+use super::provider_metadata::raw_reasoning_segment_id;
+use super::provider_metadata::reasoning_text_marker;
 
 /// OpenAI Responses API language model.
 pub struct OpenAIResponsesLanguageModel {
@@ -316,13 +321,22 @@ impl OpenAIResponsesLanguageModel {
         {
             body["parallel_tool_calls"] = Value::Bool(parallel);
         }
-        // ChatGPT-subscription (codex backend) requires `store: false`; that
-        // same `store: false` is also what unlocks the
-        // `reasoning.encrypted_content` include below. An explicit user
-        // `store` still wins.
+        // `store` resolution for reasoning continuity, most-specific first:
+        //   1. explicit per-call `store` always wins;
+        //   2. ChatGPT subscription (codex backend) requires `store: false`;
+        //   3. provider opt-in `reasoning_store = Stateless` forces
+        //      `store: false` for reasoning models (codex-aligned, stateless;
+        //      pairs with the `reasoning.encrypted_content` include below).
+        // The default `ServerDefault` policy leaves plain API-key reasoning on
+        // server-side state (store omitted) — NOT a hardcoded global false.
         let effective_store = openai_options
             .store
-            .or_else(|| self.config.chatgpt_subscription.then_some(false));
+            .or_else(|| self.config.chatgpt_subscription.then_some(false))
+            .or_else(|| {
+                (is_reasoning_model
+                    && self.config.reasoning_store == ResponsesStorePolicy::Stateless)
+                    .then_some(false)
+            });
         if let Some(store) = effective_store {
             body["store"] = Value::Bool(store);
         }
@@ -592,7 +606,9 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                         Some(ProviderMetadata(meta))
                     };
                     content.push(AssistantContentPart::ToolCall(ToolCallPart {
-                        tool_call_id: call_id.clone().unwrap_or_default(),
+                        // Correlate by the mandatory wire `call_id`; the item id
+                        // rides `provider_metadata.openai.itemId`.
+                        tool_call_id: call_id.clone(),
                         tool_name,
                         input: parsed_input,
                         provider_executed: None,
@@ -602,7 +618,10 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                     }));
                 }
                 ResponseOutputItem::CustomToolCall {
-                    id, name, input, ..
+                    id,
+                    call_id,
+                    name,
+                    input,
                 } => {
                     has_function_call = true;
                     let tool_name = name.clone().unwrap_or_default();
@@ -614,43 +633,71 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                     // client-executed (`provider_executed: None`), matching the
                     // function-call path.
                     let raw_input = input.clone().unwrap_or_default();
+                    // Correlate by wire `call_id` (item `id` is receive-only);
+                    // stash the item id under `provider_metadata.openai.itemId`,
+                    // mirroring the function_call path.
+                    let provider_metadata = id.clone().map(|item_id| {
+                        let mut openai_meta = serde_json::Map::new();
+                        openai_meta.insert("itemId".into(), Value::String(item_id));
+                        let mut m = HashMap::new();
+                        m.insert("openai".to_string(), Value::Object(openai_meta));
+                        ProviderMetadata(m)
+                    });
                     content.push(AssistantContentPart::ToolCall(ToolCallPart {
-                        tool_call_id: id.clone().unwrap_or_default(),
+                        tool_call_id: call_id.clone(),
                         tool_name,
                         input: Value::String(raw_input),
                         provider_executed: None,
                         invalid: false,
                         invalid_reason: None,
-                        provider_metadata: None,
+                        provider_metadata,
                     }));
                 }
                 ResponseOutputItem::Reasoning {
                     summary,
+                    content: reasoning_content,
                     encrypted_content,
                     ..
                 } => {
-                    if let Some(summaries) = summary {
-                        for s in summaries {
-                            if let Some(text) = &s.text {
-                                content.push(AssistantContentPart::Reasoning(
-                                    vercel_ai_provider::ReasoningPart {
-                                        text: text.clone(),
-                                        provider_metadata: None,
-                                    },
-                                ));
-                            }
-                        }
-                    }
-                    // Include encrypted_content in provider metadata if present
-                    if let Some(ec) = encrypted_content {
-                        let meta = ProviderMetadata(HashMap::from([(
-                            "encrypted_content".into(),
-                            ec.clone(),
-                        )]));
+                    // Emit ONE reasoning part per item carrying both the
+                    // concatenated summary text AND the encrypted_content
+                    // chain-of-thought blob under
+                    // `provider_metadata.openai.encryptedContent`. Splitting
+                    // these across separate parts (the old behavior) produced
+                    // two reasoning items on sendback; one item keeps the
+                    // chain intact for store=false continuity.
+                    let summary_text = summary
+                        .iter()
+                        .flatten()
+                        .filter_map(|s| s.text.as_deref())
+                        .filter(|t| !t.is_empty())
+                        .collect::<Vec<_>>()
+                        .join("\n\n");
+                    let meta = build_reasoning_provider_metadata(encrypted_content.as_ref());
+                    // Skip a genuinely empty reasoning item (no summary, no
+                    // chain blob); otherwise carry whichever is present.
+                    if !summary_text.is_empty() || meta.is_some() {
                         content.push(AssistantContentPart::Reasoning(
                             vercel_ai_provider::ReasoningPart {
-                                text: String::new(),
-                                provider_metadata: Some(meta),
+                                text: summary_text,
+                                provider_metadata: meta,
+                            },
+                        ));
+                    }
+                    // Raw reasoning `content` channel — display-only, marked
+                    // `reasoningType=text` so it is stripped on sendback.
+                    let raw_text = reasoning_content
+                        .iter()
+                        .flatten()
+                        .filter_map(|c| c.text.as_deref())
+                        .filter(|t| !t.is_empty())
+                        .collect::<Vec<_>>()
+                        .join("\n\n");
+                    if !raw_text.is_empty() {
+                        content.push(AssistantContentPart::Reasoning(
+                            vercel_ai_provider::ReasoningPart {
+                                text: raw_text,
+                                provider_metadata: Some(reasoning_text_marker()),
                             },
                         ));
                     }
@@ -916,19 +963,10 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                     id,
                     encrypted_content,
                 } => {
-                    let item_id = id.clone().unwrap_or_default();
-                    let mut openai_inner: HashMap<String, Value> = HashMap::new();
-                    openai_inner.insert("type".into(), Value::String("compaction".into()));
-                    openai_inner.insert("itemId".into(), Value::String(item_id));
-                    if let Some(ec) = encrypted_content {
-                        openai_inner.insert("encryptedContent".into(), Value::String(ec.clone()));
-                    }
-                    let mut openai_map = serde_json::Map::new();
-                    for (k, v) in &openai_inner {
-                        openai_map.insert(k.clone(), v.clone());
-                    }
-                    let mut pm = ProviderMetadata::default();
-                    pm.0.insert("openai".into(), Value::Object(openai_map));
+                    let pm = build_compaction_provider_metadata(
+                        id.as_deref().unwrap_or_default(),
+                        encrypted_content.as_deref(),
+                    );
                     content.push(AssistantContentPart::Custom(
                         vercel_ai_provider::CustomPart::new("openai-compaction")
                             .with_provider_metadata(pm),
@@ -1014,7 +1052,13 @@ struct ActiveTextItem {
 }
 
 struct ActiveFnCall {
+    /// Wire item id (`fc_…`) — receive-only; rides
+    /// `provider_metadata.openai.itemId`.
     id: String,
+    /// Wire `call_id` (`call_…`) — the correlation id echoed back as the
+    /// `function_call_output.call_id`. Seeded from `output_item.added`'s
+    /// mandatory `call_id`; the single correlation id for every emit.
+    call_id: String,
     name: String,
     arguments: String,
     started: bool,
@@ -1026,7 +1070,12 @@ struct ActiveFnCall {
 }
 
 struct ActiveCustomToolCall {
+    /// Wire item id (`ctc_…`) — receive-only; rides
+    /// `provider_metadata.openai.itemId`.
     id: String,
+    /// Wire `call_id` — echoed back as the `custom_tool_call_output.call_id`.
+    /// Seeded from `output_item.added`'s mandatory `call_id`.
+    call_id: String,
     name: String,
     input: String,
     started: bool,
@@ -1091,7 +1140,12 @@ struct ResponsesStreamState {
     active_texts: HashMap<String, ActiveTextItem>,
     active_fn_calls: HashMap<String, ActiveFnCall>,
     active_custom_calls: HashMap<String, ActiveCustomToolCall>,
+    /// Summary reasoning channel (`reasoning_summary_text.*`), keyed by item id.
     active_reasoning: HashMap<String, ActiveReasoning>,
+    /// Raw reasoning channel (`reasoning_text.*`), tracked separately so it
+    /// never collides with the summary channel of the same item. Surfaces as
+    /// a distinct segment marked `provider_metadata.openai.reasoningType=text`.
+    active_reasoning_content: HashMap<String, ActiveReasoning>,
     usage: Option<super::convert_responses_usage::OpenAIResponsesUsage>,
     status: Option<String>,
     has_function_call: bool,
@@ -1121,6 +1175,7 @@ impl ResponsesStreamState {
             active_fn_calls: HashMap::new(),
             active_custom_calls: HashMap::new(),
             active_reasoning: HashMap::new(),
+            active_reasoning_content: HashMap::new(),
             usage: None,
             status: None,
             has_function_call: false,
@@ -1132,6 +1187,78 @@ impl ResponsesStreamState {
             response_id: None,
             service_tier: None,
         }
+    }
+
+    /// Emit the closing `ToolInputEnd` + `ToolCall` for a function call.
+    ///
+    /// The correlation id is the wire `call_id` (NOT the item id), so the
+    /// eventual `function_call_output.call_id` matches what the model
+    /// expects; the item id and any tool_search `namespace` ride
+    /// `provider_metadata.openai`. Emits a `ToolInputStart` first when no
+    /// argument delta ever opened the call (zero-arg / `output_item.done`-only
+    /// calls) so the start/end/call ids stay paired in the accumulator.
+    fn finalize_fn_call(&mut self, fc: ActiveFnCall) {
+        let emit_id = fc.call_id;
+        let mut openai_meta = serde_json::Map::new();
+        openai_meta.insert("itemId".into(), Value::String(fc.id.clone()));
+        if let Some(ns) = &fc.namespace {
+            openai_meta.insert("namespace".into(), Value::String(ns.clone()));
+        }
+        let mut meta_map = HashMap::new();
+        meta_map.insert("openai".to_string(), Value::Object(openai_meta));
+        let meta = ProviderMetadata(meta_map);
+        if !fc.started {
+            self.pending
+                .push_back(LanguageModelV4StreamPart::ToolInputStart {
+                    id: emit_id.clone(),
+                    tool_name: fc.name.clone(),
+                    provider_executed: None,
+                    dynamic: None,
+                    title: None,
+                    provider_metadata: None,
+                });
+        }
+        self.pending
+            .push_back(LanguageModelV4StreamPart::ToolInputEnd {
+                id: emit_id.clone(),
+                provider_metadata: Some(meta.clone()),
+            });
+        let tc = vercel_ai_provider::LanguageModelV4ToolCall::new(emit_id, fc.name, fc.arguments)
+            .with_metadata(meta);
+        self.pending
+            .push_back(LanguageModelV4StreamPart::ToolCall(tc));
+    }
+
+    /// Closing emit for a custom (freeform/grammar) tool call. Same
+    /// `call_id`-over-item-id correlation rule as [`Self::finalize_fn_call`];
+    /// the item id rides `provider_metadata.openai.itemId`.
+    fn finalize_custom_call(&mut self, ct: ActiveCustomToolCall) {
+        let emit_id = ct.call_id;
+        let mut openai_meta = serde_json::Map::new();
+        openai_meta.insert("itemId".into(), Value::String(ct.id.clone()));
+        let mut meta_map = HashMap::new();
+        meta_map.insert("openai".to_string(), Value::Object(openai_meta));
+        let meta = ProviderMetadata(meta_map);
+        if !ct.started {
+            self.pending
+                .push_back(LanguageModelV4StreamPart::ToolInputStart {
+                    id: emit_id.clone(),
+                    tool_name: ct.name.clone(),
+                    provider_executed: None,
+                    dynamic: None,
+                    title: None,
+                    provider_metadata: None,
+                });
+        }
+        self.pending
+            .push_back(LanguageModelV4StreamPart::ToolInputEnd {
+                id: emit_id.clone(),
+                provider_metadata: Some(meta.clone()),
+            });
+        let tc = vercel_ai_provider::LanguageModelV4ToolCall::new(emit_id, ct.name, ct.input)
+            .with_metadata(meta);
+        self.pending
+            .push_back(LanguageModelV4StreamPart::ToolCall(tc));
     }
 
     /// Returns Ok(true) if the stream is still open, Ok(false) if the stream ended.
@@ -1220,40 +1347,106 @@ impl ResponsesStreamState {
                 self.service_tier = resp.service_tier;
             }
 
-            ResponsesStreamEvent::ResponseCompleted { response }
-            | ResponsesStreamEvent::ResponseIncomplete { response } => {
-                if let Some(resp) = response {
-                    self.usage = resp.usage;
-                    self.status = resp.status;
-                }
-            }
-
-            ResponsesStreamEvent::ResponseFailed {
+            ResponsesStreamEvent::ResponseCompleted {
                 response: Some(resp),
             } => {
                 self.usage = resp.usage;
-                // Use incomplete_details reason if available, else "error"
+                self.status = resp.status;
+            }
+
+            ResponsesStreamEvent::ResponseIncomplete {
+                response: Some(resp),
+            } => {
+                self.usage = resp.usage;
+                // `incomplete` carries its real reason in
+                // `incomplete_details.reason` (e.g. `max_output_tokens`,
+                // `content_filter`) — the literal `status` is just
+                // `"incomplete"`. Surface the reason so the finish maps to
+                // `MaxTokens`/`ContentFilter` and the engine's output-budget
+                // escalation can fire. Mirrors codex's `response.incomplete`
+                // handling.
                 let reason = resp
                     .incomplete_details
                     .as_ref()
                     .and_then(|d| d.get("reason"))
                     .and_then(|r| r.as_str())
                     .map(String::from);
-                // `resp.error` carries the provider's failure detail; surface
-                // it so a `response.failed` doesn't collapse to a bare status.
+                self.status = reason.or(resp.status);
+            }
+
+            ResponsesStreamEvent::ResponseFailed {
+                response: Some(resp),
+            } => {
+                self.usage = resp.usage;
+                // A mid-stream `response.failed` carries its classification in
+                // `error.code` (NOT `incomplete_details`). Mirror codex's
+                // classifier (codex-api/src/sse/responses.rs:325-359): a
+                // context-window overflow routes through the typed
+                // `ContextWindowExceeded` finish reason so reactive compaction
+                // fires; every other failure surfaces as an `Error` stream
+                // part (retryable for transient/overload codes, fatal for
+                // quota/policy) instead of collapsing to a silent clean finish.
+                let error_code = resp
+                    .error
+                    .as_ref()
+                    .and_then(|e| e.get("code"))
+                    .and_then(|c| c.as_str())
+                    .map(String::from);
+                let error_message = resp
+                    .error
+                    .as_ref()
+                    .and_then(|e| e.get("message"))
+                    .and_then(|m| m.as_str())
+                    .map(String::from);
                 if let Some(err) = &resp.error {
                     tracing::warn!(
                         error = %err,
-                        reason = reason.as_deref().unwrap_or(""),
+                        code = error_code.as_deref().unwrap_or(""),
                         "responses stream: response.failed",
                     );
                 }
-                self.status = Some(reason.unwrap_or_else(|| "error".into()));
+                match error_code.as_deref() {
+                    Some("context_length_exceeded") => {
+                        // Do NOT emit an Error — let the synthesized Finish
+                        // carry `ContextWindowExceeded` so `app/query` runs
+                        // reactive compaction instead of failing the turn.
+                        self.status = Some("context_length_exceeded".into());
+                    }
+                    code => {
+                        // codex treats quota/usage/invalid-prompt/cyber-policy
+                        // as fatal and everything else (overload, slow_down,
+                        // unclassified) as retryable. Preserve that split on
+                        // the `is_retryable` flag.
+                        let is_retryable = !matches!(
+                            code,
+                            Some("insufficient_quota")
+                                | Some("usage_not_included")
+                                | Some("invalid_prompt")
+                                | Some("cyber_policy")
+                        );
+                        let message = error_message
+                            .or_else(|| {
+                                error_code
+                                    .clone()
+                                    .map(|c| format!("OpenAI responses failed (code: {c})"))
+                            })
+                            .unwrap_or_else(|| "OpenAI responses failed".into());
+                        self.pending.push_back(LanguageModelV4StreamPart::Error {
+                            error: vercel_ai_provider::StreamError {
+                                message,
+                                code: error_code,
+                                is_retryable,
+                            },
+                        });
+                        self.status = Some("error".into());
+                    }
+                }
             }
 
             ResponsesStreamEvent::OutputItemAdded { item: Some(item) } => match &item {
                 ResponseOutputItem::FunctionCall {
                     id,
+                    call_id,
                     name,
                     namespace,
                     ..
@@ -1264,6 +1457,10 @@ impl ResponsesStreamState {
                         item_id.clone(),
                         ActiveFnCall {
                             id: item_id,
+                            // Seed the mandatory wire `call_id` now — the
+                            // argument deltas carry only `item_id`, so this is
+                            // the only place to capture the correlation id.
+                            call_id: call_id.clone(),
                             name: name.clone().unwrap_or_default(),
                             arguments: String::new(),
                             started: false,
@@ -1271,13 +1468,16 @@ impl ResponsesStreamState {
                         },
                     );
                 }
-                ResponseOutputItem::CustomToolCall { id, name, .. } => {
+                ResponseOutputItem::CustomToolCall {
+                    id, call_id, name, ..
+                } => {
                     self.has_function_call = true;
                     let item_id = id.clone().unwrap_or_default();
                     self.active_custom_calls.insert(
                         item_id.clone(),
                         ActiveCustomToolCall {
                             id: item_id,
+                            call_id: call_id.clone(),
                             name: name.clone().unwrap_or_default(),
                             input: String::new(),
                             started: false,
@@ -1458,12 +1658,16 @@ impl ResponsesStreamState {
                 if let (Some(item_id), Some(delta)) = (item_id, delta)
                     && let Some(fc) = self.active_fn_calls.get_mut(&item_id)
                 {
+                    // Emit under the wire `call_id` so the start/delta/end/call
+                    // ids all pair to one accumulator segment.
+                    let emit_id = fc.call_id.clone();
                     if !fc.started {
                         fc.started = true;
+                        let tool_name = fc.name.clone();
                         self.pending
                             .push_back(LanguageModelV4StreamPart::ToolInputStart {
-                                id: fc.id.clone(),
-                                tool_name: fc.name.clone(),
+                                id: emit_id.clone(),
+                                tool_name,
                                 provider_executed: None,
                                 dynamic: None,
                                 title: None,
@@ -1473,7 +1677,7 @@ impl ResponsesStreamState {
                     fc.arguments.push_str(&delta);
                     self.pending
                         .push_back(LanguageModelV4StreamPart::ToolInputDelta {
-                            id: item_id,
+                            id: emit_id,
                             delta,
                             provider_metadata: None,
                         });
@@ -1485,32 +1689,7 @@ impl ResponsesStreamState {
                 ..
             } => {
                 if let Some(fc) = self.active_fn_calls.remove(&item_id) {
-                    // TS upstream #14789: when the function_call carries
-                    // a `namespace` (server-executed tool_search
-                    // dispatch), propagate it to both `tool-input-end`
-                    // and `tool-call` provider_metadata.
-                    let namespace_meta = fc.namespace.as_ref().map(|ns| {
-                        let mut openai_meta = serde_json::Map::new();
-                        openai_meta.insert("namespace".into(), Value::String(ns.clone()));
-                        let mut meta = HashMap::new();
-                        meta.insert("openai".to_string(), Value::Object(openai_meta));
-                        ProviderMetadata(meta)
-                    });
-                    self.pending
-                        .push_back(LanguageModelV4StreamPart::ToolInputEnd {
-                            id: fc.id.clone(),
-                            provider_metadata: namespace_meta.clone(),
-                        });
-                    let mut tc = vercel_ai_provider::LanguageModelV4ToolCall::new(
-                        fc.id,
-                        fc.name,
-                        fc.arguments,
-                    );
-                    if let Some(meta) = namespace_meta {
-                        tc = tc.with_metadata(meta);
-                    }
-                    self.pending
-                        .push_back(LanguageModelV4StreamPart::ToolCall(tc));
+                    self.finalize_fn_call(fc);
                 }
             }
 
@@ -1536,12 +1715,14 @@ impl ResponsesStreamState {
                 if let (Some(item_id), Some(delta)) = (item_id, delta)
                     && let Some(ct) = self.active_custom_calls.get_mut(&item_id)
                 {
+                    let emit_id = ct.call_id.clone();
                     if !ct.started {
                         ct.started = true;
+                        let tool_name = ct.name.clone();
                         self.pending
                             .push_back(LanguageModelV4StreamPart::ToolInputStart {
-                                id: ct.id.clone(),
-                                tool_name: ct.name.clone(),
+                                id: emit_id.clone(),
+                                tool_name,
                                 // Custom (freeform/grammar) tools are client-
                                 // executed — coco runs them locally (apply_patch).
                                 provider_executed: None,
@@ -1553,7 +1734,7 @@ impl ResponsesStreamState {
                     ct.input.push_str(&delta);
                     self.pending
                         .push_back(LanguageModelV4StreamPart::ToolInputDelta {
-                            id: item_id,
+                            id: emit_id,
                             delta,
                             provider_metadata: None,
                         });
@@ -1565,14 +1746,7 @@ impl ResponsesStreamState {
                 ..
             } => {
                 if let Some(ct) = self.active_custom_calls.remove(&item_id) {
-                    self.pending
-                        .push_back(LanguageModelV4StreamPart::ToolInputEnd {
-                            id: ct.id.clone(),
-                            provider_metadata: None,
-                        });
-                    self.pending.push_back(LanguageModelV4StreamPart::ToolCall(
-                        vercel_ai_provider::LanguageModelV4ToolCall::new(ct.id, ct.name, ct.input),
-                    ));
+                    self.finalize_custom_call(ct);
                 }
             }
 
@@ -1607,15 +1781,75 @@ impl ResponsesStreamState {
                 }
             }
 
-            ResponsesStreamEvent::ReasoningSummaryDone {
+            ResponsesStreamEvent::ReasoningSummaryDone { .. } => {
+                // The reasoning segment is closed by `output_item.done` (which
+                // carries `encrypted_content`), NOT here. Emitting
+                // `ReasoningEnd` now would close the accumulator segment
+                // before the chain-of-thought blob arrives, leaving nowhere to
+                // attach it. Keep the `active_reasoning` entry open so the
+                // `OutputItemDone` reasoning arm can finalize it.
+            }
+
+            ResponsesStreamEvent::ReasoningSummaryPartAdded {
+                item_id: Some(id),
+                summary_index,
+                ..
+            } => {
+                // A new summary section (`reasoning.summary='detailed'`). For
+                // sections after the first, emit a blank-line break so the
+                // parts don't run together. A `"\n\n"` delta avoids the
+                // End/Start churn the accumulator would ignore for an
+                // already-active id.
+                if summary_index.unwrap_or(0) > 0
+                    && self.active_reasoning.get(&id).is_some_and(|r| r.started)
+                {
+                    self.pending
+                        .push_back(LanguageModelV4StreamPart::ReasoningDelta {
+                            id,
+                            delta: "\n\n".into(),
+                            provider_metadata: None,
+                        });
+                }
+            }
+
+            // Raw reasoning channel (`reasoning_text.*`) — distinct from the
+            // condensed summary. Tracked in its own map and marked
+            // `reasoningType=text` so it renders live but is stripped on
+            // sendback (the server rehydrates it from `encrypted_content`).
+            ResponsesStreamEvent::ReasoningTextDelta { item_id, delta, .. } => {
+                if let (Some(id), Some(delta)) = (item_id, delta) {
+                    let emit_id = raw_reasoning_segment_id(&id);
+                    let entry = self
+                        .active_reasoning_content
+                        .entry(id)
+                        .or_insert(ActiveReasoning { started: false });
+                    if !entry.started {
+                        entry.started = true;
+                        self.pending
+                            .push_back(LanguageModelV4StreamPart::ReasoningStart {
+                                id: emit_id.clone(),
+                                provider_metadata: Some(reasoning_text_marker()),
+                            });
+                    }
+                    self.pending
+                        .push_back(LanguageModelV4StreamPart::ReasoningDelta {
+                            id: emit_id,
+                            delta,
+                            provider_metadata: None,
+                        });
+                }
+            }
+
+            ResponsesStreamEvent::ReasoningTextDone {
                 item_id: Some(id), ..
             } => {
-                self.active_reasoning.remove(&id);
-                self.pending
-                    .push_back(LanguageModelV4StreamPart::ReasoningEnd {
-                        id,
-                        provider_metadata: None,
-                    });
+                if self.active_reasoning_content.remove(&id).is_some() {
+                    self.pending
+                        .push_back(LanguageModelV4StreamPart::ReasoningEnd {
+                            id: raw_reasoning_segment_id(&id),
+                            provider_metadata: Some(reasoning_text_marker()),
+                        });
+                }
             }
 
             // Code interpreter streaming
@@ -1915,24 +2149,84 @@ impl ResponsesStreamState {
                                 ),
                             ));
                     }
+                    // Fallback materialization for tool calls that
+                    // `*.done` deltas never closed (zero-arg / coalesced /
+                    // terminal-`output_item.done`-only). If the delta-done
+                    // already drained the active entry, `remove` returns
+                    // `None` and this is a no-op — no double-emit.
+                    ResponseOutputItem::FunctionCall { id, arguments, .. } => {
+                        let item_id = id.clone().unwrap_or_default();
+                        if let Some(mut fc) = self.active_fn_calls.remove(&item_id) {
+                            if fc.arguments.is_empty()
+                                && let Some(args) = arguments
+                            {
+                                fc.arguments = args.clone();
+                            }
+                            // `call_id` was seeded from `output_item.added`, so
+                            // every emit already pairs to it — the terminal
+                            // item carries no new correlation info.
+                            self.finalize_fn_call(fc);
+                        }
+                    }
+                    ResponseOutputItem::CustomToolCall { id, input, .. } => {
+                        let item_id = id.clone().unwrap_or_default();
+                        if let Some(mut ct) = self.active_custom_calls.remove(&item_id) {
+                            if ct.input.is_empty()
+                                && let Some(inp) = input
+                            {
+                                ct.input = inp.clone();
+                            }
+                            self.finalize_custom_call(ct);
+                        }
+                    }
+                    // `output_item.done` is the only carrier of reasoning
+                    // `encrypted_content` (the store=false chain-of-thought
+                    // blob). Close the reasoning segment here — AFTER the
+                    // summary text streamed — so the blob lands on the same
+                    // accumulator segment. Mirrors codex materializing
+                    // reasoning from `output_item.done`.
+                    ResponseOutputItem::Reasoning {
+                        id,
+                        encrypted_content,
+                        ..
+                    } => {
+                        let item_id = id.clone().unwrap_or_default();
+                        let started = self
+                            .active_reasoning
+                            .remove(&item_id)
+                            .map(|r| r.started)
+                            .unwrap_or(false);
+                        let meta = build_reasoning_provider_metadata(encrypted_content.as_ref());
+                        if started {
+                            // Close the summary segment, attaching the blob.
+                            self.pending
+                                .push_back(LanguageModelV4StreamPart::ReasoningEnd {
+                                    id: item_id,
+                                    provider_metadata: meta,
+                                });
+                        } else if meta.is_some() {
+                            // Encrypted-only reasoning (no summary streamed):
+                            // open + close a segment so the chain round-trips.
+                            self.pending
+                                .push_back(LanguageModelV4StreamPart::ReasoningStart {
+                                    id: item_id.clone(),
+                                    provider_metadata: None,
+                                });
+                            self.pending
+                                .push_back(LanguageModelV4StreamPart::ReasoningEnd {
+                                    id: item_id,
+                                    provider_metadata: meta,
+                                });
+                        }
+                    }
                     ResponseOutputItem::Compaction {
                         id,
                         encrypted_content,
                     } => {
-                        let item_id = id.clone().unwrap_or_default();
-                        let mut openai_inner: HashMap<String, Value> = HashMap::new();
-                        openai_inner.insert("type".into(), Value::String("compaction".into()));
-                        openai_inner.insert("itemId".into(), Value::String(item_id));
-                        if let Some(ec) = encrypted_content {
-                            openai_inner
-                                .insert("encryptedContent".into(), Value::String(ec.clone()));
-                        }
-                        let mut openai_map = serde_json::Map::new();
-                        for (k, v) in &openai_inner {
-                            openai_map.insert(k.clone(), v.clone());
-                        }
-                        let mut pm = ProviderMetadata::default();
-                        pm.0.insert("openai".into(), Value::Object(openai_map));
+                        let pm = build_compaction_provider_metadata(
+                            id.as_deref().unwrap_or_default(),
+                            encrypted_content.as_deref(),
+                        );
                         self.pending.push_back(LanguageModelV4StreamPart::Custom {
                             kind: "openai-compaction".into(),
                             provider_metadata: Some(pm),

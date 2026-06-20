@@ -30,6 +30,7 @@ pub mod openai_capabilities;
 pub mod openai_config;
 pub mod openai_error;
 pub mod openai_provider;
+pub mod provider_options;
 
 // Model implementations
 pub mod chat;
@@ -53,10 +54,14 @@ pub use openai_capabilities::OpenAIModelCapabilities;
 pub use openai_capabilities::SystemMessageMode;
 pub use openai_capabilities::get_capabilities;
 pub use openai_config::OpenAIConfig;
+pub use openai_config::ResponsesStorePolicy;
 pub use openai_provider::OpenAIProvider;
 pub use openai_provider::OpenAIProviderSettings;
 pub use openai_provider::create_openai;
 pub use openai_provider::openai;
+pub use provider_options::OpenAIProviderOptionsConfig;
+pub use provider_options::ProviderOptionsError;
+pub use provider_options::parse_provider_options;
 
 // Model type re-exports
 pub use chat::OpenAIChatLanguageModel;

@@ -1116,7 +1116,12 @@ pub(crate) fn assistant_content_from_snapshot(
                 }));
             }
             coco_inference::TurnPart::Reasoning(r) => {
-                if r.text.is_empty() {
+                // Drop only TRULY empty segments. A segment with empty text but
+                // non-None `provider_metadata` carries a chain-of-thought
+                // carrier (OpenAI `encryptedContent`, Anthropic `signature`,
+                // Gemini `thoughtSignature`) that MUST round-trip into history,
+                // or store=false reasoning continuity breaks every turn.
+                if r.text.is_empty() && r.provider_metadata.is_none() {
                     continue;
                 }
                 content_parts.push(AssistantContentPart::Reasoning(ReasoningPart {

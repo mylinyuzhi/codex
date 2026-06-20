@@ -532,9 +532,12 @@ pub async fn process_stream(
 
 /// Default stream processor config for the inference event bridge.
 ///
-/// Idle timeout is disabled here to preserve the historical `process_stream`
-/// behavior; callers that want watchdog semantics should pass an explicit
-/// timeout through [`process_stream_with_config`].
+/// Idle timeout is **disabled by default** (the original behavior — a hard
+/// idle abort would risk killing a legitimately slow reasoning stream); the
+/// 30s stall threshold is the soft warn. A hard idle backstop is opt-in
+/// **per-provider** via `ProviderClientOptions.stream_idle_timeout_secs`,
+/// applied by [`crate::client::ApiClient::with_stream_idle_timeout`] — NOT a
+/// hardcoded global.
 pub fn default_process_stream_config() -> StreamProcessorConfig {
     StreamProcessorConfig::default()
         .without_idle_timeout()

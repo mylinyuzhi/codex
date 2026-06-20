@@ -1490,6 +1490,7 @@ dependencies = [
  "vercel-ai-openai-compatible",
  "vercel-ai-provider",
  "vercel-ai-provider-utils",
+ "wiremock",
 ]
 
 [[package]]

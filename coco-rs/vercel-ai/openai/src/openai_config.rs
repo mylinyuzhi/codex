@@ -1,6 +1,27 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Provider-instance policy for the Responses API `store` field on **reasoning**
+/// models when the caller doesn't pass an explicit `store`. A per-provider knob
+/// (configured via `provider_options.reasoning_store`) — NOT a hardcoded global.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
+pub enum ResponsesStorePolicy {
+    /// Omit `store` — the server keeps reasoning state, so chain-of-thought
+    /// continuity works WITHOUT echoing `encrypted_content`. The conservative
+    /// default for plain API keys (matches OpenAI's own server default).
+    /// Config value: `"server"`.
+    #[default]
+    #[serde(rename = "server")]
+    ServerDefault,
+    /// Force `store: false` and auto-include `reasoning.encrypted_content`.
+    /// Stateless / codex-aligned: continuity rides the echoed encrypted blob
+    /// (which coco round-trips). ChatGPT-subscription providers always behave
+    /// this way regardless of the policy (the codex backend requires it).
+    /// Config value: `"stateless"`.
+    #[serde(rename = "stateless")]
+    Stateless,
+}
+
 /// Shared configuration passed to each OpenAI model instance.
 pub struct OpenAIConfig {
     /// Provider identifier (e.g., "openai.chat", "openai.responses").
@@ -21,6 +42,10 @@ pub struct OpenAIConfig {
     /// mode (the codex backend requires it; it also unlocks the
     /// `reasoning.encrypted_content` include). Default `false`.
     pub chatgpt_subscription: bool,
+    /// Policy for the Responses `store` field on reasoning models when the
+    /// caller doesn't set one. See [`ResponsesStorePolicy`]. Defaults to
+    /// `ServerDefault` (omit `store` — server-side reasoning state).
+    pub reasoning_store: ResponsesStorePolicy,
 }
 
 impl OpenAIConfig {
