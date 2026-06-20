@@ -12,4 +12,4 @@ expression: output
 ❯                                                                                                   
 ────────────────────────────────────────────────────────────────────────────────────────────────────
  deepseek/deepseek-v4-flash * auto | ↑12.3K ↓16.5K · cache 10.7K/86% | ctx 14% | →0 ←1              
- ? ask · shift+tab to cycle
+ ⏯ ask mode on · shift+tab to cycle

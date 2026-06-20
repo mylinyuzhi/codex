@@ -133,7 +133,7 @@ fn status_bar_splits_permission_pill_and_directory_onto_dynamic_lines() {
     assert!(line_text(0).contains("openai/gpt-5.4"));
     assert!(!line_text(0).contains("auto mode on"));
     // Line 2: permission symbol + label, then the TS-style pill.
-    assert!(line_text(1).contains("⏵⏵ auto mode on"));
+    assert!(line_text(1).contains("▸▸ auto mode on"));
     assert!(line_text(1).contains("1 agent · 1 shell"));
     // Line 3: directory basename + git branch (zsh-prompt style).
     assert_eq!(line_text(2), " codex git:(feat/automode)");
@@ -153,9 +153,9 @@ fn status_bar_surfaces_ask_mode_and_cycle_hint_in_default_state() {
         .iter()
         .map(|span| span.text.as_str())
         .collect::<String>();
-    // Baseline mode is surfaced as `? ask` (own glyph, like other modes) plus
-    // the `·`-separated cycle hint shown uniformly across modes.
-    assert_eq!(line2, " ? ask · shift+tab to cycle");
+    // Baseline mode is surfaced as `⏯ ask mode on` (play glyph, like other
+    // modes) plus the `·`-separated cycle hint shown uniformly across modes.
+    assert_eq!(line2, " ⏯ ask mode on · shift+tab to cycle");
 }
 
 #[test]
