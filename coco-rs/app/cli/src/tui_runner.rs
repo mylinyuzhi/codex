@@ -3134,7 +3134,7 @@ async fn spawn_command_queue_turn(
         for cmd in &queued {
             coco_query::history_sync::history_push_and_emit(
                 &mut h,
-                coco_query::queued_command_to_attachment(cmd),
+                coco_query::queued_command_to_message(cmd),
                 &event_tx_opt,
             )
             .await;

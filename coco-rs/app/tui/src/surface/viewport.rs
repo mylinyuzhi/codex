@@ -105,12 +105,7 @@ pub(crate) fn interactive_viewport_desired_height(
     });
     let activity = turn_activity_view(state, width);
     let activity_rows = inline_activity_height(&activity, max_height, width);
-    let queue_rows: u16 =
-        if crate::widgets::QueueStatusWidget::should_display(&state.session.queued_commands) {
-            1
-        } else {
-            0
-        };
+    let queue_rows: u16 = crate::widgets::QueueStatusWidget::height(&state.session.queued_commands);
     // Mirror render_live_viewport's reservations so the sizing pass and the
     // paint pass agree on viewport height (these were previously omitted here).
     let status_indicator_rows: u16 = if show_status_indicator(state) { 1 } else { 0 };
@@ -249,12 +244,7 @@ fn render_live_viewport(
     let input_height = input_height_for_state(state);
     let activity = turn_activity_view(state, area.width);
     let activity_rows = inline_activity_height(&activity, area.height, area.width);
-    let queue_rows: u16 =
-        if crate::widgets::QueueStatusWidget::should_display(&state.session.queued_commands) {
-            1
-        } else {
-            0
-        };
+    let queue_rows: u16 = crate::widgets::QueueStatusWidget::height(&state.session.queued_commands);
     let stash_rows: u16 =
         if crate::widgets::StashNotice::should_display(state.ui.stashed_input.as_ref()) {
             1
@@ -562,7 +552,7 @@ fn render_input(frame: &mut SurfaceFrame<'_>, state: &AppState, area: Rect, styl
         .focused(is_focused)
         .streaming(state.is_streaming())
         .prompt_suggestion(state.session.prompt_suggestions.last().map(String::as_str))
-        .has_editable_queue(!state.session.queued_commands.is_empty())
+        .has_editable_queue(state.session.queued_commands.iter().any(|q| q.editable))
         .command_palette_filter(None)
         .history_search(history_search);
 

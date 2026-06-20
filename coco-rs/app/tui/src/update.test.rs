@@ -125,6 +125,38 @@ async fn queue_input_of_slash_sends_queue_command() {
 }
 
 #[tokio::test]
+async fn submit_during_active_turn_steers_instead_of_preempting() {
+    // Regression: a turn is in flight (tools / subagents running) but the token
+    // stream has already ended, so `is_streaming()` is false. Pressing Enter
+    // must still STEER (queue into the running turn) rather than starting a
+    // fresh turn that hard-preempts the active one (`SystemPreempt`). The gate
+    // is `turn_active()`, mirroring TS `queryGuard.isActive`.
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("hello");
+    state
+        .ui
+        .input
+        .textarea
+        .set_cursor(state.ui.input.text().len());
+    // Turn active but NOT streaming — the post-stream tool/subagent phase.
+    state
+        .ui
+        .ephemeral
+        .start_turn("Working", std::time::Instant::now());
+    assert!(!state.is_streaming());
+    assert!(state.ui.ephemeral.turn_active());
+
+    let (tx, mut rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::SubmitInput, &tx).await;
+
+    match rx.try_recv() {
+        Ok(UserCommand::QueueCommand { prompt, .. }) => assert_eq!(prompt, "hello"),
+        other => panic!("expected QueueCommand (steering), got {other:?}"),
+    }
+    assert!(state.ui.input.is_empty(), "input should have been consumed");
+}
+
+#[tokio::test]
 async fn submit_slash_dispatches_typed_command_without_chat_echo() {
     let mut state = AppState::new();
     state.ui.input.textarea.set_text("/rewind last");
@@ -1049,6 +1081,11 @@ async fn queue_input_of_plain_text_still_queues() {
 async fn submit_input_while_streaming_without_interruptible_tool_queues() {
     let mut state = AppState::new();
     state.ui.streaming = Some(crate::state::StreamingState::default());
+    // Streaming implies an active turn; the steering gate reads `turn_active`.
+    state
+        .ui
+        .ephemeral
+        .start_turn("Working", std::time::Instant::now());
     state.ui.input.textarea.set_text("next turn prompt");
     state
         .ui
@@ -1076,6 +1113,11 @@ async fn submit_input_while_streaming_without_interruptible_tool_queues() {
 async fn submit_input_while_streaming_with_interruptible_tool_queues_then_interrupts() {
     let mut state = AppState::new();
     state.ui.streaming = Some(crate::state::StreamingState::default());
+    // Streaming implies an active turn; the steering gate reads `turn_active`.
+    state
+        .ui
+        .ephemeral
+        .start_turn("Working", std::time::Instant::now());
     state.session.has_submit_interruptible_tool_in_progress = true;
     state.ui.input.textarea.set_text("follow-up prompt");
     state

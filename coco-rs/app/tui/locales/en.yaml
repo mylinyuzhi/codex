@@ -594,17 +594,13 @@ slash.permissions.usage_allow: "Usage: /permissions allow <tool>"
 slash.permissions.usage_deny: "Usage: /permissions deny <tool>"
 
 # Queue status widget
-queue_status.count: " ⋯ %{count} queued"
-queue_status.next_preview: " — next: %{preview}"
-queue_status.more: "  (+%{count} more)"
-queue_status.edit_hint: "  ↑ edit next"
+queue_status.more: "  ⋯ +%{count} more"
 
 # ─── Input widget ────────────────────────────────────────────
 input.title: "Input"
 input.title_bash_mode: "Bash Mode"
-input.title_queue: "Queue Input"
 input.placeholder: "Type a message..."
-input.placeholder_queued: "Press ↑ to edit queued messages"
+input.placeholder_queued: "Press up to edit queued messages"
 input.stash_label: "Stashed"
 
 # ─── Toast notifications ─────────────────────────────────────

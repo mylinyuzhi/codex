@@ -9,15 +9,33 @@ argument-hint: [pid] [focus…]
 - Arguments — `[pid] [focus…]`: `$ARGUMENTS`
 - Project directory: !`echo "${CLAUDE_PROJECT_DIR:-$(pwd)}"`
 - coco-rs config home: !`echo "${COCO_CONFIG_HOME:-${COCO_HOME:-$HOME/.coco}}"`
-- Resolver + triage report:
-  !`sub=".claude/skills/coco-analyze/resolve.py"; SK=""; ROOT="$PWD"; for c in "$CLAUDE_PROJECT_DIR" "$PWD" "$HOME"; do d="$c"; while [ -n "$d" ] && [ "$d" != "/" ]; do if [ -f "$d/$sub" ]; then SK="$d/$sub"; ROOT="$d"; break 2; fi; d=$(dirname "$d"); done; done; if [ -z "$SK" ]; then echo "ERROR: coco-analyze resolve.py not found (cwd=$PWD CLAUDE_PROJECT_DIR=${CLAUDE_PROJECT_DIR:-unset})"; else python3 "$SK" --cwd "${CLAUDE_PROJECT_DIR:-$ROOT}" $ARGUMENTS; fi`
+- Resolver location (you run it yourself — see "Run the resolver" below):
+  !`sub=".claude/skills/coco-analyze/resolve.py"; SK=""; ROOT="$PWD"; for c in "$CLAUDE_PROJECT_DIR" "$PWD" "$HOME"; do d="$c"; while [ -n "$d" ] && [ "$d" != "/" ]; do if [ -f "$d/$sub" ]; then SK="$d/$sub"; ROOT="$d"; break 2; fi; d=$(dirname "$d"); done; done; if [ -z "$SK" ]; then echo "ERROR: coco-analyze resolve.py not found (cwd=$PWD CLAUDE_PROJECT_DIR=${CLAUDE_PROJECT_DIR:-unset})"; else echo "SCRIPT=$SK"; echo "CWD=${CLAUDE_PROJECT_DIR:-$ROOT}"; fi`
+
+## Run the resolver (do this first)
+
+The `$ARGUMENTS` above are **free text** (a PID plus a free-form focus that may
+contain quotes, backticks, newlines, `$`, CJK …). **Never** interpolate them into a
+shell `!`-command: the skill expands `$ARGUMENTS` *textually* into the command string
+before the shell runs, so a `"` or `` ` `` in the focus breaks parsing (`unmatched "`).
+That is why the auto-run was removed — you run the resolver yourself instead:
+
+1. From `$ARGUMENTS`, take the **PID** = the first whitespace-delimited token that is
+   all digits (there may be none). Ignore the rest — it is your focus hint.
+2. Run the resolver with the **Bash tool**, passing only that numeric PID — never the
+   focus text:
+   - with a PID: `python3 <SCRIPT> --cwd <CWD> <pid>`
+   - no PID:     `python3 <SCRIPT> --cwd <CWD>`
+   - UI-perf focus (see Focus areas): add `--perf`; enumerate sessions with `--list`.
+   `<SCRIPT>` and `<CWD>` are printed by the "Resolver location" line above.
+3. Read the report it prints, then proceed with the analysis below.
 
 ## What this skill does
 
 Analyze a coco-rs run by joining four artifact sources it writes under `~/.coco`
-(override with `COCO_CONFIG_HOME`). The resolver above already located and triaged
-them; your job is to read the relevant ones and explain what happened — a clean run,
-or a concrete failure with its root cause.
+(override with `COCO_CONFIG_HOME`). The resolver you run (see "Run the resolver"
+above) locates and triages them; your job is to read the relevant ones and explain
+what happened — a clean run, or a concrete failure with its root cause.
 
 `resolve.py` is only a **locator + light triage**. The real analysis is yours: it
 points at absolute paths and surfaces obvious signals (WARN/ERROR counts, non-ok wire

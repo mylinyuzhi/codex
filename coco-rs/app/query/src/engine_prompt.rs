@@ -140,10 +140,18 @@ impl QueryEngine {
         self.apply_tool_result_budget_to_prompt(&mut messages_for_api)
             .await;
 
+        // Apply the model-facing steering wrapper to queued-steering user
+        // messages just before normalize (mirrors TS, which wraps queued
+        // commands only at API-serialization time). The stored history /
+        // `messages_snapshot` stays raw; only this API-bound view is wrapped,
+        // so the transcript keeps showing the user's plain text. CoW: only
+        // steering messages are rebuilt.
+        let api_messages = crate::helpers::wrap_steering_messages_for_api(&messages_for_api);
+
         // Normalize takes `&[M] where M: Borrow<Message>`; `Arc<Message>`
         // borrows directly so we hand the Arc-slice through without an
         // extra materialization at this seam.
-        let normalized = coco_messages::normalize_messages_for_api(&messages_for_api);
+        let normalized = coco_messages::normalize_messages_for_api(&api_messages);
         prompt.extend(normalized);
 
         BuiltPrompt {

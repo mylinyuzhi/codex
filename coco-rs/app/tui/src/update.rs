@@ -340,7 +340,14 @@ pub async fn handle_command(
 
         // ── Input actions ──
         TuiCommand::SubmitInput => {
-            if state.is_streaming() {
+            // Steer (queue) whenever a turn is in flight — the whole turn,
+            // not just the token-stream window. Mirrors TS, which gates on
+            // `queryGuard.isActive` (active for the entire query lifecycle,
+            // including tool / subagent execution). Gating on `is_streaming()`
+            // here would treat a submit during the post-stream tool/subagent
+            // phase as a fresh turn, hard-preempting (`SystemPreempt`) instead
+            // of steering.
+            if state.ui.ephemeral.turn_active() {
                 let handled = queue_current_input(state, command_tx).await;
                 if state.session.has_submit_interruptible_tool_in_progress {
                     let _ = command_tx

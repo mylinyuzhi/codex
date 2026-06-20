@@ -86,7 +86,7 @@ fn compute_input_xy(state: &AppState, area: Rect) -> (u16, u16) {
         &state.ui.input,
         is_streaming,
         state.session.prompt_suggestions.last().map(String::as_str),
-        !state.session.queued_commands.is_empty(),
+        state.session.queued_commands.iter().any(|q| q.editable),
         None,
     );
 

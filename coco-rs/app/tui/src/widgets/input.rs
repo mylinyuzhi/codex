@@ -69,6 +69,8 @@ impl InputRenderModel {
                 (format!("/{filter}"), None, false, Some(filter.to_string()))
             } else if is_empty {
                 if has_editable_queue {
+                    // Mirrors TS `usePromptInputPlaceholder`: an empty composer
+                    // with queued messages hints how to recall them.
                     (t!("input.placeholder_queued").to_string(), None, true, None)
                 } else if let Some(suggestion) = prompt_suggestion {
                     (suggestion.to_string(), None, true, None)
@@ -95,9 +97,11 @@ impl InputRenderModel {
             })
         };
 
-        let title = if is_streaming {
-            format!(" {} ", t!("input.title_queue"))
-        } else if prompt_mode != PromptMode::Normal {
+        // No queue/streaming title label: the input box stays clean while a
+        // turn runs (TS parity). The single queued-input affordance is the
+        // dimmed footer strip (`QueueStatusWidget`), shown only once something
+        // is actually queued.
+        let title = if !is_streaming && prompt_mode != PromptMode::Normal {
             format!(" {} ", t!(prompt_mode.title_i18n_key()))
         } else {
             String::new()
