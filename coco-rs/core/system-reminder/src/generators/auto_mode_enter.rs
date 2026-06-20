@@ -13,10 +13,15 @@ use async_trait::async_trait;
 use crate::error::Result;
 use crate::generator::AttachmentGenerator;
 use crate::generator::GeneratorContext;
-use crate::throttle::ThrottleConfig;
 use crate::types::AttachmentType;
 use crate::types::SystemReminder;
 use coco_config::SystemReminderConfig;
+
+/// Human turns between successive steady-state auto-mode reminders.
+const AUTO_MODE_TURNS_BETWEEN: i32 = 5;
+
+/// Full reminder on every Nth attachment since the last exit (1st, 6th, 11th…).
+const FULL_REMINDER_EVERY_N: i32 = 5;
 
 /// Full auto-mode instructions.
 const AUTO_MODE_FULL: &str = "## Auto Mode Active
@@ -35,8 +40,10 @@ const AUTO_MODE_SPARSE: &str = "Auto mode still active (see full instructions ea
 
 /// Steady-state "auto mode still active" reminder.
 ///
-/// Cadence: [`ThrottleConfig::auto_mode`] → 5 turns between emissions,
-/// Full on every 5th emission (first is Full).
+/// Cadence is derived from history (no in-memory throttle), symmetric to
+/// [`super::PlanModeEnterGenerator`]: always emit on the first auto-mode turn,
+/// otherwise one emission every [`AUTO_MODE_TURNS_BETWEEN`] human turns, Full
+/// on every [`FULL_REMINDER_EVERY_N`]th attachment since the last exit.
 #[derive(Debug, Default)]
 pub struct AutoModeEnterGenerator;
 
@@ -54,15 +61,21 @@ impl AttachmentGenerator for AutoModeEnterGenerator {
         config.attachments.auto_mode
     }
 
-    fn throttle_config(&self) -> ThrottleConfig {
-        ThrottleConfig::auto_mode()
-    }
-
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
         if !ctx.is_auto_mode {
             return Ok(None);
         }
-        let content = if ctx.should_use_full_content(AttachmentType::AutoMode) {
+
+        // Throttle to one emission per AUTO_MODE_TURNS_BETWEEN human turns,
+        // always emitting the first time (no prior attachment → `None`).
+        if let Some(n) = ctx.auto_mode_turns_since_attachment
+            && n < AUTO_MODE_TURNS_BETWEEN
+        {
+            return Ok(None);
+        }
+
+        let attachment_index = ctx.auto_mode_attachments_since_exit + 1;
+        let content = if attachment_index % FULL_REMINDER_EVERY_N == 1 {
             AUTO_MODE_FULL
         } else {
             AUTO_MODE_SPARSE

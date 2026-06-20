@@ -29,7 +29,7 @@ async fn enter_emits_full_when_full_flag_set() {
         .plan_file_path(Some(PathBuf::from("/tmp/plan.md")))
         .plan_exists(false)
         .explore_plan_agents_available(true)
-        .set_full_content(AttachmentType::PlanMode, true)
+        .plan_mode_attachments_since_exit(0)
         .build();
     let g = PlanModeEnterGenerator;
     let r = g.generate(&ctx).await.unwrap().expect("emits");
@@ -46,7 +46,7 @@ async fn enter_emits_sparse_when_full_flag_unset() {
         .is_plan_mode(true)
         .plan_file_path(Some(PathBuf::from("/tmp/plan.md")))
         .plan_exists(false)
-        .set_full_content(AttachmentType::PlanMode, false)
+        .plan_mode_attachments_since_exit(1)
         .build();
     let g = PlanModeEnterGenerator;
     let r = g.generate(&ctx).await.unwrap().expect("emits");
@@ -66,11 +66,30 @@ async fn enter_attachment_type_is_plan_mode() {
 }
 
 #[tokio::test]
-async fn enter_uses_plan_mode_throttle() {
+async fn enter_cadence_is_history_derived() {
+    let c = cfg();
     let g = PlanModeEnterGenerator;
-    let t = g.throttle_config();
-    assert_eq!(t.min_turns_between, 5);
-    assert_eq!(t.full_content_every_n, Some(5));
+
+    // First plan-mode turn (no prior attachment) always emits.
+    let first = GeneratorContext::builder(&c)
+        .is_plan_mode(true)
+        .plan_mode_turns_since_attachment(None)
+        .build();
+    assert!(g.generate(&first).await.unwrap().is_some());
+
+    // Within the 5-turn window → throttled.
+    let within = GeneratorContext::builder(&c)
+        .is_plan_mode(true)
+        .plan_mode_turns_since_attachment(Some(3))
+        .build();
+    assert!(g.generate(&within).await.unwrap().is_none());
+
+    // At/after the window → emits again.
+    let after = GeneratorContext::builder(&c)
+        .is_plan_mode(true)
+        .plan_mode_turns_since_attachment(Some(5))
+        .build();
+    assert!(g.generate(&after).await.unwrap().is_some());
 }
 
 #[tokio::test]
@@ -90,7 +109,7 @@ async fn enter_full_sub_agent_path_is_independent_of_workflow() {
         .is_sub_agent(true)
         .plan_file_path(Some(PathBuf::from("/tmp/plan.md")))
         .plan_exists(false)
-        .set_full_content(AttachmentType::PlanMode, true)
+        .plan_mode_attachments_since_exit(0)
         .build();
     let g = PlanModeEnterGenerator;
     let r = g.generate(&ctx).await.unwrap().expect("emits");
@@ -111,7 +130,7 @@ async fn enter_interview_workflow_full_content_differs_from_five_phase() {
         .plan_file_path(Some(PathBuf::from("/tmp/plan.md")))
         .plan_exists(false)
         .explore_plan_agents_available(true)
-        .set_full_content(AttachmentType::PlanMode, true)
+        .plan_mode_attachments_since_exit(0)
         .build();
     let interview = GeneratorContext::builder(&c)
         .is_plan_mode(true)
@@ -119,7 +138,7 @@ async fn enter_interview_workflow_full_content_differs_from_five_phase() {
         .plan_file_path(Some(PathBuf::from("/tmp/plan.md")))
         .plan_exists(false)
         .explore_plan_agents_available(true)
-        .set_full_content(AttachmentType::PlanMode, true)
+        .plan_mode_attachments_since_exit(0)
         .build();
 
     let g = PlanModeEnterGenerator;
@@ -151,7 +170,7 @@ async fn enter_phase4_variant_affects_full_five_phase_only() {
         .plan_file_path(Some(PathBuf::from("/tmp/plan.md")))
         .plan_exists(false)
         .explore_plan_agents_available(true)
-        .set_full_content(AttachmentType::PlanMode, true)
+        .plan_mode_attachments_since_exit(0)
         .build();
     let cut = GeneratorContext::builder(&c)
         .is_plan_mode(true)
@@ -159,7 +178,7 @@ async fn enter_phase4_variant_affects_full_five_phase_only() {
         .plan_file_path(Some(PathBuf::from("/tmp/plan.md")))
         .plan_exists(false)
         .explore_plan_agents_available(true)
-        .set_full_content(AttachmentType::PlanMode, true)
+        .plan_mode_attachments_since_exit(0)
         .build();
 
     let g = PlanModeEnterGenerator;
@@ -195,7 +214,7 @@ async fn all_plan_generators_suppressed_when_feature_off() {
         .plan_mode_feature_enabled(false)
         .is_plan_mode(true)
         .plan_file_path(Some(PathBuf::from("/tmp/plan.md")))
-        .set_full_content(AttachmentType::PlanMode, true)
+        .plan_mode_attachments_since_exit(0)
         .build();
     assert!(
         PlanModeEnterGenerator
@@ -334,11 +353,6 @@ async fn exit_no_implementation_plan_omits_stale_plan_reference() {
         !text.contains("/tmp/old-plan.md"),
         "no-plan exit must not reference stale plan file: {text}"
     );
-}
-
-#[tokio::test]
-async fn exit_has_no_throttle() {
-    assert_eq!(PlanModeExitGenerator.throttle_config().min_turns_between, 0);
 }
 
 // ── PlanModeReentryGenerator ──

@@ -51,11 +51,6 @@ async fn exit_respects_config_flag() {
 }
 
 #[tokio::test]
-async fn exit_has_no_throttle() {
-    assert_eq!(AutoModeExitGenerator.throttle_config().min_turns_between, 0);
-}
-
-#[tokio::test]
 async fn exit_attachment_type_identity() {
     assert_eq!(
         AutoModeExitGenerator.attachment_type(),

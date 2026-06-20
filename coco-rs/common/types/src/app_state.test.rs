@@ -16,8 +16,6 @@ fn default_is_all_zero() {
     assert!(!s.has_exited_plan_mode);
     assert!(!s.needs_plan_mode_exit_attachment);
     assert_eq!(s.pending_plan_mode_exit_outcome, None);
-    assert_eq!(s.plan_mode_attachment_count, 0);
-    assert_eq!(s.plan_mode_turns_since_last_attachment, 0);
     assert_eq!(s.last_permission_mode, None);
     assert_eq!(s.plan_mode_entry_ms, None);
     assert!(!s.awaiting_plan_approval);
@@ -104,5 +102,5 @@ fn struct_update_syntax_composes() {
     );
     assert_eq!(s.last_permission_mode, Some(PermissionMode::AcceptEdits));
     // Unfilled fields stay default.
-    assert_eq!(s.plan_mode_attachment_count, 0);
+    assert!(!s.has_exited_plan_mode);
 }

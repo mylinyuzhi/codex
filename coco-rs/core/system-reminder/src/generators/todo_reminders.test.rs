@@ -189,12 +189,6 @@ async fn respects_config_flag() {
     assert!(!TodoRemindersGenerator.is_enabled(&c));
 }
 
-#[tokio::test]
-async fn uses_todo_reminder_throttle() {
-    let t = TodoRemindersGenerator.throttle_config();
-    assert_eq!(t.min_turns_between, 10);
-}
-
 // ── Trailing-newline ──
 
 #[test]

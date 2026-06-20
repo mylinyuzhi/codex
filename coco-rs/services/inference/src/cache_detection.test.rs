@@ -38,6 +38,7 @@ fn make_input(model: &str, system_hash: u64, tools_hash: u64) -> PromptStateInpu
         ]),
         system_char_count: 5000,
         model: model.into(),
+        cache_break_detection_excluded: false,
         query_source: "repl_main_thread".into(),
         agent_id: None,
         fast_mode: false,
@@ -338,18 +339,19 @@ fn test_small_token_drop_below_threshold_is_warm() {
 }
 
 #[test]
-fn test_haiku_model_excluded() {
+fn test_excluded_model_not_broken() {
     let mut detector = CacheBreakDetector::new();
 
-    let input1 = make_input("claude-haiku-4-5-20251001", 111, 222);
+    let mut input1 = make_input("claude-haiku-4-5-20251001", 111, 222);
+    input1.cache_break_detection_excluded = true;
     detector.record_prompt_state(input1);
     let _ = detector.check_response_for_cache_break("repl_main_thread", 50000, 5000, None, None);
 
-    // Big drop on a haiku model — must NOT trigger Broken. Phase 1
-    // skips for excluded models so phase 2 sees "no prior state"
-    // instead of "excluded model" — both yield Cold which is what
-    // matters for the false-positive-suppression contract.
-    let input2 = make_input("claude-haiku-4-5-20251001", 999, 222);
+    // Big drop on an excluded model — must NOT trigger Broken. Phase 1
+    // records the model (keeping its exclusion flag current); phase 2 reads
+    // that flag and skips detection → Cold, never Broken.
+    let mut input2 = make_input("claude-haiku-4-5-20251001", 999, 222);
+    input2.cache_break_detection_excluded = true;
     detector.record_prompt_state(input2);
     let result =
         detector.check_response_for_cache_break("repl_main_thread", 100, 49000, Some(1000), None);
@@ -467,16 +469,77 @@ fn test_djb2_hash_deterministic() {
 }
 
 #[test]
-fn test_excluded_model_skipped_in_phase1() {
-    // Recording state for an excluded model must NOT populate the
-    // `states` map — otherwise haiku-only sessions accumulate
-    // snapshots that phase 2 always discards anyway (wasted memory).
+fn test_excluded_model_recorded_in_phase1_gated_in_phase2() {
+    // Phase 1 RECORDS excluded models (so the snapshot's model + exclusion
+    // flag stay current for swap-correctness); phase 2 is the sole gate.
     let mut detector = CacheBreakDetector::new();
-    let input = make_input("claude-haiku-4-5-20251001", 111, 222);
+    let mut input = make_input("claude-haiku-4-5-20251001", 111, 222);
+    input.cache_break_detection_excluded = true;
     detector.record_prompt_state(input);
     assert!(
-        detector.states.is_empty(),
-        "excluded model should not populate states"
+        !detector.states.is_empty(),
+        "excluded model must still be recorded so phase 2 reads its current exclusion"
+    );
+    // A big cache_read drop is suppressed by the phase-2 exclusion gate.
+    let result =
+        detector.check_response_for_cache_break("repl_main_thread", 100, 5000, Some(1000), None);
+    assert_eq!(result.state, CacheState::Cold);
+    assert_eq!(result.reason, "excluded model");
+}
+
+#[test]
+fn test_model_swap_to_excluded_is_not_broken() {
+    // Same query_source switches Sonnet → Haiku (fast mode). The Haiku turn
+    // must NOT register a cache break even though its cache_read drops vs the
+    // prior Sonnet turn — phase 1 refreshes the snapshot to Haiku (excluded),
+    // so phase 2 skips. Regression guard for the stale-snapshot false positive.
+    let mut detector = CacheBreakDetector::new();
+
+    let sonnet = make_input("claude-sonnet-4-6", 111, 222);
+    detector.record_prompt_state(sonnet);
+    let _ = detector.check_response_for_cache_break("repl_main_thread", 50_000, 5_000, None, None);
+
+    let mut haiku = make_input("claude-haiku-4-5-20251001", 111, 222);
+    haiku.cache_break_detection_excluded = true;
+    detector.record_prompt_state(haiku);
+    let result =
+        detector.check_response_for_cache_break("repl_main_thread", 100, 49_000, Some(1000), None);
+    assert_eq!(
+        result.state,
+        CacheState::Cold,
+        "excluded swap-in must not be reported as a cache break"
+    );
+}
+
+#[test]
+fn test_exclusion_is_flag_driven_not_model_name() {
+    // The exclusion decision rides `cache_break_detection_excluded`, set
+    // from `ModelInfo` by the caller — the detector never inspects the
+    // model id. So a "haiku"-named model with the flag OFF is still
+    // tracked (proving the old `model.contains("haiku")` substring is
+    // gone), and any model with the flag ON is excluded.
+    let mut detector = CacheBreakDetector::new();
+    let haiku_named = make_input("claude-haiku-4-5-20251001", 111, 222);
+    assert!(!haiku_named.cache_break_detection_excluded);
+    detector.record_prompt_state(haiku_named);
+    assert!(
+        !detector.states.is_empty(),
+        "a haiku-named model without the flag must still be tracked"
+    );
+
+    let mut other = make_input("some-other-model", 333, 444);
+    other.query_source = "sdk".into();
+    other.cache_break_detection_excluded = true;
+    detector.record_prompt_state(other);
+    assert!(
+        detector.states.contains_key("sdk"),
+        "an excluded model is still recorded — phase 2 is the gate, not phase 1"
+    );
+    let res = detector.check_response_for_cache_break("sdk", 100, 49_000, Some(1000), None);
+    assert_eq!(
+        res.state,
+        CacheState::Cold,
+        "the flag excludes via phase 2, regardless of the model id"
     );
 }
 

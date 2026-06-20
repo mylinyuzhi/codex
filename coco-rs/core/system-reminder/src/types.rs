@@ -67,8 +67,8 @@ impl XmlTag {
 #[serde(rename_all = "snake_case")]
 pub enum AttachmentType {
     // ── Plan-mode reminders (Core tier; run for subagents too) ──
-    /// Plan-mode steady-state. Carries full/sparse internally via
-    /// [`ThrottleManager::should_use_full_content`].
+    /// Plan-mode steady-state. Full/Sparse is chosen inside the generator
+    /// from the history-derived attachment count since the last exit.
     PlanMode,
     /// Emitted on the turn plan mode exits.
     PlanModeExit,

@@ -99,6 +99,9 @@ impl AgentQueryEngine for QueryEngineAdapter {
                 .unwrap_or(crate::config::DEFAULT_CONTEXT_WINDOW),
             max_output_tokens: config.max_output_tokens.unwrap_or(16_384),
             max_budget_usd: None,
+            // Subagents inherit no output-token budget (reminder stays dormant);
+            // the caller sets it explicitly when desired, same as the main loop.
+            output_token_budget: None,
             streaming_tool_execution: true,
             is_non_interactive: true,
             // Hardcoded for ALL subagents: a residual `Ask` fails closed

@@ -256,31 +256,10 @@ impl QueryEngine {
             None => ToolAppState::default(),
         };
 
-        // Seed the orchestrator's throttle state from `app_state` so
-        // reminder cadence survives across `run_session_loop`
-        // invocations. Each `run_plan_mode_turn` / `run_internal`
-        // call constructs a fresh orchestrator but `app_state`
-        // persists — without seeding, turn 2 of a multi-turn test
-        // would see an empty throttle and fire a second reminder.
-        //
-        // Implied `last_generated_turn`: the current human-turn
-        // counter minus the stored gap. Tool-result rounds within
-        // the same human turn keep the same value, so the throttle
-        // correctly blocks within-turn re-firing.
-        if app_state_snapshot.plan_mode_attachment_count > 0 {
-            let gap = i32::try_from(app_state_snapshot.plan_mode_turns_since_last_attachment)
-                .unwrap_or(i32::MAX);
-            let last_gen_turn = reminder_human_turn_number.saturating_sub(gap);
-            reminder_orchestrator.throttle().seed_state(
-                ReminderAttachmentType::PlanMode,
-                coco_system_reminder::ThrottleState {
-                    last_generated_turn: Some(last_gen_turn),
-                    session_count: i32::try_from(app_state_snapshot.plan_mode_attachment_count)
-                        .unwrap_or(i32::MAX),
-                    trigger_turn: None,
-                },
-            );
-        }
+        // Plan/auto reminder cadence is history-derived inside the
+        // generators (turn-scan over the transcript), so there is no
+        // throttle state to seed from `app_state` across `run_internal`
+        // invocations — the history persists and is the source of truth.
 
         // `None` means the engine was built without a permissions
         // auto-mode state — auto mode is therefore inactive (false fallback).
@@ -572,8 +551,10 @@ impl QueryEngine {
             // point; cumulative session count comes from usage.
             output_tokens_turn: 0,
             output_tokens_session: total_usage.output_tokens.total,
-            // Not yet wired.
-            output_token_budget: None,
+            // Mirrors claude-code's output_config.task_budget.total — set
+            // programmatically via QueryEngineConfig (no CLI flag in TS).
+            // `None` keeps the output_token_usage reminder dormant.
+            output_token_budget: self.config.output_token_budget,
             // Companion subsystem lives in a future Buddy crate; for now
             // suppress the reminder by leaving these unset.
             companion_name: None,
@@ -672,13 +653,10 @@ impl QueryEngine {
         // orchestrator read ensures we don't clear a flag whose
         // reminder got throttled (so it can fire next turn).
         //
-        // Covers three concerns:
-        // - One-shot flags consumed by the generators that fired
-        //   (PlanModeExit / AutoModeExit / PlanModeReentry).
-        // - Cadence counters the TUI / tests observe via app_state
-        //   (`plan_mode_attachment_count` +
-        //   `plan_mode_turns_since_last_attachment`). These mirror
-        //   the ThrottleManager state but are exposed on app_state.
+        // Covers the one-shot flags consumed by the generators that fired
+        // (PlanModeExit / AutoModeExit / PlanModeReentry) plus the delta
+        // baselines. Plan/auto reminder cadence is no longer mirrored here —
+        // it is derived from the transcript history each turn.
         let stale_plan_exit_flag =
             app_state_snapshot.needs_plan_mode_exit_attachment && reminder_is_plan_mode;
         let stale_auto_exit_flag =
@@ -703,34 +681,12 @@ impl QueryEngine {
                 if fired_types.contains(&ReminderAttachmentType::PlanModeExit) {
                     guard.needs_plan_mode_exit_attachment = false;
                     guard.pending_plan_mode_exit_outcome = None;
-                    // Exit resets the plan-mode cadence cycle.
-                    guard.plan_mode_attachment_count = 0;
-                    guard.plan_mode_turns_since_last_attachment = 0;
-                    guard.last_human_turn_uuid_seen = None;
                 }
                 if fired_types.contains(&ReminderAttachmentType::AutoModeExit) {
                     guard.needs_auto_mode_exit_attachment = false;
                 }
                 if fired_types.contains(&ReminderAttachmentType::PlanModeReentry) {
                     guard.has_exited_plan_mode = false;
-                }
-                if fired_types.contains(&ReminderAttachmentType::PlanMode) {
-                    // Bump the cadence counter + reset the "turns since
-                    // last attachment" counter so the TUI and integration
-                    // tests observe the same cadence state as the
-                    // pre-Phase-D PlanModeReminder flow.
-                    guard.plan_mode_attachment_count =
-                        guard.plan_mode_attachment_count.saturating_add(1);
-                    guard.plan_mode_turns_since_last_attachment = 0;
-                    // Stamp the current human-turn UUID so subsequent
-                    // tool-result rounds sharing the same UUID don't
-                    // advance the counter.
-                    if let Some(uuid) = history.iter().rev().find_map(|m| match m.as_ref() {
-                        Message::User(u) => Some(u.uuid),
-                        _ => None,
-                    }) {
-                        guard.last_human_turn_uuid_seen = Some(uuid);
-                    }
                 }
                 // Replace the announced set with the current **deferred**
                 // tool list after successful emission. Subsequent turns

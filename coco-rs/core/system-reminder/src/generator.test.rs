@@ -1,6 +1,5 @@
 use super::*;
 use crate::error::Result;
-use crate::throttle::ThrottleConfig;
 use crate::types::AttachmentType;
 use crate::types::ReminderTier;
 use crate::types::SystemReminder;
@@ -35,10 +34,6 @@ impl AttachmentGenerator for MockGen {
 
     fn is_enabled(&self, _config: &SystemReminderConfig) -> bool {
         self.enabled
-    }
-
-    fn throttle_config(&self) -> ThrottleConfig {
-        ThrottleConfig::plan_mode()
     }
 
     async fn generate(&self, _ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
@@ -103,23 +98,6 @@ async fn generate_returns_reminder_with_content() {
     assert_eq!(r.content(), Some("hello"));
 }
 
-#[test]
-fn throttle_config_for_context_defaults_to_static() {
-    let g = MockGen {
-        name: "M",
-        at: AttachmentType::PlanMode,
-        tier_override: None,
-        enabled: true,
-        output: None,
-    };
-    let cfg = SystemReminderConfig::default();
-    let ctx = GeneratorContext::builder(&cfg).build();
-    assert_eq!(
-        g.throttle_config_for_context(&ctx).min_turns_between,
-        g.throttle_config().min_turns_between
-    );
-}
-
 // ── Builder defaults + setters ──
 
 #[test]
@@ -140,7 +118,10 @@ fn builder_defaults_are_sane() {
     assert_eq!(ctx.plan_agent_count, super::DEFAULT_PLAN_AGENT_COUNT);
     assert_eq!(ctx.agent_id, None);
     assert_eq!(ctx.last_human_turn_uuid, None);
-    assert!(ctx.full_content_flags.is_empty());
+    assert_eq!(ctx.plan_mode_turns_since_attachment, None);
+    assert_eq!(ctx.plan_mode_attachments_since_exit, 0);
+    assert_eq!(ctx.auto_mode_turns_since_attachment, None);
+    assert_eq!(ctx.auto_mode_attachments_since_exit, 0);
 }
 
 #[test]
@@ -174,7 +155,7 @@ fn builder_chains_all_setters() {
         .agent_id(Some("sub-1".to_string()))
         .last_human_turn_uuid(Some(uuid))
         .user_input(Some("hello".to_string()))
-        .set_full_content(AttachmentType::PlanMode, true)
+        .plan_mode_attachments_since_exit(3)
         .build();
     assert_eq!(ctx.turn_number, 7);
     assert!(!ctx.is_main_agent);
@@ -186,27 +167,5 @@ fn builder_chains_all_setters() {
     assert_eq!(ctx.agent_id.as_deref(), Some("sub-1"));
     assert_eq!(ctx.last_human_turn_uuid, Some(uuid));
     assert_eq!(ctx.user_input.as_deref(), Some("hello"));
-    assert_eq!(ctx.should_use_full_content(AttachmentType::PlanMode), true);
-}
-
-#[test]
-fn should_use_full_content_defaults_to_true_when_unset() {
-    let cfg = SystemReminderConfig::default();
-    let ctx = GeneratorContext::builder(&cfg).build();
-    // Unset → default Full (matches full_content_every_n = None semantics).
-    assert!(ctx.should_use_full_content(AttachmentType::PlanMode));
-}
-
-#[test]
-fn full_content_flags_replace_wholesale() {
-    use std::collections::HashMap;
-    let cfg = SystemReminderConfig::default();
-    let mut flags = HashMap::new();
-    flags.insert(AttachmentType::PlanMode, false);
-    flags.insert(AttachmentType::PlanModeExit, true);
-    let ctx = GeneratorContext::builder(&cfg)
-        .full_content_flags(flags)
-        .build();
-    assert!(!ctx.should_use_full_content(AttachmentType::PlanMode));
-    assert!(ctx.should_use_full_content(AttachmentType::PlanModeExit));
+    assert_eq!(ctx.plan_mode_attachments_since_exit, 3);
 }

@@ -22,7 +22,7 @@ async fn emits_full_content_when_full_flag_set() {
     let c = SystemReminderConfig::default();
     let ctx = GeneratorContext::builder(&c)
         .is_auto_mode(true)
-        .set_full_content(AttachmentType::AutoMode, true)
+        .auto_mode_attachments_since_exit(0)
         .build();
     let r = AutoModeEnterGenerator
         .generate(&ctx)
@@ -42,7 +42,7 @@ async fn emits_sparse_content_when_full_flag_unset() {
     let c = SystemReminderConfig::default();
     let ctx = GeneratorContext::builder(&c)
         .is_auto_mode(true)
-        .set_full_content(AttachmentType::AutoMode, false)
+        .auto_mode_attachments_since_exit(1)
         .build();
     let r = AutoModeEnterGenerator
         .generate(&ctx)
@@ -65,8 +65,28 @@ async fn respects_config_flag() {
 }
 
 #[tokio::test]
-async fn uses_auto_mode_throttle() {
-    let t = AutoModeEnterGenerator.throttle_config();
-    assert_eq!(t.min_turns_between, 5);
-    assert_eq!(t.full_content_every_n, Some(5));
+async fn cadence_is_history_derived() {
+    let c = SystemReminderConfig::default();
+    let g = AutoModeEnterGenerator;
+
+    // First auto-mode turn (no prior attachment) always emits.
+    let first = GeneratorContext::builder(&c)
+        .is_auto_mode(true)
+        .auto_mode_turns_since_attachment(None)
+        .build();
+    assert!(g.generate(&first).await.unwrap().is_some());
+
+    // Within the 5-turn window → throttled.
+    let within = GeneratorContext::builder(&c)
+        .is_auto_mode(true)
+        .auto_mode_turns_since_attachment(Some(2))
+        .build();
+    assert!(g.generate(&within).await.unwrap().is_none());
+
+    // At/after the window → emits again.
+    let after = GeneratorContext::builder(&c)
+        .is_auto_mode(true)
+        .auto_mode_turns_since_attachment(Some(5))
+        .build();
+    assert!(g.generate(&after).await.unwrap().is_some());
 }

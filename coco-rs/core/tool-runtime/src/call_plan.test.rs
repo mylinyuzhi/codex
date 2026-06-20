@@ -62,7 +62,7 @@ fn test_stamp_splits_app_state_patch_into_side_effects() {
         structured_output: None,
         effects: ToolSideEffects {
             app_state_patch: Some(Box::new(|state| {
-                state.plan_mode_attachment_count = 42;
+                state.has_exited_plan_mode = true;
             })),
             permission_updates: Vec::new(),
         },
@@ -75,9 +75,9 @@ fn test_stamp_splits_app_state_patch_into_side_effects() {
     // Effects carries the patch, and applying it mutates state.
     let patch = effects.app_state_patch.expect("patch must move to effects");
     let mut state = coco_types::ToolAppState::default();
-    assert_eq!(state.plan_mode_attachment_count, 0);
+    assert!(!state.has_exited_plan_mode);
     patch(&mut state);
-    assert_eq!(state.plan_mode_attachment_count, 42);
+    assert!(state.has_exited_plan_mode);
 }
 
 #[test]

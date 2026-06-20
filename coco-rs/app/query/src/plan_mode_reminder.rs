@@ -17,9 +17,9 @@
 //! - **Leader pending approvals** — scan the leader's inbox for unread
 //!   `plan_approval_request` messages and inject a summary reminder
 //!   (plus surface each to the TUI via `PlanApprovalRequested`).
-//! - **Plan-mode cadence counter** — advance
-//!   `plan_mode_turns_since_last_attachment` when a new human-turn UUID
-//!   is observed so the orchestrator's seeded throttle stays accurate.
+//!
+//! Plan-mode reminder cadence is **not** here — it is history-derived inside
+//! `coco-system-reminder`'s plan/auto generators.
 //!
 //! See the swarm mailbox protocol for `plan_approval_request` /
 //! `_response` message formats.
@@ -156,49 +156,9 @@ impl PlanModeReminder {
         self.reconcile_mode_transition(current_mode).await;
         self.poll_teammate_approval(history).await;
         self.inject_leader_pending_approvals(history).await;
-
-        // Advance the plan-mode human-turn counter while in Plan mode so
-        // the orchestrator sees a fresh
-        // `plan_mode_turns_since_last_attachment` when it seeds its
-        // throttle from app_state. Tool-result rounds share one
-        // human-turn UUID so they don't bump the counter.
-        if current_mode == PermissionMode::Plan {
-            let latest_human_uuid = Self::latest_non_meta_user_uuid(history);
-            self.observe_turn_and_count(latest_human_uuid).await;
-        }
-    }
-
-    /// Scan `history` backwards for the most recent non-meta user
-    /// message UUID. "Human turn" marker in TS parlance
-    /// (`type === 'user' && !isMeta && !hasToolResultContent`).
-    fn latest_non_meta_user_uuid(history: &MessageHistory) -> Option<uuid::Uuid> {
-        history.iter().rev().find_map(|m| match m.as_ref() {
-            Message::User(u) => Some(u.uuid),
-            _ => None,
-        })
-    }
-
-    /// Diff `latest_uuid` against the stashed `last_human_turn_uuid_seen`.
-    /// On a new human turn, bump `plan_mode_turns_since_last_attachment`
-    /// and stash the new UUID. Returns the counter value after the
-    /// (possibly skipped) bump. Counts only non-meta, non-tool-result
-    /// user messages. Tool-result rounds are a separate
-    /// `Message::ToolResult` variant.
-    async fn observe_turn_and_count(&self, latest_uuid: Option<uuid::Uuid>) -> i64 {
-        let Some(state) = self.app_state.as_ref() else {
-            return 0;
-        };
-        let mut guard = state.write().await;
-        let is_new_human_turn = match (latest_uuid, guard.last_human_turn_uuid_seen) {
-            (Some(new), Some(old)) => new != old,
-            (Some(_), None) => true,
-            _ => false,
-        };
-        if is_new_human_turn {
-            guard.plan_mode_turns_since_last_attachment += 1;
-            guard.last_human_turn_uuid_seen = latest_uuid;
-        }
-        guard.plan_mode_turns_since_last_attachment
+        // Plan-mode reminder cadence no longer needs a human-turn counter
+        // here — the generator derives it by scanning the transcript for
+        // prior `plan_mode` attachments each turn.
     }
 
     /// Detect and record cross-run permission-mode transitions.

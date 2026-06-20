@@ -96,7 +96,12 @@ pub struct AttachmentSettings {
 
     /// Token-usage report (TS `token_usage`). **Opt-in** — TS requires
     /// `CLAUDE_CODE_ENABLE_TOKEN_USAGE_ATTACHMENT` env var. When enabled,
-    /// injects `used/total; remaining` every main-thread turn.
+    /// injects `used/total; remaining` every main-thread turn. This value is
+    /// *volatile* (cumulative tokens), so it is emitted per-turn and appended
+    /// at the tail — the freshest copy always rides the end of context
+    /// (cache-safe, mirrors TS). Deliberately NOT throttled: a turn-throttle
+    /// would leave a stale value buried mid-history during long multi-tool
+    /// turns and the model would act on out-of-date numbers.
     pub token_usage: bool,
 
     /// USD budget report (TS `budget_usd`). Fires whenever

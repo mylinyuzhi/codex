@@ -143,64 +143,6 @@ async fn reentering_auto_before_banner_clears_stale_flag() {
     );
 }
 
-// ── Human-turn counter ───────────────────────────────────────────────
-
-#[tokio::test]
-async fn plan_mode_bumps_turn_counter_on_new_human_uuid() {
-    let app_state = Arc::new(RwLock::new(ToolAppState::default()));
-    let tmp = tempdir().unwrap();
-    let mut r = PlanModeReminder::new(
-        PermissionMode::Plan,
-        Some("s1".into()),
-        None,
-        Some(tmp.path().to_path_buf()),
-        Some(app_state.clone()),
-    );
-    let mut h = MessageHistory::new();
-    h.push(coco_messages::create_user_message("turn 1"));
-    r.turn_start_side_effects_only(&mut h).await;
-    assert_eq!(
-        app_state.read().await.plan_mode_turns_since_last_attachment,
-        1
-    );
-
-    // Tool-result round on the same human turn: counter stays put.
-    r.turn_start_side_effects_only(&mut h).await;
-    assert_eq!(
-        app_state.read().await.plan_mode_turns_since_last_attachment,
-        1,
-        "tool-result rounds share the human-turn UUID → no bump"
-    );
-
-    // New human turn: bump to 2.
-    h.push(coco_messages::create_user_message("turn 2"));
-    r.turn_start_side_effects_only(&mut h).await;
-    assert_eq!(
-        app_state.read().await.plan_mode_turns_since_last_attachment,
-        2
-    );
-}
-
-#[tokio::test]
-async fn default_mode_does_not_bump_plan_turn_counter() {
-    let app_state = Arc::new(RwLock::new(ToolAppState::default()));
-    let mut r = PlanModeReminder::new(
-        PermissionMode::Default,
-        Some("s1".into()),
-        None,
-        None,
-        Some(app_state.clone()),
-    );
-    let mut h = MessageHistory::new();
-    h.push(coco_messages::create_user_message("t1"));
-    r.turn_start_side_effects_only(&mut h).await;
-    assert_eq!(
-        app_state.read().await.plan_mode_turns_since_last_attachment,
-        0,
-        "counter only advances in Plan mode"
-    );
-}
-
 // ── Teammate approval polling (F3) ───────────────────────────────────
 
 /// In-memory mailbox handle so tests can inject messages + verify reads.

@@ -2,7 +2,6 @@ use super::*;
 use crate::error::Result;
 use crate::generator::AttachmentGenerator;
 use crate::generator::GeneratorContext;
-use crate::throttle::ThrottleConfig;
 use crate::types::AttachmentType;
 use crate::types::ReminderTier;
 use crate::types::SystemReminder;
@@ -23,7 +22,6 @@ struct AlwaysGen {
     at: AttachmentType,
     tier_override: Option<ReminderTier>,
     enabled: bool,
-    throttle: ThrottleConfig,
     call_count: AtomicI32,
 }
 
@@ -34,12 +32,8 @@ impl AlwaysGen {
             at,
             tier_override: None,
             enabled: true,
-            throttle: ThrottleConfig::none(),
             call_count: AtomicI32::new(0),
         }
-    }
-    fn calls(&self) -> i32 {
-        self.call_count.load(Ordering::SeqCst)
     }
 }
 
@@ -57,9 +51,6 @@ impl AttachmentGenerator for AlwaysGen {
     }
     fn is_enabled(&self, _c: &SystemReminderConfig) -> bool {
         self.enabled
-    }
-    fn throttle_config(&self) -> ThrottleConfig {
-        self.throttle
     }
     async fn generate(&self, _ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
         self.call_count.fetch_add(1, Ordering::SeqCst);
@@ -124,7 +115,6 @@ async fn main_agent_only_skipped_for_subagent() {
         at: AttachmentType::PlanMode,
         tier_override: Some(ReminderTier::MainAgentOnly),
         enabled: true,
-        throttle: ThrottleConfig::none(),
         call_count: AtomicI32::new(0),
     };
     o.add_generator(Arc::new(g));
@@ -141,7 +131,6 @@ async fn user_prompt_tier_skipped_without_input() {
         at: AttachmentType::PlanMode,
         tier_override: Some(ReminderTier::UserPrompt),
         enabled: true,
-        throttle: ThrottleConfig::none(),
         call_count: AtomicI32::new(0),
     };
     o.add_generator(Arc::new(g));
@@ -160,7 +149,6 @@ async fn user_prompt_tier_runs_with_input() {
         at: AttachmentType::PlanMode,
         tier_override: Some(ReminderTier::UserPrompt),
         enabled: true,
-        throttle: ThrottleConfig::none(),
         call_count: AtomicI32::new(0),
     };
     o.add_generator(Arc::new(g));
@@ -181,32 +169,9 @@ async fn core_tier_runs_everywhere() {
     assert_eq!(o.generate_all(ctx).await.len(), 1);
 }
 
-// ── Throttle gate ──
-
-#[tokio::test]
-async fn throttle_blocks_second_turn_within_window() {
-    let cfg = SystemReminderConfig::default();
-    let mut o = SystemReminderOrchestrator::new(cfg.clone());
-    let g = Arc::new(AlwaysGen {
-        name: "Plan",
-        at: AttachmentType::PlanMode,
-        tier_override: None,
-        enabled: true,
-        throttle: ThrottleConfig::plan_mode(), // min_turns_between = 5
-        call_count: AtomicI32::new(0),
-    });
-    o.add_generator(g.clone());
-
-    let ctx1 = GeneratorContext::builder(&cfg).turn_number(0).build();
-    assert_eq!(o.generate_all(ctx1).await.len(), 1);
-
-    let ctx2 = GeneratorContext::builder(&cfg).turn_number(3).build();
-    assert_eq!(o.generate_all(ctx2).await.len(), 0);
-    assert_eq!(g.calls(), 1, "throttled generators must not be invoked");
-
-    let ctx3 = GeneratorContext::builder(&cfg).turn_number(5).build();
-    assert_eq!(o.generate_all(ctx3).await.len(), 1);
-}
+// Per-reminder cadence (throttle) now lives in each generator's
+// `generate()` via history-scan — see `plan_mode.test.rs` /
+// `auto_mode_enter.test.rs`. The orchestrator no longer gates on cadence.
 
 // ── Timeout ──
 
@@ -262,61 +227,6 @@ async fn generators_run_in_parallel() {
         elapsed < Duration::from_millis(250),
         "parallel exec expected, got {elapsed:?}"
     );
-}
-
-// ── Throttle mark_generated side-effect ──
-
-#[tokio::test]
-async fn successful_generation_marks_throttle() {
-    let cfg = SystemReminderConfig::default();
-    let mut o = SystemReminderOrchestrator::new(cfg.clone());
-    o.add_generator(Arc::new(AlwaysGen::core("A", AttachmentType::PlanMode)));
-    let ctx = GeneratorContext::builder(&cfg).turn_number(7).build();
-    o.generate_all(ctx).await;
-    let s = o
-        .throttle()
-        .get_state(AttachmentType::PlanMode)
-        .expect("state recorded");
-    assert_eq!(s.last_generated_turn, Some(7));
-    assert_eq!(s.session_count, 1);
-}
-
-// ── Full/Sparse pre-computation ──
-
-#[tokio::test]
-async fn full_content_flag_is_populated_for_generator_with_full_n() {
-    #[derive(Debug)]
-    struct Probe;
-    #[async_trait]
-    impl AttachmentGenerator for Probe {
-        fn name(&self) -> &str {
-            "Probe"
-        }
-        fn attachment_type(&self) -> AttachmentType {
-            AttachmentType::PlanMode
-        }
-        fn is_enabled(&self, _c: &SystemReminderConfig) -> bool {
-            true
-        }
-        fn throttle_config(&self) -> ThrottleConfig {
-            ThrottleConfig::plan_mode()
-        }
-        async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
-            let is_full = ctx.should_use_full_content(AttachmentType::PlanMode);
-            Ok(Some(SystemReminder::new(
-                AttachmentType::PlanMode,
-                format!("full={is_full}"),
-            )))
-        }
-    }
-
-    let cfg = SystemReminderConfig::default();
-    let mut o = SystemReminderOrchestrator::new(cfg.clone());
-    o.add_generator(Arc::new(Probe));
-    let ctx = GeneratorContext::builder(&cfg).build();
-    let out = o.generate_all(ctx).await;
-    assert_eq!(out.len(), 1);
-    assert_eq!(out[0].content(), Some("full=true"), "first run = Full");
 }
 
 // ── Default registry ──
@@ -507,16 +417,4 @@ async fn default_registry_suppresses_stale_exit_flags_inside_modes() {
         !types.contains(&AttachmentType::AutoModeExit),
         "got {types:?}"
     );
-}
-
-#[tokio::test]
-async fn reset_throttle_clears_state() {
-    let cfg = SystemReminderConfig::default();
-    let mut o = SystemReminderOrchestrator::new(cfg.clone());
-    o.add_generator(Arc::new(AlwaysGen::core("A", AttachmentType::PlanMode)));
-    let ctx = GeneratorContext::builder(&cfg).turn_number(0).build();
-    o.generate_all(ctx).await;
-    assert!(o.throttle().get_state(AttachmentType::PlanMode).is_some());
-    o.reset_throttle();
-    assert!(o.throttle().get_state(AttachmentType::PlanMode).is_none());
 }

@@ -1104,6 +1104,9 @@ fn build_prompt_state_input(
         per_tool_schema_sizes,
         system_char_count,
         model: client.model_id().to_string(),
+        cache_break_detection_excluded: client
+            .model_info()
+            .is_some_and(|m| m.cache_break_detection_excluded),
         query_source: query_source.to_string(),
         agent_id: params.agent_id.clone(),
         fast_mode: params.fast_mode,

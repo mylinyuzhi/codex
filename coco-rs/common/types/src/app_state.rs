@@ -26,7 +26,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 use tokio::sync::RwLock;
-use uuid::Uuid;
 
 /// TS-shaped pending plan verification state.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -60,8 +59,6 @@ impl PendingPlanVerificationState {
 ///   `ToolUseContext.permission_context` on every batch boundary so
 ///   tools always see the latest value.
 /// - Plan-mode latches (`has_exited_plan_mode`, `needs_plan_mode_exit_attachment`).
-/// - Plan-mode reminder throttle (`plan_mode_attachment_count`,
-///   `plan_mode_turns_since_last_attachment`).
 /// - Permission-mode echo (`last_permission_mode`) for Reentry detection.
 /// - Plan-mode entry timestamp (`plan_mode_entry_ms`) for verify-execution.
 /// - Teammate approval handshake (`awaiting_plan_approval*`).
@@ -124,29 +121,6 @@ pub struct ToolAppState {
     /// `## Exited Auto Mode` attachment is appended. TS parity:
     /// `needsAutoModeExitAttachment` in `bootstrap/state.ts`.
     pub needs_auto_mode_exit_attachment: bool,
-
-    /// Total reminder attachments emitted this session. Drives the
-    /// "every 5th attachment is Full" cadence.
-    pub plan_mode_attachment_count: i64,
-
-    /// Human turns elapsed since the last reminder attachment. Drives
-    /// the 5-turn Sparse throttle. TS parity: counts only non-meta,
-    /// non-tool-result user messages, matching
-    /// `getPlanModeAttachmentTurnCount` in `utils/attachments.ts`. The
-    /// `PlanModeReminder` only bumps this when it observes a NEW human
-    /// turn UUID in history (see `last_human_turn_uuid_seen`), so
-    /// multi-tool-round human turns count as one turn, not many.
-    pub plan_mode_turns_since_last_attachment: i64,
-
-    /// UUID of the most recent non-meta user message the
-    /// `PlanModeReminder` has already accounted for in its turn
-    /// throttle. On each `turn_start` the reminder scans `history` for
-    /// the newest non-meta user UUID; if it differs from this value
-    /// the turn counter bumps and this is updated. Prevents
-    /// multi-tool-round human turns from being counted multiple times.
-    /// Only meaningful when the engine is in plan mode; cleared
-    /// opportunistically on exit/reset.
-    pub last_human_turn_uuid_seen: Option<Uuid>,
 
     /// `PermissionMode` from the prior turn. Reminder uses this to
     /// detect Plan ↔ non-Plan transitions; the driver uses it after a

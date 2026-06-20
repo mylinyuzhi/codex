@@ -23,10 +23,17 @@ use coco_context::ReminderType;
 use crate::error::Result;
 use crate::generator::AttachmentGenerator;
 use crate::generator::GeneratorContext;
-use crate::throttle::ThrottleConfig;
 use crate::types::AttachmentType;
 use crate::types::SystemReminder;
 use coco_config::SystemReminderConfig;
+
+/// Human turns between successive steady-state plan-mode reminders.
+/// Mirrors TS `PLAN_MODE_ATTACHMENT_CONFIG.TURNS_BETWEEN_ATTACHMENTS`.
+const PLAN_MODE_TURNS_BETWEEN: i32 = 5;
+
+/// Full reminder on every Nth attachment since the last exit (1st, 6th, 11th…).
+/// Mirrors TS `PLAN_MODE_ATTACHMENT_CONFIG.FULL_REMINDER_EVERY_N_ATTACHMENTS`.
+const FULL_REMINDER_EVERY_N: i32 = 5;
 
 // ---------------------------------------------------------------------------
 // PlanModeEnterGenerator
@@ -34,13 +41,13 @@ use coco_config::SystemReminderConfig;
 
 /// Emits the steady-state plan-mode reminder while the engine is in plan mode.
 ///
-/// Cadence is governed by [`ThrottleConfig::plan_mode`]:
-/// - Minimum 5 turns between successive emissions.
-/// - Every 5th emission (#1, #6, #11, …) uses Full content; others Sparse.
-///
-/// Full/Sparse is pre-computed by the orchestrator into
-/// [`GeneratorContext::full_content_flags`]; this generator reads that flag
-/// via [`GeneratorContext::should_use_full_content`].
+/// Cadence is derived from history (no in-memory throttle):
+/// - Always emit on the first plan-mode turn (no prior attachment in history).
+/// - Otherwise one emission every [`PLAN_MODE_TURNS_BETWEEN`] human turns,
+///   gated on [`GeneratorContext::plan_mode_turns_since_attachment`].
+/// - Full on the 1st/6th/11th… attachment since the last exit (every
+///   [`FULL_REMINDER_EVERY_N`]), derived from
+///   [`GeneratorContext::plan_mode_attachments_since_exit`]; others Sparse.
 #[derive(Debug, Default)]
 pub struct PlanModeEnterGenerator;
 
@@ -58,10 +65,6 @@ impl AttachmentGenerator for PlanModeEnterGenerator {
         config.attachments.plan_mode
     }
 
-    fn throttle_config(&self) -> ThrottleConfig {
-        ThrottleConfig::plan_mode()
-    }
-
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
         if !ctx.plan_mode_feature_enabled {
             return Ok(None);
@@ -70,7 +73,17 @@ impl AttachmentGenerator for PlanModeEnterGenerator {
             return Ok(None);
         }
 
-        let reminder_type = if ctx.should_use_full_content(AttachmentType::PlanMode) {
+        // Throttle to one emission per PLAN_MODE_TURNS_BETWEEN human turns,
+        // but always emit the first time (no prior attachment → `None`).
+        if let Some(n) = ctx.plan_mode_turns_since_attachment
+            && n < PLAN_MODE_TURNS_BETWEEN
+        {
+            return Ok(None);
+        }
+
+        // Full on the 1st/6th/11th… attachment since the last exit.
+        let attachment_index = ctx.plan_mode_attachments_since_exit + 1;
+        let reminder_type = if attachment_index % FULL_REMINDER_EVERY_N == 1 {
             ReminderType::Full
         } else {
             ReminderType::Sparse
@@ -113,10 +126,6 @@ impl AttachmentGenerator for PlanModeExitGenerator {
 
     fn is_enabled(&self, config: &SystemReminderConfig) -> bool {
         config.attachments.plan_mode_exit
-    }
-
-    fn throttle_config(&self) -> ThrottleConfig {
-        ThrottleConfig::none()
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
@@ -173,10 +182,6 @@ impl AttachmentGenerator for PlanModeReentryGenerator {
 
     fn is_enabled(&self, config: &SystemReminderConfig) -> bool {
         config.attachments.plan_mode_reentry
-    }
-
-    fn throttle_config(&self) -> ThrottleConfig {
-        ThrottleConfig::none()
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {

@@ -15,7 +15,6 @@ use async_trait::async_trait;
 use crate::error::Result;
 use crate::generator::AttachmentGenerator;
 use crate::generator::GeneratorContext;
-use crate::throttle::ThrottleConfig;
 use crate::types::AttachmentType;
 use crate::types::SystemReminder;
 use coco_config::SystemReminderConfig;
@@ -36,10 +35,6 @@ impl AttachmentGenerator for UserContextGenerator {
 
     fn is_enabled(&self, config: &SystemReminderConfig) -> bool {
         config.attachments.user_context
-    }
-
-    fn throttle_config(&self) -> ThrottleConfig {
-        ThrottleConfig::none()
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
