@@ -99,6 +99,131 @@ fn converts_assistant_with_tool_call() {
     assert_eq!(items[1]["name"], "get_weather");
 }
 
+fn reasoning_meta(encrypted: &str) -> vercel_ai_provider::ProviderMetadata {
+    let mut openai = serde_json::Map::new();
+    openai.insert(
+        "encryptedContent".into(),
+        serde_json::Value::String(encrypted.into()),
+    );
+    let mut meta = vercel_ai_provider::ProviderMetadata::default();
+    meta.0
+        .insert("openai".into(), serde_json::Value::Object(openai));
+    meta
+}
+
+#[test]
+fn assistant_reasoning_round_trips_encrypted_content() {
+    // The encrypted chain-of-thought blob must be re-sent so store=false
+    // reasoning continuity survives the tool-call turn.
+    let prompt = vec![LanguageModelV4Message::Assistant {
+        content: vec![AssistantContentPart::Reasoning(
+            vercel_ai_provider::ReasoningPart {
+                text: "Thinking about it".into(),
+                provider_metadata: Some(reasoning_meta("ENC_BLOB")),
+            },
+        )],
+        provider_options: None,
+    }];
+    let (items, _) = convert_to_openai_responses_input(&prompt, SystemMessageMode::System);
+    assert_eq!(items[0]["type"], "reasoning");
+    assert_eq!(items[0]["summary"][0]["type"], "summary_text");
+    assert_eq!(items[0]["summary"][0]["text"], "Thinking about it");
+    assert_eq!(items[0]["encrypted_content"], "ENC_BLOB");
+}
+
+#[test]
+fn assistant_encrypted_only_reasoning_emits_empty_summary() {
+    // No summary text (encrypted-only): the summary array is empty but the
+    // chain blob still rides back.
+    let prompt = vec![LanguageModelV4Message::Assistant {
+        content: vec![AssistantContentPart::Reasoning(
+            vercel_ai_provider::ReasoningPart {
+                text: String::new(),
+                provider_metadata: Some(reasoning_meta("ENC2")),
+            },
+        )],
+        provider_options: None,
+    }];
+    let (items, _) = convert_to_openai_responses_input(&prompt, SystemMessageMode::System);
+    assert_eq!(items[0]["type"], "reasoning");
+    assert_eq!(items[0]["summary"], serde_json::json!([]));
+    assert_eq!(items[0]["encrypted_content"], "ENC2");
+}
+
+#[test]
+fn assistant_reasoning_without_metadata_omits_encrypted_content() {
+    let prompt = vec![LanguageModelV4Message::Assistant {
+        content: vec![AssistantContentPart::Reasoning(
+            vercel_ai_provider::ReasoningPart {
+                text: "plain".into(),
+                provider_metadata: None,
+            },
+        )],
+        provider_options: None,
+    }];
+    let (items, _) = convert_to_openai_responses_input(&prompt, SystemMessageMode::System);
+    assert_eq!(items[0]["type"], "reasoning");
+    assert!(items[0].get("encrypted_content").is_none());
+}
+
+#[test]
+fn assistant_raw_reasoning_content_is_stripped_on_sendback() {
+    // Raw reasoning (reasoningType="text", no encrypted blob) is display-only
+    // and must NOT round-trip — the server rehydrates it from encrypted_content.
+    let mut openai = serde_json::Map::new();
+    openai.insert(
+        "reasoningType".into(),
+        serde_json::Value::String("text".into()),
+    );
+    let mut meta = vercel_ai_provider::ProviderMetadata::default();
+    meta.0
+        .insert("openai".into(), serde_json::Value::Object(openai));
+
+    let prompt = vec![LanguageModelV4Message::Assistant {
+        content: vec![AssistantContentPart::Reasoning(
+            vercel_ai_provider::ReasoningPart {
+                text: "raw chain of thought".into(),
+                provider_metadata: Some(meta),
+            },
+        )],
+        provider_options: None,
+    }];
+    let (items, _) = convert_to_openai_responses_input(&prompt, SystemMessageMode::System);
+    assert!(
+        items.iter().all(|it| it["type"] != "reasoning"),
+        "raw reasoning content must not round-trip as input"
+    );
+}
+
+#[test]
+fn assistant_compaction_round_trips() {
+    // Server-side compaction state must round-trip on the turn after
+    // compaction or the `context_management` feature silently loses context.
+    let mut openai = serde_json::Map::new();
+    openai.insert(
+        "type".into(),
+        serde_json::Value::String("compaction".into()),
+    );
+    openai.insert("itemId".into(), serde_json::Value::String("cmp_1".into()));
+    openai.insert(
+        "encryptedContent".into(),
+        serde_json::Value::String("CMP_ENC".into()),
+    );
+    let mut meta = vercel_ai_provider::ProviderMetadata::default();
+    meta.0
+        .insert("openai".into(), serde_json::Value::Object(openai));
+
+    let prompt = vec![LanguageModelV4Message::Assistant {
+        content: vec![AssistantContentPart::Custom(
+            vercel_ai_provider::CustomPart::new("openai-compaction").with_provider_metadata(meta),
+        )],
+        provider_options: None,
+    }];
+    let (items, _) = convert_to_openai_responses_input(&prompt, SystemMessageMode::System);
+    assert_eq!(items[0]["type"], "compaction");
+    assert_eq!(items[0]["encrypted_content"], "CMP_ENC");
+}
+
 #[test]
 fn converts_tool_result() {
     let prompt = vec![LanguageModelV4Message::Tool {

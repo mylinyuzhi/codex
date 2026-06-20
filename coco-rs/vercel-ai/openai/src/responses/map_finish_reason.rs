@@ -23,6 +23,19 @@ pub fn map_openai_responses_finish_reason(
         Some("completed") => UnifiedFinishReason::EndTurn,
         Some("max_output_tokens") => UnifiedFinishReason::MaxTokens,
         Some("content_filter") => UnifiedFinishReason::ContentFilter,
+        // A mid-stream `response.failed` with `error.code ==
+        // "context_length_exceeded"` is surfaced through this status so the
+        // synthesized Finish carries `ContextWindowExceeded`, which routes
+        // `app/query` to reactive compaction (matching codex's
+        // `ApiError::ContextWindowExceeded`). Without it the overflow
+        // collapsed to a generic finish and recovery never fired.
+        Some("context_length_exceeded") => UnifiedFinishReason::ContextWindowExceeded,
+        // A `response.failed` that already pushed a `StreamPart::Error`
+        // (quota/policy/overload) leaves this sentinel `status`. The Error
+        // part terminates the turn before the synthesized Finish is ever
+        // consumed, so this arm is defensive: a failure must classify as
+        // `Error`, never fall through to `ToolUse` and re-dispatch the call.
+        Some("error") => UnifiedFinishReason::Error,
         _ if has_function_call => UnifiedFinishReason::ToolUse,
         _ => UnifiedFinishReason::Other,
     };

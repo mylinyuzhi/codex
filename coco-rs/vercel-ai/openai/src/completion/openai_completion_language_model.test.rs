@@ -13,6 +13,7 @@ fn make_config() -> Arc<OpenAIConfig> {
         client: None,
         full_url: None,
         chatgpt_subscription: false,
+        reasoning_store: Default::default(),
     })
 }
 

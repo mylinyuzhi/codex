@@ -44,3 +44,4 @@ tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "test-util"] }
 tokio-util.workspace = true
 futures.workspace = true
+wiremock.workspace = true

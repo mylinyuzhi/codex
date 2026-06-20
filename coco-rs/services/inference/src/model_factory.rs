@@ -244,7 +244,8 @@ pub(crate) fn build_api_client(
         model_id: spec.model_id.clone(),
     };
     let mut client = ApiClient::new(model, fingerprint, model_info, model_identity, retry)
-        .with_cache_break_detector(detector);
+        .with_cache_break_detector(detector)
+        .with_stream_idle_timeout(provider_cfg.client_options.stream_idle_timeout_secs);
     // Reactive-401 hook for OAuth-subscription providers: bind a
     // `refresh_now(provider)` callback so an expired access token recovers
     // (refresh + retry) instead of surfacing the 401.
@@ -385,6 +386,18 @@ fn build_openai(
 ) -> Result<Arc<dyn LanguageModel>, InferenceError> {
     let opts = &provider_cfg.client_options;
     let auth = build_openai_auth(provider_cfg, resolver)?;
+    // Parse the opaque `provider_options` map through the adapter-owned
+    // schema. `deny_unknown_fields` surfaces typos at startup rather than the
+    // next request.
+    let knobs =
+        vercel_ai_openai::parse_provider_options(&provider_cfg.provider_options).map_err(|e| {
+            crate::errors::ProviderBuildFailedSnafu {
+                provider: "openai",
+                provider_name: provider_cfg.name.clone(),
+                message: format!("provider_options: {e}"),
+            }
+            .build()
+        })?;
     let settings = vercel_ai_openai::OpenAIProviderSettings {
         base_url: Some(provider_cfg.base_url.clone()),
         auth,
@@ -394,6 +407,7 @@ fn build_openai(
         name: Some(provider_cfg.name.clone()),
         client: build_http_client(timeout_secs),
         full_url: Some(opts.full_url),
+        reasoning_store: knobs.reasoning_store,
     };
     let provider = vercel_ai_openai::create_openai(settings);
     // Honor `provider_cfg.wire_api`. The SDK's

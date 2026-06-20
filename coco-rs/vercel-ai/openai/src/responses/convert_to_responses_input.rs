@@ -16,6 +16,10 @@ use vercel_ai_provider::Warning;
 
 use crate::openai_capabilities::SystemMessageMode;
 
+use super::provider_metadata::is_raw_reasoning;
+use super::provider_metadata::read_compaction_provider_metadata;
+use super::provider_metadata::reasoning_encrypted_content;
+
 /// Flags indicating which provider tools are present, used for input conversion.
 #[derive(Default)]
 pub struct ProviderToolFlags {
@@ -310,14 +314,75 @@ fn convert_assistant_parts(
                 }
             }
             AssistantContentPart::Reasoning(rp) => {
+                // Raw reasoning `content` (reasoningType="text") is display-only
+                // — the server rehydrates it from `encrypted_content`, so
+                // re-sending it desyncs (mirrors codex's
+                // `should_serialize_reasoning_content`, which skips
+                // `ReasoningText`). Drop it unless it also carries a chain blob.
+                let encrypted = rp
+                    .provider_metadata
+                    .as_ref()
+                    .and_then(reasoning_encrypted_content);
+                if rp.provider_metadata.as_ref().is_some_and(is_raw_reasoning)
+                    && encrypted.is_none()
+                {
+                    continue;
+                }
                 flush_text(&mut text_parts, items);
-                items.push(json!({
-                    "type": "reasoning",
-                    "summary": [{ "type": "summary_text", "text": rp.text }],
-                }));
+                // Re-send the encrypted chain-of-thought blob (store=false) so
+                // the model keeps its reasoning across tool-call turns — the
+                // coco-rs equivalent of codex re-serializing
+                // `ResponseItem::Reasoning.encrypted_content`. The summary
+                // array is empty for an encrypted-only item; raw reasoning
+                // `content` is deliberately NOT re-sent (mirrors codex's
+                // `should_serialize_reasoning_content` — the server rehydrates
+                // it from `encrypted_content`). The wire `id` is receive-only
+                // and intentionally dropped.
+                let summary = if rp.text.is_empty() {
+                    json!([])
+                } else {
+                    json!([{ "type": "summary_text", "text": rp.text }])
+                };
+                let mut reasoning = serde_json::Map::new();
+                reasoning.insert("type".into(), json!("reasoning"));
+                reasoning.insert("summary".into(), summary);
+                if let Some(ec) = encrypted {
+                    reasoning.insert("encrypted_content".into(), ec.clone());
+                }
+                items.push(Value::Object(reasoning));
+            }
+            AssistantContentPart::Custom(cp) if cp.kind == "openai-compaction" => {
+                flush_text(&mut text_parts, items);
+                // Re-send server-side compaction state so the model receives
+                // the compacted context on the turn AFTER compaction. The
+                // capture side stored `type` + `encryptedContent` under
+                // `provider_metadata.openai`; without this arm the item hit
+                // the catch-all skip and the entire `context_management`
+                // feature silently lost its state. Mirrors codex re-sending
+                // `Compaction { encrypted_content }` verbatim. The wire keys
+                // live on `ResponsesCompactionProviderMetadata` (read here via
+                // its reader) so capture/sendback can't drift.
+                let mut item = serde_json::Map::new();
+                match cp
+                    .provider_metadata
+                    .as_ref()
+                    .and_then(read_compaction_provider_metadata)
+                {
+                    Some(compaction) => {
+                        item.insert("type".into(), json!(compaction.meta_type));
+                        if let Some(ec) = compaction.encrypted_content {
+                            item.insert("encrypted_content".into(), json!(ec));
+                        }
+                    }
+                    None => {
+                        item.insert("type".into(), json!("compaction"));
+                    }
+                }
+                items.push(Value::Object(item));
             }
             _ => {
-                // Source, File, ToolResult, ToolApprovalRequest — skip
+                // Source, File, ToolResult, ToolApprovalRequest, other Custom
+                // kinds — skip
             }
         }
     }

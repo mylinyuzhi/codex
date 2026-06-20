@@ -111,6 +111,14 @@ pub struct PartialProviderClientOptions {
     /// Whether the provider supports `response_format = json_schema`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supports_structured_outputs: Option<bool>,
+    /// Hard idle-timeout backstop (seconds) for the streaming response: abort
+    /// the turn if no SSE event arrives within this window. Guards against a
+    /// half-open socket the reqwest transport timeout can't catch. `None` or a
+    /// non-positive value disables it (the default — the soft 30s stall warn
+    /// still fires). Set generously (≥ the longest legitimate inter-event gap;
+    /// codex uses 300s).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_idle_timeout_secs: Option<i64>,
 }
 
 impl fmt::Debug for PartialProviderClientOptions {
@@ -129,6 +137,7 @@ impl fmt::Debug for PartialProviderClientOptions {
                 "supports_structured_outputs",
                 &self.supports_structured_outputs,
             )
+            .field("stream_idle_timeout_secs", &self.stream_idle_timeout_secs)
             .finish()
     }
 }
@@ -150,6 +159,10 @@ pub struct ProviderClientOptions {
     pub full_url: bool,
     /// Default false.
     pub supports_structured_outputs: bool,
+    /// Streaming idle-timeout backstop (seconds). `None` / non-positive =
+    /// disabled (default). See [`PartialProviderClientOptions::stream_idle_timeout_secs`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_idle_timeout_secs: Option<i64>,
 }
 
 impl ProviderClientOptions {
@@ -163,6 +176,7 @@ impl ProviderClientOptions {
             include_usage: partial.include_usage,
             full_url: partial.full_url.unwrap_or(false),
             supports_structured_outputs: partial.supports_structured_outputs.unwrap_or(false),
+            stream_idle_timeout_secs: partial.stream_idle_timeout_secs,
         }
     }
 
@@ -192,6 +206,9 @@ impl ProviderClientOptions {
         if let Some(structured) = partial.supports_structured_outputs {
             self.supports_structured_outputs = structured;
         }
+        if let Some(idle) = partial.stream_idle_timeout_secs {
+            self.stream_idle_timeout_secs = Some(idle);
+        }
     }
 }
 
@@ -211,6 +228,7 @@ impl fmt::Debug for ProviderClientOptions {
                 "supports_structured_outputs",
                 &self.supports_structured_outputs,
             )
+            .field("stream_idle_timeout_secs", &self.stream_idle_timeout_secs)
             .finish()
     }
 }

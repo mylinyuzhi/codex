@@ -5020,3 +5020,64 @@ async fn stream_error_emits_turn_failed_for_sdk_iterator() {
         "stream error must emit exactly one TurnEnded(Failed) before propagating"
     );
 }
+
+#[test]
+fn snapshot_keeps_metadata_only_reasoning_segment() {
+    // P1-4 regression guard: a reasoning segment with EMPTY text but a
+    // chain-of-thought carrier in `provider_metadata` (OpenAI
+    // `encryptedContent`, Anthropic `signature`, Gemini `thoughtSignature`)
+    // MUST survive into assistant history — dropping it severs store=false
+    // reasoning continuity. A genuinely empty segment (no text, no metadata)
+    // is still dropped.
+    let mut openai = serde_json::Map::new();
+    openai.insert(
+        "encryptedContent".into(),
+        serde_json::Value::String("ENC".into()),
+    );
+    let mut meta = coco_llm_types::ProviderMetadata::default();
+    meta.0
+        .insert("openai".into(), serde_json::Value::Object(openai));
+
+    let snapshot = coco_inference::AssistantTurnSnapshot {
+        parts: vec![
+            // empty text + metadata → KEEP
+            coco_inference::TurnPart::Reasoning(coco_inference::ReasoningSegment {
+                id: "rs_1".into(),
+                text: String::new(),
+                provider_metadata: Some(meta),
+            }),
+            // empty text + no metadata → DROP
+            coco_inference::TurnPart::Reasoning(coco_inference::ReasoningSegment {
+                id: "rs_2".into(),
+                text: String::new(),
+                provider_metadata: None,
+            }),
+        ],
+    };
+
+    let (content, _tool_calls) = assistant_content_from_snapshot(
+        &snapshot,
+        crate::tool_input_normalizer::ToolInputNormalizationContext { cwd: None },
+    );
+
+    let reasoning: Vec<_> = content
+        .iter()
+        .filter_map(|p| match p {
+            AssistantContentPart::Reasoning(r) => Some(r),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        reasoning.len(),
+        1,
+        "only the metadata-bearing reasoning segment survives"
+    );
+    assert!(reasoning[0].text.is_empty());
+    let ec = reasoning[0]
+        .provider_metadata
+        .as_ref()
+        .and_then(|m| m.0.get("openai"))
+        .and_then(|o| o.get("encryptedContent"))
+        .and_then(|v| v.as_str());
+    assert_eq!(ec, Some("ENC"), "encrypted_content carrier preserved");
+}

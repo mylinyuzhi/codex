@@ -24,6 +24,7 @@ use crate::openai_auth::HDR_CHATGPT_ACCOUNT_ID;
 use crate::openai_auth::HDR_ORIGINATOR;
 use crate::openai_auth::OpenAIAuth;
 use crate::openai_config::OpenAIConfig;
+use crate::openai_config::ResponsesStorePolicy;
 use crate::responses::OpenAIResponsesLanguageModel;
 use crate::speech::OpenAISpeechModel;
 use crate::transcription::OpenAITranscriptionModel;
@@ -50,6 +51,9 @@ pub struct OpenAIProviderSettings {
     /// When `true`, `base_url` is the complete endpoint URL — no API path
     /// suffix is appended. Default (`None`): auto-detect duplicate suffixes.
     pub full_url: Option<bool>,
+    /// Policy for the Responses `store` field on reasoning models (see
+    /// [`ResponsesStorePolicy`]). Default `ServerDefault`.
+    pub reasoning_store: ResponsesStorePolicy,
 }
 
 /// OpenAI multi-model provider.
@@ -63,6 +67,7 @@ pub struct OpenAIProvider {
     client: Option<Arc<reqwest::Client>>,
     full_url: Option<bool>,
     chatgpt_subscription: bool,
+    reasoning_store: ResponsesStorePolicy,
 }
 
 impl OpenAIProvider {
@@ -70,6 +75,7 @@ impl OpenAIProvider {
     pub fn new(settings: OpenAIProviderSettings) -> Self {
         let provider_name = settings.name.unwrap_or_else(|| "openai".into());
         let chatgpt_subscription = settings.auth.is_chatgpt_subscription();
+        let reasoning_store = settings.reasoning_store;
         // Late host resolution (mirrors codex `to_api_provider`): a
         // subscription with no explicit base defaults to the codex backend.
         let default_base = if chatgpt_subscription {
@@ -139,6 +145,7 @@ impl OpenAIProvider {
             client: settings.client,
             full_url: settings.full_url,
             chatgpt_subscription,
+            reasoning_store,
         }
     }
 
@@ -150,6 +157,7 @@ impl OpenAIProvider {
             client: self.client.clone(),
             full_url: self.full_url,
             chatgpt_subscription: self.chatgpt_subscription,
+            reasoning_store: self.reasoning_store,
         })
     }
 

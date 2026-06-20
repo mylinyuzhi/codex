@@ -47,7 +47,12 @@ pub enum ResponseOutputItem {
     #[serde(rename = "function_call")]
     FunctionCall {
         id: Option<String>,
-        call_id: Option<String>,
+        /// Wire `call_id` (`call_…`) — the correlation id echoed back as the
+        /// `function_call_output.call_id`. Mandatory per the Responses API
+        /// contract (mirrors codex `ResponseItem::FunctionCall.call_id:
+        /// String`); a `function_call` item without it fails to decode and the
+        /// SSE event is skipped (graceful per-event drop in `process_event`).
+        call_id: String,
         name: Option<String>,
         arguments: Option<String>,
         /// Namespace marker — present when the function_call originated
@@ -67,7 +72,11 @@ pub enum ResponseOutputItem {
     #[serde(rename = "custom_tool_call")]
     CustomToolCall {
         id: Option<String>,
-        call_id: Option<String>,
+        /// Wire `call_id` — echoed back as `custom_tool_call_output.call_id`.
+        /// Mandatory per the Responses API contract (mirrors codex's mandatory
+        /// `call_id: String`); a malformed item without it is skipped at the
+        /// SSE-event boundary rather than producing an unaddressable call.
+        call_id: String,
         name: Option<String>,
         input: Option<String>,
     },
@@ -75,6 +84,11 @@ pub enum ResponseOutputItem {
     Reasoning {
         id: Option<String>,
         summary: Option<Vec<ReasoningSummaryItem>>,
+        /// Raw reasoning text (the `content` channel), distinct from the
+        /// condensed `summary`. Present only on models/configs that stream
+        /// `response.reasoning_text.*`. Display-only — never re-sent.
+        #[serde(default)]
+        content: Option<Vec<ReasoningContentItem>>,
         encrypted_content: Option<Value>,
     },
     #[serde(rename = "computer_call")]
@@ -234,6 +248,14 @@ pub struct ReasoningSummaryItem {
     pub text: Option<String>,
 }
 
+/// One raw reasoning `content` entry (the `reasoning_text` channel).
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReasoningContentItem {
+    #[serde(rename = "type")]
+    pub item_type: Option<String>,
+    pub text: Option<String>,
+}
+
 // --- Streaming event types ---
 
 /// A streaming event from the Responses API.
@@ -307,6 +329,10 @@ pub enum ResponsesStreamEvent {
     #[serde(rename = "response.custom_tool_call_input.delta")]
     CustomToolCallInputDelta {
         item_id: Option<String>,
+        // The wire also carries `call_id` here, but it's redundant: the active
+        // call is created (with its mandatory `call_id`) by `output_item.added`
+        // before any delta, so the delta only needs `item_id` to find it. The
+        // extra wire field is ignored.
         delta: Option<String>,
     },
 
@@ -319,7 +345,27 @@ pub enum ResponsesStreamEvent {
     #[serde(rename = "response.reasoning_summary_part.added")]
     ReasoningSummaryPartAdded {
         item_id: Option<String>,
+        #[serde(default)]
+        summary_index: Option<u64>,
         part: Option<Value>,
+    },
+
+    #[serde(rename = "response.reasoning_text.delta")]
+    ReasoningTextDelta {
+        item_id: Option<String>,
+        /// Wire ordinal; deserialized for completeness, not consumed here.
+        #[serde(default)]
+        content_index: Option<u64>,
+        delta: Option<String>,
+    },
+
+    #[serde(rename = "response.reasoning_text.done")]
+    ReasoningTextDone {
+        item_id: Option<String>,
+        /// Wire ordinal; deserialized for completeness, not consumed here.
+        #[serde(default)]
+        content_index: Option<u64>,
+        text: Option<String>,
     },
 
     #[serde(rename = "response.reasoning_summary_text.delta")]

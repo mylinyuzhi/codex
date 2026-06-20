@@ -14,6 +14,7 @@ fn make_config() -> Arc<OpenAIConfig> {
         client: None,
         full_url: None,
         chatgpt_subscription: false,
+        reasoning_store: Default::default(),
     })
 }
 
@@ -158,6 +159,88 @@ fn get_args_reasoning_model() {
     assert_eq!(body["max_output_tokens"], 100);
     // Temperature should be omitted for reasoning models
     assert!(body.get("temperature").is_none());
+}
+
+fn make_config_with_store(policy: ResponsesStorePolicy) -> Arc<OpenAIConfig> {
+    Arc::new(OpenAIConfig {
+        provider: "openai.responses".into(),
+        base_url: "https://api.openai.com/v1".into(),
+        headers: Arc::new(|| {
+            let mut h = std::collections::HashMap::new();
+            h.insert("Authorization".into(), "Bearer test".into());
+            h
+        }),
+        client: None,
+        full_url: None,
+        chatgpt_subscription: false,
+        reasoning_store: policy,
+    })
+}
+
+fn reasoning_user_options() -> LanguageModelV4CallOptions {
+    LanguageModelV4CallOptions {
+        prompt: vec![vercel_ai_provider::LanguageModelV4Message::User {
+            content: vec![vercel_ai_provider::UserContentPart::Text(
+                vercel_ai_provider::TextPart {
+                    text: "Hello".into(),
+                    provider_metadata: None,
+                },
+            )],
+            provider_options: None,
+        }],
+        ..Default::default()
+    }
+}
+
+#[test]
+fn reasoning_store_server_default_omits_store_and_include() {
+    // Default policy: plain API-key reasoning models keep server-side state —
+    // `store` is omitted and `reasoning.encrypted_content` is NOT requested.
+    let model = OpenAIResponsesLanguageModel::new(
+        "o3",
+        make_config_with_store(ResponsesStorePolicy::ServerDefault),
+    );
+    let (body, _) = model.get_args(&reasoning_user_options()).expect("get_args");
+    assert!(
+        body.get("store").is_none(),
+        "store omitted under ServerDefault"
+    );
+    let has_include = body
+        .get("include")
+        .and_then(|v| v.as_array())
+        .is_some_and(|a| a.iter().any(|e| e == "reasoning.encrypted_content"));
+    assert!(!has_include, "encrypted_content include not requested");
+}
+
+#[test]
+fn reasoning_store_stateless_forces_store_false_and_include() {
+    // Opt-in `stateless`: reasoning models go store=false and auto-include
+    // `reasoning.encrypted_content` so the chain round-trips.
+    let model = OpenAIResponsesLanguageModel::new(
+        "o3",
+        make_config_with_store(ResponsesStorePolicy::Stateless),
+    );
+    let (body, _) = model.get_args(&reasoning_user_options()).expect("get_args");
+    assert_eq!(body["store"], false, "store forced false under Stateless");
+    let has_include = body
+        .get("include")
+        .and_then(|v| v.as_array())
+        .is_some_and(|a| a.iter().any(|e| e == "reasoning.encrypted_content"));
+    assert!(has_include, "encrypted_content include requested");
+}
+
+#[test]
+fn reasoning_store_stateless_skipped_for_non_reasoning_model() {
+    // The policy only affects reasoning models; gpt-4o stays store-free.
+    let model = OpenAIResponsesLanguageModel::new(
+        "gpt-4o",
+        make_config_with_store(ResponsesStorePolicy::Stateless),
+    );
+    let (body, _) = model.get_args(&reasoning_user_options()).expect("get_args");
+    assert!(
+        body.get("store").is_none(),
+        "non-reasoning model unaffected"
+    );
 }
 
 // ─── parallel_tool_calls translation ─────────────────────────────
