@@ -1437,6 +1437,180 @@ async fn test_spawn_subagent_sync_detach_keeps_engine_running() {
     );
 }
 
+/// Parent-turn interrupt propagation (TS shared-`AbortController` parity):
+/// when the parent turn is aborted (e.g. user ESC) while a **foreground**
+/// subagent's engine is still running and it has NOT detached, the child
+/// engine is cancelled too — instead of running to completion detached and
+/// desyncing the subagent panel. Asserts the spawn returns (does not hang)
+/// even though the engine's `release` gate is never fired, and that the
+/// terminal route is `complete_silent` (cancelled), never `mark_completed`.
+#[cfg(not(windows))]
+#[tokio::test]
+async fn test_spawn_subagent_parent_abort_cancels_foreground() {
+    use async_trait::async_trait;
+    use coco_tool_runtime::AgentCompletionPayload;
+    use coco_tool_runtime::AgentQueryConfig;
+    use coco_tool_runtime::AgentQueryEngine;
+    use coco_tool_runtime::AgentQueryResult;
+    use coco_tool_runtime::TurnAbortController;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
+
+    struct MockRegistry {
+        complete_silent_called: Arc<AtomicBool>,
+        mark_completed_called: Arc<AtomicBool>,
+        finished: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait]
+    impl coco_tool_runtime::TaskHandle for MockRegistry {
+        async fn register_agent_task(
+            &self,
+            _description: &str,
+            _tool_use_id: Option<&str>,
+            _invoking_agent_id: Option<&str>,
+            _cancel: tokio_util::sync::CancellationToken,
+            _registration: coco_tool_runtime::AgentRegistration,
+        ) -> String {
+            "a0123456789abcdef".to_string()
+        }
+        async fn register_agent_task_with_id(
+            &self,
+            task_id: String,
+            _description: &str,
+            _tool_use_id: Option<&str>,
+            _invoking_agent_id: Option<&str>,
+            _cancel: tokio_util::sync::CancellationToken,
+            _registration: coco_tool_runtime::AgentRegistration,
+        ) -> String {
+            task_id
+        }
+        async fn append_output(&self, _: &str, _: &str) {}
+        async fn set_progress_summary(&self, _: &str, _: String) {}
+        async fn set_progress(&self, _: &str, _: coco_types::TaskProgress) {}
+        async fn mark_completed(&self, _: &str, _: AgentCompletionPayload) {
+            self.mark_completed_called.store(true, Ordering::SeqCst);
+            self.finished.notify_one();
+        }
+        async fn mark_failed(&self, _: &str, _: &str) {
+            self.finished.notify_one();
+        }
+        async fn complete_silent(&self, _: &str, _: bool) {
+            self.complete_silent_called.store(true, Ordering::SeqCst);
+            self.finished.notify_one();
+        }
+        async fn read_output(&self, _: &str) -> String {
+            String::new()
+        }
+        async fn task_state(&self, _: &str) -> Option<coco_types::TaskStateBase> {
+            None
+        }
+        async fn is_terminal(&self, _: &str) -> bool {
+            false
+        }
+        async fn register_dream_task(
+            &self,
+            _description: &str,
+            _cancel: tokio_util::sync::CancellationToken,
+        ) -> String {
+            "d_unused".into()
+        }
+        // No detach handle: the inline caller simply awaits the engine
+        // outcome, isolating the parent-abort path from the detach race.
+        async fn detach_handle(&self, _: &str) -> Option<Arc<tokio::sync::Notify>> {
+            None
+        }
+    }
+
+    // Engine that blocks forever until `release` fires — which the test
+    // never does, so the only way the spawn can return is the cancel race.
+    struct GatedEngine {
+        release: Arc<tokio::sync::Notify>,
+    }
+    #[async_trait]
+    impl AgentQueryEngine for GatedEngine {
+        async fn execute_query(
+            &self,
+            _prompt: &str,
+            _config: AgentQueryConfig,
+        ) -> Result<AgentQueryResult, coco_error::BoxedError> {
+            self.release.notified().await;
+            Ok(AgentQueryResult {
+                usage: Default::default(),
+                cost_usd: 0.0,
+                response_text: Some("should never complete".into()),
+                messages: Vec::new(),
+                turns: 1,
+                input_tokens: 0,
+                output_tokens: 0,
+                tool_use_count: 0,
+                cancelled: false,
+            })
+        }
+    }
+
+    let release = Arc::new(tokio::sync::Notify::new());
+    let finished = Arc::new(tokio::sync::Notify::new());
+    let complete_silent_called = Arc::new(AtomicBool::new(false));
+    let mark_completed_called = Arc::new(AtomicBool::new(false));
+    let registry = Arc::new(MockRegistry {
+        complete_silent_called: complete_silent_called.clone(),
+        mark_completed_called: mark_completed_called.clone(),
+        finished: finished.clone(),
+    });
+
+    let mut handle = create_test_handle_with_registry(
+        registry.clone() as coco_tool_runtime::AgentTaskRegistryRef
+    );
+    handle.set_execution_engine(Arc::new(GatedEngine {
+        release: release.clone(),
+    }));
+
+    // The parent turn's abort controller — threaded into the request the
+    // way `AgentTool::execute` threads `ctx.abort.turn_signal()`.
+    let parent_abort = TurnAbortController::new();
+    let request = AgentSpawnRequest {
+        prompt: "long work".into(),
+        subagent_type: Some("general-purpose".into()),
+        session_id: "test-session".into(),
+        parent_turn_abort: Some(parent_abort.signal()),
+        ..Default::default()
+    };
+
+    let handle_arc = Arc::new(handle);
+    let handle_clone = handle_arc.clone();
+    let spawn_handle = tokio::spawn(async move { handle_clone.spawn_agent(request).await });
+
+    // Let the spawn reach the engine race, then interrupt the parent turn.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    parent_abort.abort(coco_types::TurnAbortReason::UserCancel);
+
+    // Spawn must return without the engine ever being released.
+    let response = tokio::time::timeout(std::time::Duration::from_secs(2), spawn_handle)
+        .await
+        .expect("spawn must return within 2s after parent abort")
+        .expect("join")
+        .expect("spawn must succeed");
+    assert_eq!(
+        response.status,
+        AgentSpawnStatus::Failed,
+        "parent abort must cancel the foreground subagent (Failed), got {:?}",
+        response.status
+    );
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), finished.notified())
+        .await
+        .expect("engine task must finalize after cancel");
+    assert!(
+        complete_silent_called.load(Ordering::SeqCst),
+        "cancelled foreground agent must route through complete_silent"
+    );
+    assert!(
+        !mark_completed_called.load(Ordering::SeqCst),
+        "a cancelled agent must NOT report mark_completed"
+    );
+}
+
 #[tokio::test]
 async fn test_spawn_subagent_async() {
     // P2': background spawns now actually drive the engine in a

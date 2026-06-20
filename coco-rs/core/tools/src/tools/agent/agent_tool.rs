@@ -1031,6 +1031,11 @@ impl Tool for AgentTool {
             // `<tool-use-id>` tag was missing.
             tool_use_id: ctx.tool_use_id.clone(),
             invoking_agent_id: ctx.agent_id.as_ref().map(|a| a.as_str().to_string()),
+            // Thread the parent turn's abort signal so a foreground subagent
+            // is cancelled when the user interrupts the turn (e.g. ESC),
+            // instead of running to completion detached. See the field doc
+            // on `AgentSpawnRequest`.
+            parent_turn_abort: Some(ctx.abort.turn_signal()),
         };
 
         let request_description = request.description.clone();
