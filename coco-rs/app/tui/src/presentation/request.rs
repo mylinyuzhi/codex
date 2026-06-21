@@ -605,6 +605,13 @@ fn submit_review_text(q: &QuestionPromptState) -> String {
     out
 }
 
+/// Loose upper bound (unwrapped line count) of a permission prompt's
+/// scrollable detail body, used to bound the scroll offset in the update
+/// handler. The render pass applies the exact clamp against the wrapped height.
+pub(crate) fn permission_body_line_count(p: &PermissionPromptState) -> usize {
+    permission_detail_for_prompt(p).lines().count()
+}
+
 fn permission_detail_for_prompt(p: &PermissionPromptState) -> String {
     if matches!(p.detail, PermissionDetail::Generic { .. }) {
         return p.display_input.as_display_str().to_string();

@@ -548,7 +548,7 @@ async fn session_start_persists_permission_mode_to_session_state() {
     );
     let app_state = session.app_state.read().await;
     assert_eq!(
-        app_state.permission_mode,
+        app_state.permissions.mode,
         Some(coco_types::PermissionMode::Auto),
         "session/start permission_mode must seed live ToolAppState"
     );
@@ -1156,12 +1156,12 @@ async fn set_permission_mode_updates_session_field() {
     // field was written (dead API, no reader).
     let app_state_guard = session.app_state.read().await;
     assert_eq!(
-        app_state_guard.permission_mode,
+        app_state_guard.permissions.mode,
         Some(coco_types::PermissionMode::Plan),
         "control/setPermissionMode must write app_state.permission_mode"
     );
     assert_eq!(
-        app_state_guard.pre_plan_mode,
+        app_state_guard.permissions.pre_plan_mode,
         Some(coco_types::PermissionMode::Default),
         "external Plan entry must stash the previous mode"
     );
@@ -1240,7 +1240,7 @@ async fn set_permission_mode_rejects_bypass_without_capability() {
     let app_state_guard = session.app_state.read().await;
     assert!(
         !matches!(
-            app_state_guard.permission_mode,
+            app_state_guard.permissions.mode,
             Some(coco_types::PermissionMode::BypassPermissions)
         ),
         "rejected request must not write app_state.permission_mode"
@@ -1317,8 +1317,9 @@ async fn set_permission_mode_auto_to_default_clears_stripped_rules() {
         let slot = state.session.read().await;
         let session = slot.as_ref().unwrap();
         let mut guard = session.app_state.write().await;
-        guard.permission_mode = Some(coco_types::PermissionMode::Auto);
-        guard.stripped_dangerous_rules = Some(coco_types::PermissionRulesBySource::default());
+        guard.permissions.mode = Some(coco_types::PermissionMode::Auto);
+        guard.permissions.stripped_dangerous_rules =
+            Some(coco_types::PermissionRulesBySource::default());
     }
 
     // Cycle Auto → Default.
@@ -1336,11 +1337,11 @@ async fn set_permission_mode_auto_to_default_clears_stripped_rules() {
     let session = slot.as_ref().unwrap();
     let guard = session.app_state.read().await;
     assert_eq!(
-        guard.permission_mode,
+        guard.permissions.mode,
         Some(coco_types::PermissionMode::Default)
     );
     assert!(
-        guard.stripped_dangerous_rules.is_none(),
+        guard.permissions.stripped_dangerous_rules.is_none(),
         "Auto→Default must clear stripped_dangerous_rules stash"
     );
 

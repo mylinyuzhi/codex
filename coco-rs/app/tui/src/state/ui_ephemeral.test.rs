@@ -149,3 +149,36 @@ fn helpers_reflect_turn_state() {
     assert_eq!(s.current_verb(), None);
     assert_eq!(s.turn_started_at(), None);
 }
+
+#[test]
+fn mark_interrupting_is_noop_without_a_turn() {
+    let mut s = UiEphemeralState::new();
+    s.mark_interrupting();
+    assert!(!s.is_interrupting(), "no turn → nothing to interrupt");
+}
+
+#[test]
+fn mark_interrupting_flags_running_turn_and_clears_on_end() {
+    let t0 = Instant::now();
+    let mut s = UiEphemeralState::new();
+
+    s.start_turn("Pondering", t0);
+    assert!(!s.is_interrupting(), "fresh turn is not interrupting");
+
+    s.mark_interrupting();
+    assert!(s.is_interrupting());
+    // Idempotent: a second Esc/Ctrl+C must not regress the flag.
+    s.mark_interrupting();
+    assert!(s.is_interrupting());
+    // The verb itself is untouched — the renderer substitutes the
+    // "Interrupting…" label; the sampled verb stays for any fallback.
+    assert_eq!(s.current_verb(), Some("Pondering"));
+
+    // Terminal event takes the whole RunningTurn, so the flag is gone.
+    s.end_turn();
+    assert!(!s.is_interrupting(), "end_turn clears the interrupt flag");
+
+    // A subsequent turn starts clean.
+    s.start_turn("Pondering", t0);
+    assert!(!s.is_interrupting(), "next turn must not inherit the flag");
+}

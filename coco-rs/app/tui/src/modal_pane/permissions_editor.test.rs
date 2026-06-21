@@ -68,6 +68,45 @@ fn submit_on_editable_rule_opens_delete_confirm() {
     assert!(matches!(confirm.target, DeleteTarget::Rule(_)));
 }
 
+#[test]
+fn route_paste_inserts_into_add_form_on_input_step() {
+    let mut state = state_with_editor();
+    on_submit(&mut state); // open the add form (starts on Input step)
+
+    // Multi-line clipboard: newlines/tabs are stripped so the rule stays on
+    // one physical line.
+    assert!(route_paste(&mut state, "Bash(git\t*)\n"));
+
+    let form = editor(&state).add_form.as_ref().unwrap();
+    assert_eq!(form.input.text, "Bash(git*)");
+    assert_eq!(form.error, None);
+}
+
+#[tokio::test]
+async fn route_paste_ignored_off_input_step() {
+    let mut state = state_with_editor();
+    assert!(
+        !route_paste(&mut state, "x"),
+        "no add form open ⇒ paste must not be consumed"
+    );
+
+    // Advance to the destination step, where there is no text field.
+    on_submit(&mut state);
+    for c in "Bash(ls)".chars() {
+        add_form_input_char(&mut state, c);
+    }
+    let (tx, _rx) = mpsc::channel(4);
+    add_form_advance(&mut state, &tx).await;
+    assert_eq!(
+        editor(&state).add_form.as_ref().map(|f| f.step),
+        Some(AddStep::Destination)
+    );
+    assert!(
+        !route_paste(&mut state, "leak"),
+        "destination step has no text field ⇒ paste must not be consumed"
+    );
+}
+
 #[tokio::test]
 async fn add_rule_flow_emits_add_rules_update() {
     let mut state = state_with_editor();

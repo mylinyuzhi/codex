@@ -474,3 +474,33 @@ fn exit_plan_pending_live_tail_has_no_busy_spinner() {
     assert!(!text.to_lowercase().contains("processing"), "{text}");
     assert!(text.contains("Ready to code?"), "{text}");
 }
+
+fn lines_of(text: &str) -> Vec<Line<'static>> {
+    text.lines().map(|l| Line::from(l.to_string())).collect()
+}
+
+#[test]
+fn split_body_and_actions_pins_trailing_block_after_last_blank() {
+    // command body, blank separator, then two action rows.
+    let lines = lines_of("$ run\nmore detail\n\nApprove\nDeny");
+    let (body, actions) = split_body_and_actions(lines);
+    // Body keeps the blank separator as its trailing row (layout parity).
+    let body_text: Vec<String> = body
+        .iter()
+        .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+        .collect();
+    let action_text: Vec<String> = actions
+        .iter()
+        .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+        .collect();
+    assert_eq!(body_text, vec!["$ run", "more detail", ""]);
+    assert_eq!(action_text, vec!["Approve", "Deny"]);
+}
+
+#[test]
+fn split_body_and_actions_no_blank_is_all_body() {
+    let lines = lines_of("$ run\nmore detail");
+    let (body, actions) = split_body_and_actions(lines);
+    assert_eq!(body.len(), 2);
+    assert!(actions.is_empty());
+}

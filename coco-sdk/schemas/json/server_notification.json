@@ -3817,6 +3817,11 @@
           "description": "Engine-injected \"implement the approved plan\" seed after a\nclear-context plan exit. Carries the full plan text for the model,\nbut the TUI renders it as a compact chip instead of echoing the\nwhole plan as a `❯` input wall.",
           "type": "string",
           "const": "plan_implementation"
+        },
+        {
+          "description": "User text typed while a turn was in flight (steering), drained from\nthe command queue at a turn boundary. Mirrors TS: the message body is\nthe **raw** user text (fully visible + counted in the transcript);\nthe model-facing \"The user sent a new message while you were working…\"\nframing is applied only at prompt-build time (`app/query`), never\nstored on the message. See `coco_query::helpers::wrap_steering_messages_for_api`.",
+          "type": "string",
+          "const": "queued_steering"
         }
       ]
     },

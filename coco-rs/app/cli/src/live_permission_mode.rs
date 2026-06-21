@@ -27,7 +27,7 @@ pub async fn apply_to_app_state(
     live_allow_rules: &PermissionRulesBySource,
 ) -> LivePermissionModeChange {
     let mut guard = app_state.write().await;
-    let previous = guard.permission_mode.unwrap_or(fallback_mode);
+    let previous = guard.permissions.mode.unwrap_or(fallback_mode);
     let changed = coco_permissions::apply_permission_mode_transition_to_app_state(
         &mut guard,
         previous,
@@ -43,26 +43,24 @@ pub async fn apply_to_runtime(
     event_tx: &mpsc::Sender<CoreEvent>,
     bypass_available: bool,
 ) -> LivePermissionModeChange {
-    let cfg = runtime.current_engine_config().await;
+    let fallback_mode = runtime.current_engine_config().await.permission_mode;
     runtime
         .update_engine_config(move |cfg| cfg.permission_mode = mode)
         .await;
-    let change = apply_to_app_state(
-        &runtime.app_state,
-        cfg.permission_mode,
-        mode,
-        &cfg.allow_rules,
-    )
-    .await;
+    // The dangerous-rule snapshot the transition strips must come from the LIVE
+    // allow rules (the single base the factory reads), not the now-dead config
+    // maps. Read them off the shared `ToolAppState.permissions` base.
+    let live_allow_rules = runtime
+        .app_state
+        .read()
+        .await
+        .permissions
+        .allow_rules
+        .clone();
+    let change =
+        apply_to_app_state(&runtime.app_state, fallback_mode, mode, &live_allow_rules).await;
     publish_core_if_changed(event_tx, mode, bypass_available, change.changed).await;
     change
-}
-
-pub async fn live_allow_rules_from_sdk_state(state: &SdkServerState) -> PermissionRulesBySource {
-    match state.session_runtime.read().await.as_ref() {
-        Some(rt) => rt.current_engine_config().await.allow_rules,
-        None => PermissionRulesBySource::new(),
-    }
 }
 
 pub fn sdk_bypass_available(state: &SdkServerState) -> bool {

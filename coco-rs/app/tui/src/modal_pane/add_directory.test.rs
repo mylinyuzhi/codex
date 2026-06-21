@@ -77,6 +77,30 @@ async fn typing_appends_and_clears_stale_error() {
     assert_eq!(error_text(&state), None);
 }
 
+#[test]
+fn route_paste_inserts_into_modal_and_strips_control_chars() {
+    let mut state = open_state();
+    if let Some(ModalState::AddDirectory(s)) = state.ui.modal.as_mut() {
+        s.error = Some("stale".to_string());
+    }
+
+    // Multi-line clipboard: newlines/tabs are stripped so the path stays on
+    // one physical line; the rest lands in the modal's own input field.
+    assert!(route_paste(&mut state, "/tmp/a\n/tmp/b"));
+
+    assert_eq!(input_text(&state).as_deref(), Some("/tmp/a/tmp/b"));
+    assert_eq!(error_text(&state), None, "paste clears stale error");
+}
+
+#[test]
+fn route_paste_ignored_when_modal_absent() {
+    let mut state = AppState::new();
+    assert!(
+        !route_paste(&mut state, "/tmp"),
+        "paste must not be consumed when the /add-dir modal is closed"
+    );
+}
+
 #[tokio::test]
 async fn submit_empty_sets_error_and_keeps_open() {
     let _locale = crate::i18n::locale_test_guard("en");

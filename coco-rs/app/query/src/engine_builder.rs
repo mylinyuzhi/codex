@@ -67,8 +67,10 @@ impl QueryEngine {
         // the handle the executor uses to fold tool-emitted updates.
         // See `engine_live_rules` for lifetime + subagent-isolation
         // rationale.
+        // Pre-seed per-engine isolated Command-source rules a subagent/skill
+        // carries (config.initial_command_rules). Empty for the main session.
         let live_command_rules: Arc<RwLock<Vec<coco_types::PermissionRule>>> =
-            Arc::new(RwLock::new(Vec::new()));
+            Arc::new(RwLock::new(config.initial_command_rules.clone()));
         let permission_rule_handle: coco_tool_runtime::PermissionRuleHandleRef = Arc::new(
             crate::engine_live_rules::EngineLiveRulesHandle::new(live_command_rules.clone()),
         );
@@ -901,9 +903,9 @@ impl QueryEngine {
         // write — subsequent runs that reuse the same app_state see
         // the preserved value rather than an overwrite.
         if let Ok(mut guard) = app_state.try_write()
-            && guard.permission_mode.is_none()
+            && guard.permissions.mode.is_none()
         {
-            guard.permission_mode = Some(self.config.permission_mode);
+            guard.permissions.mode = Some(self.config.permission_mode);
         }
         self.app_state = Some(app_state);
         self

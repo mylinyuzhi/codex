@@ -596,10 +596,22 @@ fn test_enter_submits() {
 }
 
 #[test]
-fn test_enter_queues_during_streaming() {
+fn test_enter_steers_during_active_turn_over_suggestion() {
+    // While a turn is in flight — its whole lifecycle, not just the token
+    // stream — Enter must route to SubmitInput so update.rs can queue/steer.
+    // Even a visible prompt suggestion must not hijack it. The gate is
+    // `turn_active()` (TS `queryGuard.isActive`), NOT `is_streaming()`: here the
+    // turn is active but not streaming, and a suggestion is visible, so a
+    // regression to the streaming-only gate would yield SubmitPromptSuggestion.
     let mut state = AppState::new();
-    state.ui.input.textarea.insert_str("h");
-    state.ui.streaming = Some(crate::state::ui::StreamingState::new());
+    state.session.prompt_suggestions = vec!["Run tests".into()];
+    state
+        .ui
+        .ephemeral
+        .start_turn("Working", std::time::Instant::now());
+    assert!(!state.is_streaming());
+    assert!(super::prompt_suggestion_visible(&state));
+
     let cmd = map_key(&state, press(KeyCode::Enter));
     assert!(matches!(cmd, Some(TuiCommand::SubmitInput)));
 }

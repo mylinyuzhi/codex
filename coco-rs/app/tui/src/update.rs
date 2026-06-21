@@ -340,7 +340,14 @@ pub async fn handle_command(
 
         // ── Input actions ──
         TuiCommand::SubmitInput => {
-            if state.is_streaming() {
+            // Steer (queue) whenever a turn is in flight — the whole turn,
+            // not just the token-stream window. Mirrors TS, which gates on
+            // `queryGuard.isActive` (active for the entire query lifecycle,
+            // including tool / subagent execution). Gating on `is_streaming()`
+            // here would treat a submit during the post-stream tool/subagent
+            // phase as a fresh turn, hard-preempting (`SystemPreempt`) instead
+            // of steering.
+            if state.ui.ephemeral.turn_active() {
                 let handled = queue_current_input(state, command_tx).await;
                 if state.session.has_submit_interruptible_tool_in_progress {
                     let _ = command_tx
@@ -429,6 +436,11 @@ pub async fn handle_command(
                 && (state.is_streaming() || state.session.is_busy())
             {
                 state.ui.esc_tracker.reset();
+                // Flip the spinner verb to "Interrupting…" on this frame —
+                // the abort propagates async and the turn only clears on
+                // the engine's terminal event, which can be seconds away
+                // for worktree-isolated subagents.
+                state.ui.ephemeral.mark_interrupting();
                 let _ = command_tx
                     .send(UserCommand::Interrupt(TurnAbortReason::UserCancel))
                     .await;
@@ -739,7 +751,7 @@ pub async fn handle_command(
             }
             true
         }
-        TuiCommand::AgentSwitcherNav(delta) => {
+        TuiCommand::AgentSwitcherNav(_) => {
             // Reached only when the switcher isn't focused yet (the focus
             // intercept above consumes it once focused). Shift+↑/↓ parks focus
             // on the switcher — but only when there are agents to switch
@@ -749,7 +761,12 @@ pub async fn handle_command(
             let count = state.session.switcher_agents().len();
             if count > 0 && !state.ui.coordinator_mode_active {
                 state.ui.focus = FocusTarget::AgentSwitcher;
-                state.ui.agent_switcher_selected = if delta < 0 { count - 1 } else { 0 };
+                // First press just parks focus on the switcher and lands on the
+                // first agent — there is no synthetic `◯ main`/leader row to
+                // step off (unlike TS `stepTeammateSelection`, which parks on
+                // the leader), so entry must select a real agent. Direction is
+                // ignored on entry; once focused, `↑/↓` step from index 0.
+                state.ui.agent_switcher_selected = 0;
             }
             true
         }
@@ -861,6 +878,22 @@ pub async fn handle_command(
         }
         TuiCommand::SurfaceConfirm => {
             interaction::confirm(state, command_tx).await;
+            true
+        }
+        TuiCommand::PermissionScrollUp => {
+            let max = permission_body_scroll_bound(state);
+            state
+                .ui
+                .interaction
+                .scroll_permission(-constants::SCROLL_PAGE_STEP, max);
+            true
+        }
+        TuiCommand::PermissionScrollDown => {
+            let max = permission_body_scroll_bound(state);
+            state
+                .ui
+                .interaction
+                .scroll_permission(constants::SCROLL_PAGE_STEP, max);
             true
         }
         TuiCommand::CopyPickerWriteToFile => {
@@ -1179,6 +1212,19 @@ pub async fn handle_command(
     changed
 }
 
+/// Loose upper bound for the active permission prompt's body scroll offset.
+/// The render pass clamps precisely against the wrapped body height; this only
+/// keeps the raw counter from running away on repeated `PageDown`.
+fn permission_body_scroll_bound(state: &AppState) -> u16 {
+    match state.ui.interaction.active_prompt.as_ref() {
+        Some(crate::state::PanePromptState::Permission(p)) => {
+            let lines = crate::presentation::request::permission_body_line_count(p);
+            u16::try_from(lines.saturating_mul(2)).unwrap_or(u16::MAX)
+        }
+        _ => 0,
+    }
+}
+
 fn accept_prompt_suggestion(state: &mut AppState) -> bool {
     if !state.ui.input.is_empty() || !state.session.queued_commands.is_empty() {
         return false;
@@ -1259,6 +1305,7 @@ async fn apply_exit_effect(
                 exit_case = "interrupt_active_turn",
                 "exit key interrupted active turn"
             );
+            state.ui.ephemeral.mark_interrupting();
             let _ = command_tx
                 .send(UserCommand::Interrupt(TurnAbortReason::UserCancel))
                 .await;

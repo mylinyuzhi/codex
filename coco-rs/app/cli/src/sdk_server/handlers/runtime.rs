@@ -103,8 +103,11 @@ pub(super) async fn handle_set_permission_mode(
     // Drop the session write lock before taking app_state's lock to
     // keep lock order consistent (session → app_state never inverted).
     drop(slot);
-    let live_allow_rules =
-        crate::live_permission_mode::live_allow_rules_from_sdk_state(&ctx.state).await;
+    // Provenance for the Auto-entry dangerous-rule strip must come from the
+    // SAME live base the transition writes — this session's `app_state` (the
+    // per-SessionHandle base the engine runs against), NOT the SessionRuntime
+    // base. Reading the session's own base keeps strip/restore coherent.
+    let live_allow_rules = app_state.read().await.permissions.allow_rules.clone();
     let change = crate::live_permission_mode::apply_to_app_state(
         &app_state,
         coco_types::PermissionMode::Default,

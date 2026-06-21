@@ -281,8 +281,14 @@ fn resolve_key(
         return (Some(TuiCommand::CopyPickerWriteToFile), "copy_picker");
     }
 
+    // A stale prompt suggestion must not claim Enter/Tab/Right while a turn is
+    // in flight — during a turn those keys belong to steering (Enter queues via
+    // SubmitInput). Suggestions are normally cleared on turn start, so this is a
+    // defensive guard; it mirrors TS, where the suggestion affordance is idle
+    // while `queryGuard.isActive`.
     if matches!(ctx, KeybindingContext::Chat)
         && key.modifiers == KeyModifiers::NONE
+        && !state.ui.ephemeral.turn_active()
         && prompt_suggestion_visible(state)
     {
         match key.code {
@@ -466,7 +472,11 @@ fn map_input_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-    let is_streaming = state.is_streaming();
+    // A turn is in flight for its whole lifecycle (stream + tool/subagent
+    // execution), mirroring TS `queryGuard.isActive`. While it is, Enter must
+    // route to `SubmitInput` (which queues/steers) rather than being claimed by
+    // the prompt-suggestion arm below.
+    let turn_active = state.ui.ephemeral.turn_active();
 
     match key.code {
         // Submit / queue — each match arm carries the structured `keymap`
@@ -475,7 +485,7 @@ fn map_input_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
         // all read from.
         // keymap = "input:newline"
         KeyCode::Enter if shift || alt => Some(TuiCommand::InsertNewline),
-        KeyCode::Enter if is_streaming => Some(TuiCommand::SubmitInput),
+        KeyCode::Enter if turn_active => Some(TuiCommand::SubmitInput),
         KeyCode::Enter if prompt_suggestion_visible(state) => {
             Some(TuiCommand::SubmitPromptSuggestion)
         }

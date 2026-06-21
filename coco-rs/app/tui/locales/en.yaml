@@ -48,6 +48,7 @@ status.background.shell_other: "%{count} shells"
 status.thinking_toggle_expand: "%{shortcut} to expand"
 status.thinking_toggle_collapse: "%{shortcut} to collapse"
 status.exit_prompt: "Press %{key} again to exit"
+status.interrupting: "Interrupting…"
 status.compacting: "compacting..."
 status.compacting_pre_hooks: "running PreCompact hooks..."
 status.compacting_post_hooks: "running PostCompact hooks..."
@@ -593,17 +594,13 @@ slash.permissions.usage_allow: "Usage: /permissions allow <tool>"
 slash.permissions.usage_deny: "Usage: /permissions deny <tool>"
 
 # Queue status widget
-queue_status.count: " ⋯ %{count} queued"
-queue_status.next_preview: " — next: %{preview}"
-queue_status.more: "  (+%{count} more)"
-queue_status.edit_hint: "  ↑ edit next"
+queue_status.more: "  ⋯ +%{count} more"
 
 # ─── Input widget ────────────────────────────────────────────
 input.title: "Input"
 input.title_bash_mode: "Bash Mode"
-input.title_queue: "Queue Input"
 input.placeholder: "Type a message..."
-input.placeholder_queued: "Press ↑ to edit queued messages"
+input.placeholder_queued: "Press up to edit queued messages"
 input.stash_label: "Stashed"
 
 # ─── Toast notifications ─────────────────────────────────────
@@ -729,7 +726,7 @@ permission_mode.bubble_desc: " — escalating to parent agent for permission dec
 # Unlike TS — which hides the indicator in the baseline mode — coco surfaces the
 # baseline as `ask` plus a shift+tab cycle hint, so the gesture is discoverable
 # from a fresh session.
-permission_mode.status.default: "ask"
+permission_mode.status.default: "ask mode on"
 permission_mode.status.cycle_hint: "shift+tab to cycle"
 permission_mode.status.accept_edits: "accept edits on"
 permission_mode.status.plan: "plan mode on"

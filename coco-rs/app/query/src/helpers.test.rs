@@ -116,3 +116,72 @@ async fn drain_command_queue_into_history_leaves_slash_commands_queued() {
         .expect("slash command should remain queued");
     assert_eq!(remaining.prompt, "  /compact foo");
 }
+
+// ── Steering: human queued commands become raw user messages; the
+// model-facing wrapper is applied only at prompt-build (mirrors TS).
+
+fn msg_text(m: &Message) -> String {
+    coco_messages::wrapping::extract_text_from_message(m)
+}
+
+#[test]
+fn queued_command_to_message_human_is_raw_user_message() {
+    let cmd =
+        QueuedCommand::new("plan it".into(), QueuePriority::Next).with_origin(QueueOrigin::Human);
+    let msg = queued_command_to_message(&cmd);
+    let Message::User(u) = &msg else {
+        panic!("human steering must be a User message, got {msg:?}");
+    };
+    assert_eq!(u.origin, Some(MessageOrigin::QueuedSteering));
+    let text = msg_text(&msg);
+    assert_eq!(text, "plan it");
+    assert!(
+        !text.contains("<system-reminder>"),
+        "history copy must be raw"
+    );
+}
+
+#[test]
+fn queued_command_to_message_none_origin_is_raw_user_message() {
+    // No explicit origin == human-typed; still a raw steering user message.
+    let cmd = QueuedCommand::new("hi".into(), QueuePriority::Next);
+    assert!(matches!(
+        queued_command_to_message(&cmd),
+        Message::User(u) if u.origin == Some(MessageOrigin::QueuedSteering)
+    ));
+}
+
+#[test]
+fn queued_command_to_message_coordinator_stays_model_only_attachment() {
+    let cmd = QueuedCommand::new("ping".into(), QueuePriority::Next)
+        .with_origin(QueueOrigin::Coordinator);
+    let msg = queued_command_to_message(&cmd);
+    let Message::Attachment(att) = &msg else {
+        panic!("coordinator must stay an attachment, got {msg:?}");
+    };
+    assert_eq!(att.kind, AttachmentKind::QueuedCommand);
+}
+
+#[test]
+fn wrap_steering_messages_for_api_wraps_only_steering() {
+    let steer = std::sync::Arc::new(queued_command_to_message(
+        &QueuedCommand::new("do the thing".into(), QueuePriority::Next)
+            .with_origin(QueueOrigin::Human),
+    ));
+    let normal = std::sync::Arc::new(coco_messages::create_user_message("regular input"));
+    let wrapped = wrap_steering_messages_for_api(&[steer, normal]);
+
+    let steer_text = msg_text(wrapped[0].as_ref());
+    assert!(
+        steer_text.contains("<system-reminder>")
+            && steer_text.contains("The user sent a new message while you were working:")
+            && steer_text.contains("do the thing"),
+        "steering message must be wrapped for the API: {steer_text}"
+    );
+
+    let normal_text = msg_text(wrapped[1].as_ref());
+    assert_eq!(
+        normal_text, "regular input",
+        "non-steering message must be left untouched"
+    );
+}

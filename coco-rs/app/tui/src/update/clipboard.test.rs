@@ -134,8 +134,9 @@ async fn paste_pill_round_trips_through_resolve_structured() {
     let prompt = format!("{} please analyze", state.ui.input.text());
     let resolved = state.ui.paste_manager.resolve_structured(&prompt);
 
-    // Pill is stripped from the prompt text, image bytes are extracted.
-    assert_eq!(resolved.text, "please analyze");
+    // The `[Image #N]` placeholder is kept inline (so the transcript can echo
+    // it); the image bytes are extracted into the separate content block.
+    assert_eq!(resolved.text, "[Image #1] please analyze");
     assert_eq!(resolved.images.len(), 1);
     assert_eq!(resolved.images[0].mime, "image/png");
     assert_eq!(resolved.images[0].bytes, png);

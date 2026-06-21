@@ -110,8 +110,8 @@ pub fn apply_auto_transition_to_app_state(
 ) -> bool {
     let from_auto = from == PermissionMode::Auto;
     let to_auto = to == PermissionMode::Auto;
-    if from_auto && !to_auto && guard.stripped_dangerous_rules.is_some() {
-        guard.stripped_dangerous_rules = None;
+    if from_auto && !to_auto && guard.permissions.stripped_dangerous_rules.is_some() {
+        guard.permissions.stripped_dangerous_rules = None;
         return true;
     }
     false
@@ -156,30 +156,30 @@ pub fn apply_permission_mode_transition_to_app_state(
     to: PermissionMode,
     live_allow_rules: &coco_types::PermissionRulesBySource,
 ) -> bool {
-    let before_permission_mode = guard.permission_mode;
-    let before_pre_plan_mode = guard.pre_plan_mode;
+    let before_permission_mode = guard.permissions.mode;
+    let before_pre_plan_mode = guard.permissions.pre_plan_mode;
     let before_needs_plan_exit = guard.needs_plan_mode_exit_attachment;
     let before_needs_auto_exit = guard.needs_auto_mode_exit_attachment;
     let before_has_exited = guard.has_exited_plan_mode;
     let before_plan_entry = guard.plan_mode_entry_ms;
-    let before_stripped = guard.stripped_dangerous_rules.is_some();
+    let before_stripped = guard.permissions.stripped_dangerous_rules.is_some();
 
     if from != to {
         if to == PermissionMode::Plan && from != PermissionMode::Plan {
-            guard.pre_plan_mode = Some(from);
+            guard.permissions.pre_plan_mode = Some(from);
             guard.needs_plan_mode_exit_attachment = false;
             guard.plan_mode_entry_ms = Some(current_epoch_ms());
         }
 
         if from == PermissionMode::Plan && to != PermissionMode::Plan {
-            let plan_used_auto = guard.pre_plan_mode == Some(PermissionMode::Auto)
-                || guard.stripped_dangerous_rules.is_some();
+            let plan_used_auto = guard.permissions.pre_plan_mode == Some(PermissionMode::Auto)
+                || guard.permissions.stripped_dangerous_rules.is_some();
             let restoring_to_auto = to == PermissionMode::Auto;
-            guard.pre_plan_mode = None;
+            guard.permissions.pre_plan_mode = None;
             guard.has_exited_plan_mode = true;
             guard.needs_plan_mode_exit_attachment = true;
             if plan_used_auto && !restoring_to_auto {
-                guard.stripped_dangerous_rules = None;
+                guard.permissions.stripped_dangerous_rules = None;
                 guard.needs_auto_mode_exit_attachment = true;
             }
         }
@@ -192,28 +192,28 @@ pub fn apply_permission_mode_transition_to_app_state(
     // `is_ant_user=false` is the external-user path.
     if to == PermissionMode::Auto
         && from != PermissionMode::Auto
-        && guard.stripped_dangerous_rules.is_none()
+        && guard.permissions.stripped_dangerous_rules.is_none()
     {
         let mut snapshot = live_allow_rules.clone();
         if let Some(stripped) = crate::dangerous_rules::strip_dangerous_allow_rules(
             &mut snapshot,
             /*is_ant_user*/ false,
         ) {
-            guard.stripped_dangerous_rules = Some(stripped);
+            guard.permissions.stripped_dangerous_rules = Some(stripped);
         }
     }
 
-    guard.permission_mode = Some(to);
+    guard.permissions.mode = Some(to);
     let auto_modified = apply_auto_transition_to_app_state(guard, from, to);
 
     auto_modified
-        || before_permission_mode != guard.permission_mode
-        || before_pre_plan_mode != guard.pre_plan_mode
+        || before_permission_mode != guard.permissions.mode
+        || before_pre_plan_mode != guard.permissions.pre_plan_mode
         || before_needs_plan_exit != guard.needs_plan_mode_exit_attachment
         || before_needs_auto_exit != guard.needs_auto_mode_exit_attachment
         || before_has_exited != guard.has_exited_plan_mode
         || before_plan_entry != guard.plan_mode_entry_ms
-        || before_stripped != guard.stripped_dangerous_rules.is_some()
+        || before_stripped != guard.permissions.stripped_dangerous_rules.is_some()
 }
 
 fn current_epoch_ms() -> i64 {

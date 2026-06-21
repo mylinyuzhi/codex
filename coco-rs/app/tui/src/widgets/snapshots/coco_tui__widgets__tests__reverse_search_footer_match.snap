@@ -10,4 +10,4 @@ expression: output
 ❯ git status                                                                    
 reverse-i-search: git  enter accept · esc cancel────────────────────────────────
  auto | ↑0 ↓0 · cache 0/0% | ctx -- | →0 ←0                                     
- ? ask · shift+tab to cycle
+ ⏯ ask mode on · shift+tab to cycle

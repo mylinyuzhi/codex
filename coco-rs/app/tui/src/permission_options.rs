@@ -200,6 +200,33 @@ pub(crate) fn local_allow_updates(p: &PermissionPromptState) -> Vec<coco_types::
             })
             .unwrap_or_default();
     }
+    // Directory-boundary ask (out-of-dir bash write/redirect): mirror the
+    // engine's `AddDirectories` suggestion to LocalSettings so "always allow"
+    // persists the working-dir grant — the only update that unblocks the path
+    // gate. `session_allow_updates` already maps the same suggestion to Session.
+    let dir_updates: Vec<_> = p
+        .permission_suggestions
+        .iter()
+        .filter_map(|suggestion| match suggestion {
+            coco_types::PermissionUpdate::AddDirectories { directories, .. }
+                if !directories.is_empty() =>
+            {
+                Some(coco_types::PermissionUpdate::AddDirectories {
+                    directories: directories.clone(),
+                    destination: coco_types::PermissionUpdateDestination::LocalSettings,
+                })
+            }
+            coco_types::PermissionUpdate::AddDirectories { .. }
+            | coco_types::PermissionUpdate::AddRules { .. }
+            | coco_types::PermissionUpdate::SetMode { .. }
+            | coco_types::PermissionUpdate::ReplaceRules { .. }
+            | coco_types::PermissionUpdate::RemoveRules { .. }
+            | coco_types::PermissionUpdate::RemoveDirectories { .. } => None,
+        })
+        .collect();
+    if !dir_updates.is_empty() {
+        return dir_updates;
+    }
     if let Some(update) = read_path_allow_update(
         &p.tool_name,
         p.original_input.as_ref(),

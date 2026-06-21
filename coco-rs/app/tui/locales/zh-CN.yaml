@@ -48,6 +48,7 @@ status.background.shell_other: "%{count} 个终端"
 status.thinking_toggle_expand: "%{shortcut} 展开"
 status.thinking_toggle_collapse: "%{shortcut} 收起"
 status.exit_prompt: "再按一次 %{key} 退出"
+status.interrupting: "正在中断…"
 status.compacting: "压缩中..."
 status.compacting_pre_hooks: "运行 PreCompact 钩子..."
 status.compacting_post_hooks: "运行 PostCompact 钩子..."
@@ -582,15 +583,11 @@ slash.permissions.usage_allow: "用法：/permissions allow <tool>"
 slash.permissions.usage_deny: "用法：/permissions deny <tool>"
 
 # 队列状态组件
-queue_status.count: " ⋯ %{count} 条排队"
-queue_status.next_preview: " — 下一条: %{preview}"
-queue_status.more: "  (还有 %{count} 条)"
-queue_status.edit_hint: "  ↑ 编辑下一条"
+queue_status.more: "  ⋯ 还有 %{count} 条"
 
 # ─── 输入框 ────────────────────────────────────────────────
 input.title: "输入"
 input.title_bash_mode: "Bash 模式"
-input.title_queue: "排队输入"
 input.placeholder: "输入消息..."
 input.placeholder_queued: "按 ↑ 编辑已排队的消息"
 input.stash_label: "已暂存"
@@ -710,7 +707,7 @@ permission_mode.bubble_desc: " — 升级到父级代理做权限决策。"
 # （`permissionModeTitle(mode).toLowerCase() + ' on'`）。与 TS 不同——TS 在基线
 # 模式下完全隐藏指示——coco 将基线显示为 `ask` 并附 shift+tab 切换提示，
 # 让该手势从新会话起即可被发现。
-permission_mode.status.default: "ask"
+permission_mode.status.default: "ask mode on"
 permission_mode.status.cycle_hint: "shift+tab 切换"
 permission_mode.status.accept_edits: "accept edits on"
 permission_mode.status.plan: "plan mode on"

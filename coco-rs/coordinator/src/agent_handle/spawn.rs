@@ -1643,6 +1643,37 @@ impl SwarmAgentHandle {
         let sync_start = start;
         let engine_for_task = engine.clone();
 
+        // Parent-turn interrupt propagation (TS shared-`AbortController`
+        // parity). A foreground subagent that has **not** detached is
+        // cancelled when the parent turn is aborted (e.g. user ESC);
+        // otherwise the detached engine task below would run to completion
+        // while the parent already recorded the `Agent(...)` tool call as
+        // interrupted — the desync that left the subagent panel stuck.
+        // Exemptions: background spawns (`run_in_background`) and agents that
+        // detach mid-run (`detached_flag`) are meant to outlive the turn.
+        // `spawn_complete` releases the linker on normal completion so it
+        // never outlives the engine task.
+        let spawn_complete = tokio_util::sync::CancellationToken::new();
+        if !request.run_in_background
+            && let Some(parent_abort) = request.parent_turn_abort.clone()
+            && let Some((_, task_cancel)) = sync_task.as_ref()
+        {
+            let task_cancel = task_cancel.clone();
+            let detached_flag_for_link = detached_flag.clone();
+            let spawn_complete_for_link = spawn_complete.clone();
+            tokio::spawn(async move {
+                tokio::select! {
+                    () = parent_abort.cancelled() => {
+                        if !detached_flag_for_link.load(std::sync::atomic::Ordering::SeqCst) {
+                            task_cancel.cancel();
+                        }
+                    }
+                    () = spawn_complete_for_link.cancelled() => {}
+                }
+            });
+        }
+        let spawn_complete_for_engine = spawn_complete.clone();
+
         tokio::spawn(async move {
             // ── Engine query (race against task cancel) ──────────
             let query_result = if let Some(c) = task_cancel_for_engine.as_ref() {
@@ -1869,6 +1900,9 @@ impl SwarmAgentHandle {
                 EngineOutcome::CompletedSync(Box::new(response))
             };
             let _ = resp_tx.send(outcome);
+            // Release the parent-abort linker (if any) — the engine task is
+            // done, so there is nothing left to cancel.
+            spawn_complete_for_engine.cancel();
         });
 
         // ── Inline caller: race resp_rx vs detach ────────────────

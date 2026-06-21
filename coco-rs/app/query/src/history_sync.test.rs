@@ -1,5 +1,6 @@
 use super::finalize_user_cancel;
 use super::history_push_and_emit;
+use super::is_steering_interrupt;
 use super::last_message_is_user_interruption;
 use coco_messages::Message;
 use coco_messages::MessageHistory;
@@ -14,6 +15,25 @@ use coco_types::ServerNotification;
 use pretty_assertions::assert_eq;
 use tokio::sync::mpsc;
 use uuid::Uuid;
+
+#[test]
+fn is_steering_interrupt_only_for_submit_interrupt() {
+    use coco_types::TurnAbortReason;
+    // Submit-interrupt (typed/queued input while tools ran) is steering — the
+    // queued message provides continuity, so the standalone marker is skipped.
+    assert!(is_steering_interrupt(Some(
+        TurnAbortReason::SubmitInterrupt
+    )));
+    // Every other reason is a hard cancel / preempt — keep the marker.
+    assert!(!is_steering_interrupt(Some(TurnAbortReason::UserCancel)));
+    assert!(!is_steering_interrupt(Some(TurnAbortReason::SystemPreempt)));
+    assert!(!is_steering_interrupt(Some(
+        TurnAbortReason::PermissionAbort
+    )));
+    assert!(!is_steering_interrupt(Some(TurnAbortReason::Background)));
+    // No reason recorded (e.g. bare-token cancel paths) → keep the marker.
+    assert!(!is_steering_interrupt(None));
+}
 
 #[tokio::test]
 async fn finalize_user_cancel_pushes_typed_marker_and_emits() {

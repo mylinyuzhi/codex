@@ -368,6 +368,35 @@ enum EnginePersistenceMode {
     Fork,
 }
 
+/// Build the live permission base (S1) for the main session's `ToolAppState`
+/// from the loaded rule maps + mode + dirs + source roots. This is the single
+/// seeding shape used at bootstrap, `/clear` re-seed, and the headless/SDK
+/// entry — so the live store (the TS `appState.toolPermissionContext` mirror,
+/// the ONLY permission source the factory reads each batch) always starts from
+/// the same source.
+pub(crate) fn live_permissions(
+    mode: PermissionMode,
+    allow_rules: coco_types::PermissionRulesBySource,
+    deny_rules: coco_types::PermissionRulesBySource,
+    ask_rules: coco_types::PermissionRulesBySource,
+    additional_dirs: std::collections::HashMap<String, coco_types::AdditionalWorkingDir>,
+    permission_rule_source_roots: std::collections::HashMap<
+        coco_types::PermissionRuleSource,
+        std::path::PathBuf,
+    >,
+) -> coco_types::LiveToolPermissionState {
+    coco_types::LiveToolPermissionState {
+        mode: Some(mode),
+        pre_plan_mode: None,
+        stripped_dangerous_rules: None,
+        allow_rules,
+        deny_rules,
+        ask_rules,
+        additional_dirs,
+        permission_rule_source_roots,
+    }
+}
+
 /// Construct a [`ThinkingLevel`] for an effort, threading the model's
 /// declared `supported_thinking_levels` budget when one is registered.
 /// Falls back to a budget-less level (`budget_tokens: None`) so the
@@ -610,6 +639,18 @@ pub struct SessionRuntime {
     /// `None` until the first engine is built; the inner `Option` is `None`
     /// until the first turn finalises (or after `/clear`).
     last_engine_cache_handle: Arc<RwLock<Option<CacheParamsHandle>>>,
+    /// Teammate-scoped live permission-rule overlay, injected onto every
+    /// main-session engine's `QueryEngineConfig.live_permission_rules` (which
+    /// `ToolContextFactory` merges each batch, post-derivation).
+    ///
+    /// Since the main-session permission base now lives in `ToolAppState`
+    /// (read-through + mutated by `apply_permission_updates_everywhere`), this
+    /// overlay is NO LONGER the main-session in-cycle mechanism. It survives as
+    /// the channel an in-process teammate uses for leader-pushed
+    /// `TeamPermissionUpdate` rules (cross-process teammates use the mailbox →
+    /// `runner_loop` `team_permission_rules` analog). Empty for a plain main
+    /// session.
+    live_permission_rules: Arc<RwLock<Vec<coco_types::PermissionRule>>>,
     /// Session-scoped abort token for the in-flight prompt-suggestion
     /// fork. When a new suggestion fork starts, we cancel the previous
     /// one so users rapidly cycling `/clear` don't accumulate fork tasks
@@ -1199,16 +1240,23 @@ impl SessionRuntime {
             coco_types::ActiveShellTool::Disabled => None,
         };
 
+        // Seed --add-dir + settings additionalDirectories into the session
+        // working-dir allowlist. Computed before the engine config since the
+        // rules + dirs now live ONLY on the live `ToolAppState.permissions`
+        // base (the config no longer carries them).
+        let session_additional_dirs = crate::permission_rule_loader::seed_session_additional_dirs(
+            cli,
+            &runtime_config.settings,
+            &cwd,
+        );
+
         // Build the engine config — owns most settings drawn from
         // RuntimeConfig + CLI overrides.
         let engine_config = QueryEngineConfig {
             model_id,
             permission_mode,
             bypass_permissions_available,
-            allow_rules,
-            deny_rules,
-            ask_rules,
-            permission_rule_source_roots,
+            permission_rule_source_roots: permission_rule_source_roots.clone(),
             context_window: 200_000,
             max_output_tokens: 16_384,
             // Interactive: unbounded unless the user set `loop.max_turns`;
@@ -1268,15 +1316,23 @@ impl SessionRuntime {
             skill_overrides: Arc::new(runtime_config.skill_overrides.clone()),
             tool_overrides: runtime_config.tool_overrides.clone(),
             include_hook_events: cli.include_hook_events,
-            // Seed --add-dir + settings additionalDirectories into the session
-            // working-dir allowlist.
-            session_additional_dirs: crate::permission_rule_loader::seed_session_additional_dirs(
-                cli,
-                &runtime_config.settings,
-                &cwd,
-            ),
             ..Default::default()
         };
+
+        // Seed the live permission base (S1). `ToolAppState` is the single
+        // live source of truth — the ONLY permission base the factory reads
+        // each batch. app_state is uncontended here (freshly created above,
+        // not yet shared with any engine). The rules + dirs flow from the
+        // locals loaded above, NOT from the config (which no longer carries
+        // them).
+        app_state.write().await.permissions = live_permissions(
+            permission_mode,
+            allow_rules,
+            deny_rules,
+            ask_rules,
+            session_additional_dirs,
+            permission_rule_source_roots,
+        );
 
         let auto_title_enabled = runtime_config.settings.merged.session.auto_title;
 
@@ -1436,6 +1492,7 @@ impl SessionRuntime {
             skill_bash_cell: Arc::new(std::sync::RwLock::new(None)),
             fork_dispatcher: Arc::new(RwLock::new(None)),
             last_engine_cache_handle: Arc::new(RwLock::new(None)),
+            live_permission_rules: Arc::new(RwLock::new(Vec::new())),
             current_suggestion_abort: Arc::new(tokio::sync::Mutex::new(None)),
             task_runtime: Arc::new(RwLock::new(None)),
             task_list: Arc::new(RwLock::new(None)),
@@ -2085,8 +2142,101 @@ impl SessionRuntime {
             .await
     }
 
+    /// The shared live permission-rule overlay (see field docs). Callers push
+    /// mid-cycle approvals / team-rule updates here; every main-session engine
+    /// reads it each tool batch.
+    pub fn live_permission_rules(&self) -> Arc<RwLock<Vec<coco_types::PermissionRule>>> {
+        self.live_permission_rules.clone()
+    }
+
+    /// Inject the live permission-rule overlay onto a main-session engine
+    /// config. The overlay is now teammate-only: teammate `team_permission_update`
+    /// rules never graduate into the live `ToolAppState.permissions` base, so
+    /// there is nothing to reconcile/dedup against — the previous base-dedup
+    /// step keyed off the now-deleted config rule maps and is gone.
+    ///
+    /// Called from every main-session build path (TUI `build_engine_with_turn_abort`
+    /// and SDK/headless `build_engine_from_config_with_persistence`) so the
+    /// in-cycle approval mechanism is uniform across transports. NOT called for
+    /// subagents/forks — they keep their own isolated config-cloned rules.
+    async fn prepare_live_permission_overlay(&self, config: &mut QueryEngineConfig) {
+        config.live_permission_rules = Some(self.live_permission_rules.clone());
+    }
+
+    /// Single source of truth for applying user-approved permission updates,
+    /// shared by every transport (TUI dialog, SDK approval reply, headless
+    /// permission-prompt tool). Lands the rules in both places they must
+    /// reach so in-cycle and cross-cycle behavior stays aligned:
+    ///
+    /// 1. the live `ToolAppState.permissions` base — the single authoritative
+    ///    source the factory reads each batch (shared by Arc with the in-flight
+    ///    engine + subagents/forks), so the approval is visible THIS cycle on
+    ///    the next batch (e.g. an `Edit(...)` grant then satisfies a same-cycle
+    ///    Read via the "edit access implies read" branch) AND across cycles;
+    /// 2. disk, for destinations that persist (User/Project/Local).
+    ///
+    /// This is coco-rs's analog of TS `applyPermissionUpdate` +
+    /// `setToolPermissionContext`.
+    pub async fn apply_permission_updates_everywhere(
+        &self,
+        updates: &[coco_types::PermissionUpdate],
+    ) {
+        if updates.is_empty() {
+            return;
+        }
+        // 1. Mutate the live shared base (`ToolAppState.permissions`) — the
+        // single authoritative source the factory reads each batch, shared by
+        // Arc with subagents/forks. This is both the in-cycle (the in-flight
+        // engine re-reads it next batch) and cross-cycle home for the rule. The
+        // Rust analog of TS `setToolPermissionContext(applyPermissionUpdate(...))`.
+        {
+            let mut guard = self.app_state.write().await;
+            coco_permissions::apply_permission_updates_to_live(&mut guard.permissions, updates);
+        }
+        // 2. Persist destinations that wire to a settings.json layer.
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let store = coco_permissions::SettingsPermissionStore::new(cwd);
+        use coco_permissions::permissions_store::PermissionStore;
+        for update in updates {
+            let Some(dest) = update.destination() else {
+                continue;
+            };
+            if !coco_permissions::permission_updates::supports_persistence(dest) {
+                continue;
+            }
+            if let Err(e) = store.persist_update(update) {
+                tracing::warn!(error = %e, "failed to persist permission update");
+            }
+        }
+        let applied: Vec<String> = updates
+            .iter()
+            .filter_map(|u| match u {
+                coco_types::PermissionUpdate::AddRules { rules, destination } => Some(
+                    rules
+                        .iter()
+                        .map(|r| {
+                            format!(
+                                "{destination:?}:{}({})",
+                                r.value.tool_pattern,
+                                r.value.rule_content.as_deref().unwrap_or("*")
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(","),
+                ),
+                _ => None,
+            })
+            .collect();
+        tracing::info!(
+            applied = ?applied,
+            "permission updates applied to live base (ToolAppState.permissions) + disk persist",
+        );
+    }
+
     pub async fn build_engine_with_turn_abort(&self, turn_abort: TurnAbortSignal) -> QueryEngine {
-        let engine_config = self.current_engine_config().await;
+        let mut engine_config = self.current_engine_config().await;
+        self.prepare_live_permission_overlay(&mut engine_config)
+            .await;
         let engine = QueryEngine::new_with_turn_abort(
             engine_config,
             self.model_runtimes.clone(),
@@ -2288,6 +2438,25 @@ impl SessionRuntime {
         app_state_override: Option<Arc<RwLock<ToolAppState>>>,
         persistence: EnginePersistenceMode,
     ) -> QueryEngine {
+        // Top-level SDK/headless session engines get the same live overlay as
+        // the TUI main engine so a mid-cycle approval takes effect this cycle.
+        // Gated to the main session (`MainSession` + no `agent_id`): subagents
+        // and forks keep their own isolated config-cloned rules — they must not
+        // share or reconcile the main session's overlay.
+        //
+        // `config` is owned and local — the `mut` is confined to this block so
+        // the rest of the function sees an immutable binding. The only shared
+        // state touched is the overlay Arc, serialized by its `RwLock` inside
+        // the helper; there is no cross-task sharing of `config` itself.
+        let config = if matches!(persistence, EnginePersistenceMode::MainSession)
+            && config.agent_id.is_none()
+        {
+            let mut config = config;
+            self.prepare_live_permission_overlay(&mut config).await;
+            config
+        } else {
+            config
+        };
         // Fork isolation for the file-read dedup cache: when a fork sets
         // `clone_file_read_state` (default true for every framework fork),
         // give the child a *deep clone* of the parent's `FileReadState`
@@ -2337,10 +2506,22 @@ impl SessionRuntime {
         let app_state = app_state_override.unwrap_or_else(|| self.app_state.clone());
         engine = engine.with_file_read_state(self.file_read_state.clone());
         engine = engine.with_app_state(app_state.clone());
-        let auto_active = app_state
+        // `auto_mode_state` is a SESSION-GLOBAL flag shared by every engine in
+        // this runtime. It is NO LONGER the classifier gate — that now reads the
+        // per-call `permission_context.mode` (see `tool_call_preparer`, TS
+        // parity), so a stale/raced flag can't suppress the classifier. The flag
+        // survives only for the Plan→Auto bridge, denial-streak reset, and TUI
+        // display. Sync it from the session's authoritative `self.app_state`
+        // (NOT the per-build `app_state` override): a fork/skill/compaction
+        // sub-engine carrying a non-Auto override would otherwise clobber it.
+        // Every build re-syncs from the single source, covering all mode-change
+        // funnels (TUI + SDK) uniformly without threading the flag through each.
+        let auto_active = self
+            .app_state
             .read()
             .await
-            .permission_mode
+            .permissions
+            .mode
             .is_some_and(|mode| mode == coco_types::PermissionMode::Auto);
         self.auto_mode_state.set_active(auto_active);
         // Build the classifier rules from settings (`auto_mode` is restricted
@@ -3207,6 +3388,14 @@ impl SessionRuntime {
         {
             *g = new_session_id.to_string();
         }
+        // Refresh `${SESSION_ID}` (and other session-scoped header-template
+        // vars) so templated provider headers re-expand against the new id and
+        // the affected clients rebuild. Without this, the model-runtime
+        // registry keeps the bootstrap id baked into every client and a
+        // `/clear` / `/resume` regen sends a stale session id to the gateway.
+        if let Err(e) = self.model_runtimes.update_session_id(new_session_id) {
+            warn!(error = %e, "failed to refresh model-runtime header vars after session-id change");
+        }
     }
 
     /// Clear cache-break tracking on every registry-owned runtime client.
@@ -3434,8 +3623,17 @@ impl SessionRuntime {
             warn!(error = %e, "SessionEnd hook execution failed during /clear");
         }
 
-        // Step 2: reset session caches.
-        *self.app_state.write().await = ToolAppState::default();
+        // Step 2: reset session caches. `/clear` clears the CONVERSATION, not
+        // the session's permission grants — preserve the current live
+        // permission base (mode + allow/deny/ask + dirs, incl. mid-session
+        // approvals and `/add-dir`) and reset only the plan-mode latches /
+        // todos / snapshots to Default.
+        {
+            let mut guard = self.app_state.write().await;
+            let preserved = std::mem::take(&mut guard.permissions);
+            *guard = ToolAppState::default();
+            guard.permissions = preserved;
+        }
         self.reset_cache_break_detectors().await;
         // Drop the captured post-turn cache-safe-params handle. Otherwise a
         // `/btw` issued between this `/clear` and the first post-clear turn

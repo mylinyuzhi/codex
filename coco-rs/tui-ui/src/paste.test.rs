@@ -43,12 +43,35 @@ fn test_paste_manager_numbering() {
 }
 
 #[test]
-fn test_resolve_structured_image_carries_bytes() {
+fn test_resolve_structured_image_keeps_pill_and_carries_bytes() {
     let mut mgr = PasteManager::new();
     let pill = mgr.add_image_data(vec![1, 2, 3], "image/png".to_string());
-    let resolved = mgr.resolve_structured(&format!("look {pill}"));
-    assert_eq!(resolved.text, "look");
+    let resolved = mgr.resolve_structured(&format!("{pill} what is this?"));
+    // The `[Image #N]` placeholder survives inline (mirrors TS); bytes ship
+    // separately for the image content block.
+    assert_eq!(resolved.text, "[Image #1] what is this?");
     assert_eq!(resolved.images.len(), 1);
     assert_eq!(resolved.images[0].bytes, vec![1, 2, 3]);
     assert_eq!(resolved.images[0].mime, "image/png");
+}
+
+#[test]
+fn test_resolve_structured_image_only_keeps_pill() {
+    let mut mgr = PasteManager::new();
+    let pill = mgr.add_image_data(vec![9], "image/jpeg".to_string());
+    let resolved = mgr.resolve_structured(&pill);
+    // An image-only submit is still non-empty, so it clears the submit guard.
+    assert_eq!(resolved.text, "[Image #1]");
+    assert_eq!(resolved.images.len(), 1);
+}
+
+#[test]
+fn test_resolve_structured_mixes_text_and_image_pills() {
+    let mut mgr = PasteManager::new();
+    let text_pill = mgr.add_text("BIG BLOCK".to_string());
+    let image_pill = mgr.add_image_data(vec![7], "image/png".to_string());
+    let resolved = mgr.resolve_structured(&format!("see {text_pill} and {image_pill}"));
+    // Text pill expands; image pill stays inline.
+    assert_eq!(resolved.text, "see BIG BLOCK and [Image #2]");
+    assert_eq!(resolved.images.len(), 1);
 }

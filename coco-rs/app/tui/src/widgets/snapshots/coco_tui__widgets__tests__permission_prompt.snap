@@ -6,9 +6,9 @@ expression: output
  │●│ │●│  opus-4  *  auto                                                       
  ╰─╯ ╰─╯                                                                        
                                                                                 
-┌ Bash [HIGH] ─────────────────────────────────────────────────────────────────┐
+┌ Bash [HIGH] — PgUp/PgDn ⇅────────────────────────────────────────────────────┐
 │Execute shell command                                                         │
-│...                                                                           │
+│                                                                              │
 │Actions:                                                                      │
 │▸ 1/y · Yes, approve once ◂                                                   │
 │  2/n · No, deny                                                              │

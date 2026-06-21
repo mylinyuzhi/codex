@@ -140,10 +140,18 @@ impl QueryEngine {
         self.apply_tool_result_budget_to_prompt(&mut messages_for_api)
             .await;
 
+        // Apply the model-facing steering wrapper to queued-steering user
+        // messages just before normalize (mirrors TS, which wraps queued
+        // commands only at API-serialization time). The stored history /
+        // `messages_snapshot` stays raw; only this API-bound view is wrapped,
+        // so the transcript keeps showing the user's plain text. CoW: only
+        // steering messages are rebuilt.
+        let api_messages = crate::helpers::wrap_steering_messages_for_api(&messages_for_api);
+
         // Normalize takes `&[M] where M: Borrow<Message>`; `Arc<Message>`
         // borrows directly so we hand the Arc-slice through without an
         // extra materialization at this seam.
-        let normalized = coco_messages::normalize_messages_for_api(&messages_for_api);
+        let normalized = coco_messages::normalize_messages_for_api(&api_messages);
         prompt.extend(normalized);
 
         BuiltPrompt {
@@ -424,17 +432,18 @@ impl QueryEngine {
         };
 
         let permission_mode = app_state
-            .permission_mode
+            .permissions
+            .mode
             .unwrap_or(self.config.permission_mode);
         let permission_context = coco_types::ToolPermissionContext {
             mode: permission_mode,
-            additional_dirs: self.config.session_additional_dirs.clone(),
+            additional_dirs: app_state.permissions.additional_dirs.clone(),
             allow_rules: std::collections::HashMap::new(),
             deny_rules: std::collections::HashMap::new(),
             ask_rules: std::collections::HashMap::new(),
             bypass_available: self.config.bypass_permissions_available,
-            pre_plan_mode: app_state.pre_plan_mode,
-            stripped_dangerous_rules: app_state.stripped_dangerous_rules.clone(),
+            pre_plan_mode: app_state.permissions.pre_plan_mode,
+            stripped_dangerous_rules: app_state.permissions.stripped_dangerous_rules.clone(),
             session_plan_file: None,
             permission_rule_source_roots: self.config.permission_rule_source_roots.clone(),
         };

@@ -371,6 +371,7 @@ class MessageOrigin(str, Enum):
     subagent_reply = 'subagent_reply'
     slash_command = 'slash_command'
     plan_implementation = 'plan_implementation'
+    queued_steering = 'queued_steering'
 
 class ModelRole(str, Enum):
     main = 'main'

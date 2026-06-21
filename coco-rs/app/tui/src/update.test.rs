@@ -125,6 +125,38 @@ async fn queue_input_of_slash_sends_queue_command() {
 }
 
 #[tokio::test]
+async fn submit_during_active_turn_steers_instead_of_preempting() {
+    // Regression: a turn is in flight (tools / subagents running) but the token
+    // stream has already ended, so `is_streaming()` is false. Pressing Enter
+    // must still STEER (queue into the running turn) rather than starting a
+    // fresh turn that hard-preempts the active one (`SystemPreempt`). The gate
+    // is `turn_active()`, mirroring TS `queryGuard.isActive`.
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("hello");
+    state
+        .ui
+        .input
+        .textarea
+        .set_cursor(state.ui.input.text().len());
+    // Turn active but NOT streaming — the post-stream tool/subagent phase.
+    state
+        .ui
+        .ephemeral
+        .start_turn("Working", std::time::Instant::now());
+    assert!(!state.is_streaming());
+    assert!(state.ui.ephemeral.turn_active());
+
+    let (tx, mut rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::SubmitInput, &tx).await;
+
+    match rx.try_recv() {
+        Ok(UserCommand::QueueCommand { prompt, .. }) => assert_eq!(prompt, "hello"),
+        other => panic!("expected QueueCommand (steering), got {other:?}"),
+    }
+    assert!(state.ui.input.is_empty(), "input should have been consumed");
+}
+
+#[tokio::test]
 async fn submit_slash_dispatches_typed_command_without_chat_echo() {
     let mut state = AppState::new();
     state.ui.input.textarea.set_text("/rewind last");
@@ -1049,6 +1081,11 @@ async fn queue_input_of_plain_text_still_queues() {
 async fn submit_input_while_streaming_without_interruptible_tool_queues() {
     let mut state = AppState::new();
     state.ui.streaming = Some(crate::state::StreamingState::default());
+    // Streaming implies an active turn; the steering gate reads `turn_active`.
+    state
+        .ui
+        .ephemeral
+        .start_turn("Working", std::time::Instant::now());
     state.ui.input.textarea.set_text("next turn prompt");
     state
         .ui
@@ -1076,6 +1113,11 @@ async fn submit_input_while_streaming_without_interruptible_tool_queues() {
 async fn submit_input_while_streaming_with_interruptible_tool_queues_then_interrupts() {
     let mut state = AppState::new();
     state.ui.streaming = Some(crate::state::StreamingState::default());
+    // Streaming implies an active turn; the steering gate reads `turn_active`.
+    state
+        .ui
+        .ephemeral
+        .start_turn("Working", std::time::Instant::now());
     state.session.has_submit_interruptible_tool_in_progress = true;
     state.ui.input.textarea.set_text("follow-up prompt");
     state
@@ -1440,6 +1482,49 @@ async fn background_all_tasks_optimistically_flips_running_subagents() {
         Ok(UserCommand::BackgroundAllTasks) => {}
         other => panic!("expected BackgroundAllTasks forwarded to engine, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn shift_up_first_press_selects_first_agent_then_steps() {
+    // Shift+↑ from the composer must park focus on the switcher AND land on
+    // the FIRST agent (index 0), regardless of direction — the coco-rs switcher
+    // has no synthetic `◯ main`/leader row to step off, so entry must select a
+    // real agent immediately (one press = visible selection, not two).
+    let mut state = AppState::new();
+    let running = |id: &str| crate::state::session::SubagentInstance {
+        kind: crate::state::SubagentKind::Subagent,
+        agent_id: id.into(),
+        agent_type: "Explore".into(),
+        description: "scan".into(),
+        status: crate::state::SubagentStatus::Running,
+        color: None,
+        team_name: None,
+        started_at_ms: None,
+        last_tool_name: None,
+        tool_count: 0,
+        total_tokens: 0,
+        is_backgrounded: false,
+        recent_activities: Vec::new(),
+        final_message: None,
+        completed_at_ms: None,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        cost_usd: 0.0,
+    };
+    state.session.subagents.push(running("a0"));
+    state.session.subagents.push(running("a1"));
+    state.session.subagents.push(running("a2"));
+    let (tx, _rx) = drained_channel();
+
+    // First Shift+↑ (delta = -1): focus parks on the switcher, selection = 0.
+    handle_command(&mut state, TuiCommand::AgentSwitcherNav(-1), &tx).await;
+    assert_eq!(state.ui.focus, crate::state::FocusTarget::AgentSwitcher);
+    assert_eq!(state.ui.agent_switcher_selected, 0);
+
+    // Once focused, Shift+↓ steps down to the next agent.
+    handle_command(&mut state, TuiCommand::AgentSwitcherNav(1), &tx).await;
+    assert_eq!(state.ui.agent_switcher_selected, 1);
 }
 
 #[tokio::test]

@@ -687,11 +687,22 @@ impl QueryEngine {
         // and stored on the typed marker — downstream renders read the
         // field rather than recomputing from running-tool state. See
         // `engine-tui-unified-transcript-plan.md` §7.2.
-        crate::history_sync::finalize_user_cancel(
-            history,
-            /*in_flight_tool_calls*/ had_tool_use,
-            event_tx,
-        )
-        .await;
+        //
+        // Steering exception: on a submit-interrupt the queued user message
+        // provides continuity, so skip the redundant standalone marker (TS
+        // `query.ts:1046` parity). The per-tool interrupt `tool_result`s
+        // synthesized above are kept (required for tool_use pairing).
+        if crate::history_sync::is_steering_interrupt(self.turn_abort.reason()) {
+            tracing::debug!(
+                "finalize_user_cancel: skipped standalone marker (submit-interrupt steering)"
+            );
+        } else {
+            crate::history_sync::finalize_user_cancel(
+                history,
+                /*in_flight_tool_calls*/ had_tool_use,
+                event_tx,
+            )
+            .await;
+        }
     }
 }

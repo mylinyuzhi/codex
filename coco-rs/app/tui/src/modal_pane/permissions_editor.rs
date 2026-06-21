@@ -226,6 +226,27 @@ async fn intercept_add_form(
     }
 }
 
+/// Route a bracketed paste into the add-rule form's text input. Paste travels a
+/// separate event path (`TuiEvent::Paste`) that bypasses keybinding/modal
+/// interception, so without this the clipboard text leaks into the main
+/// composer hidden behind the overlay. Only consumes on the `Input` step (the
+/// destination selector has no text field) and strips control chars so the rule
+/// / path stays on one physical line — same posture as [`add_form_input_char`].
+/// Returns `true` if consumed.
+pub(crate) fn route_paste(state: &mut AppState, text: &str) -> bool {
+    if add_form_step(state) != Some(AddStep::Input) {
+        return false;
+    }
+    if let Some(form) = add_form_mut(state) {
+        form.error = None;
+        for c in text.chars().filter(|c| !c.is_control()) {
+            form.input.insert_char(c);
+        }
+        return true;
+    }
+    false
+}
+
 fn add_form_mut(state: &mut AppState) -> Option<&mut AddForm> {
     editor_mut(state).and_then(|e| e.add_form.as_mut())
 }

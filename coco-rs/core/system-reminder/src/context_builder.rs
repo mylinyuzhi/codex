@@ -49,7 +49,8 @@ pub fn apply_app_state<'a>(
     is_auto_classifier_active: bool,
 ) -> GeneratorContextBuilder<'a> {
     let mode = app_state
-        .permission_mode
+        .permissions
+        .mode
         .unwrap_or(fallback_permission_mode);
     let in_auto = mode == PermissionMode::Auto;
     let in_plan_with_auto = mode == PermissionMode::Plan && is_auto_classifier_active;

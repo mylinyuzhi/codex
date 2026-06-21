@@ -269,7 +269,8 @@ impl QueryEngine {
             .map(|s| s.is_active())
             .unwrap_or(false);
         let reminder_permission_mode = app_state_snapshot
-            .permission_mode
+            .permissions
+            .mode
             .unwrap_or(self.config.permission_mode);
         let reminder_is_plan_mode = reminder_permission_mode == PermissionMode::Plan;
         let reminder_is_auto_mode = reminder_permission_mode == PermissionMode::Auto

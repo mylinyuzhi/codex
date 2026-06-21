@@ -86,34 +86,30 @@ fn compute_input_xy(state: &AppState, area: Rect) -> (u16, u16) {
         &state.ui.input,
         is_streaming,
         state.session.prompt_suggestions.last().map(String::as_str),
-        !state.session.queued_commands.is_empty(),
+        state.session.queued_commands.iter().any(|q| q.editable),
         None,
     );
 
-    // The indicator span ("❯ " / "! " / "~ ") is always 2 cols.
+    // The gutter ("❯ " / "! " / "~ " on row 0, 2-space indent on continuation
+    // rows) is always 2 cols.
     let indicator_width: u16 = 2;
 
-    let raw_cursor: i32 = if let Some(filter) = model.command_palette_filter.as_deref() {
-        // 1 col for the leading `/` + visible filter width.
-        1 + UnicodeWidthStr::width(filter) as i32
-    } else {
-        // Display column = width of the visible text up to the cursor's
-        // byte offset. Handles CJK ("你好" with cursor at end → col 4).
-        let text = state.ui.input.text();
-        let visible_text = &text[model.prefix_consumed..];
-        let cursor_byte = state
-            .ui
-            .input
-            .textarea
-            .cursor()
-            .saturating_sub(model.prefix_consumed);
-        let cursor_byte = cursor_byte.min(visible_text.len());
-        UnicodeWidthStr::width(&visible_text[..cursor_byte]) as i32
+    // Display column (CJK-aware). The command palette mirrors a `/filter`; every
+    // other state uses the per-line column computed once in build().
+    let raw_cursor: i32 = match model.command_palette_filter.as_deref() {
+        Some(filter) => 1 + UnicodeWidthStr::width(filter) as i32,
+        None => model.cursor_col as i32,
     };
+
+    // Cursor row, offset by the same scroll the renderer uses so the two agree.
+    let content_rows = area.height.saturating_sub(2).max(1) as usize;
+    let total_rows = model.display_text.split('\n').count().max(1);
+    let scroll = crate::widgets::scroll_offset(model.cursor_row, total_rows, content_rows);
+    let row_on_screen = model.cursor_row.saturating_sub(scroll) as u16;
 
     let max_cursor = area.width.saturating_sub(indicator_width + 1) as i32;
     let cursor_x = area.x + indicator_width + raw_cursor.min(max_cursor) as u16;
-    let cursor_y = area.y + 1;
+    let cursor_y = area.y + 1 + row_on_screen;
     (cursor_x, cursor_y)
 }
 

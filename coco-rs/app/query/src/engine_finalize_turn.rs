@@ -1489,7 +1489,10 @@ async fn build_suggestion_context(
     };
 
     let snap = app_state.read().await;
-    let plan_mode = matches!(snap.permission_mode, Some(coco_types::PermissionMode::Plan));
+    let plan_mode = matches!(
+        snap.permissions.mode,
+        Some(coco_types::PermissionMode::Plan)
+    );
     let awaiting_plan_approval = snap.awaiting_plan_approval;
     // Phase 7 wire-up: read live counters from `ToolAppState`. Both
     // counters are `Arc<AtomicU32>`, mutated lock-free by RAII guards

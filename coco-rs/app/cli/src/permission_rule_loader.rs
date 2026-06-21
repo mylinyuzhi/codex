@@ -28,7 +28,7 @@ use crate::Cli;
 
 /// Seed the per-session additional-working-directory map from settings
 /// `permissions.additionalDirectories` (first) and `--add-dir` flags (second),
-/// for [`coco_query::QueryEngineConfig::session_additional_dirs`].
+/// for the live `ToolAppState.permissions.additional_dirs` base.
 ///
 /// Both flow through with destination `cliArg`. Relative paths are resolved to
 /// absolute against `cwd`; the map key is the absolute path string. Non-existent

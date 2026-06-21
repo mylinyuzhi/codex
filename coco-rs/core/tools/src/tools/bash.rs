@@ -230,6 +230,33 @@ fn max_output_bytes(config: &coco_config::ToolConfig) -> usize {
     config.bash.max_output_bytes.max(0) as usize
 }
 
+/// Suggestion for an out-of-tree write/redirect Ask: add the target's parent
+/// directory to the allowed working dirs. This is the ONLY update that unblocks
+/// the path gate — it runs inside the tool at evaluator step-1 and returns
+/// before any allow/Edit rule, so a `Bash(cmd:*)` or `Edit(dir/**)` rule can't
+/// help; only widening `additional_dirs` lets the same command pass next time.
+/// Mirrors TS `pathValidation.ts` `getDirectoryForPath(blockedPath)` →
+/// `addDirectories`. Target is resolved exactly like the gate's own
+/// `is_path_within_allowed_dirs` (tilde + relative + lexical-normalize).
+fn out_of_dir_suggestion(target: &str, cwd: &str) -> Vec<coco_types::PermissionUpdate> {
+    let Some(resolved) = coco_permissions::filesystem::get_paths_for_permission_check(target, cwd)
+        .into_iter()
+        .next()
+    else {
+        return Vec::new();
+    };
+    let Some(dir) = std::path::Path::new(&resolved)
+        .parent()
+        .map(|p| p.to_string_lossy().into_owned())
+    else {
+        return Vec::new();
+    };
+    vec![coco_types::PermissionUpdate::AddDirectories {
+        directories: vec![dir],
+        destination: coco_types::PermissionUpdateDestination::Session,
+    }]
+}
+
 /// Bash tool -- executes shell commands via bash -c.
 /// Captures stdout, stderr, and exit code.
 ///
@@ -511,7 +538,7 @@ impl Tool for BashTool {
                         "Output redirection to '{target}' is outside the allowed working \
                          directories and requires manual approval."
                     ),
-                    suggestions: Vec::new(),
+                    suggestions: out_of_dir_suggestion(&target, &cwd),
                     choices: None,
                     detail: None,
                 };
@@ -553,7 +580,7 @@ impl Tool for BashTool {
                         "Writing to '{target}' is outside the allowed working directories \
                          and requires manual approval."
                     ),
-                    suggestions: Vec::new(),
+                    suggestions: out_of_dir_suggestion(&target, &cwd),
                     choices: None,
                     detail: None,
                 };

@@ -169,6 +169,11 @@ pub struct InteractionPaneState {
     pub active_prompt: Option<PanePromptState>,
     pub prompt_queue: VecDeque<PanePromptState>,
     pub delayed_permissions: VecDeque<DelayedPermissionPrompt>,
+    /// Scroll offset (in rows) for the active permission prompt's scrollable
+    /// command/detail body. Reset to 0 whenever the active prompt changes.
+    /// Clamped to the real overflow at render time; the handler only bounds it
+    /// loosely to prevent runaway.
+    pub permission_scroll: u16,
 }
 
 impl InteractionPaneState {
@@ -179,6 +184,7 @@ impl InteractionPaneState {
             active_prompt: None,
             prompt_queue: VecDeque::new(),
             delayed_permissions: VecDeque::new(),
+            permission_scroll: 0,
         }
     }
 
@@ -193,6 +199,8 @@ impl InteractionPaneState {
             self.active_prompt = Some(prompt);
             return;
         }
+        // A different prompt is becoming active — start it un-scrolled.
+        self.permission_scroll = 0;
         match self.active_prompt.take() {
             None => self.active_prompt = Some(prompt),
             Some(current) if prompt.priority() < current.priority() => {
@@ -228,6 +236,15 @@ impl InteractionPaneState {
 
     pub fn dismiss_active_prompt(&mut self) {
         self.active_prompt = self.prompt_queue.pop_front();
+        self.permission_scroll = 0;
+    }
+
+    /// Move the permission-body scroll offset by `delta` rows, clamped to
+    /// `[0, max]`. `max` is a loose upper bound (the render pass applies the
+    /// exact clamp against the wrapped body height).
+    pub fn scroll_permission(&mut self, delta: i32, max: u16) {
+        let next = (i32::from(self.permission_scroll) + delta).clamp(0, i32::from(max));
+        self.permission_scroll = next as u16;
     }
 
     pub fn active_prompt_mut(&mut self) -> Option<&mut PanePromptState> {

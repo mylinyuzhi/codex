@@ -31,6 +31,22 @@ fn factory(config: QueryEngineConfig) -> ToolContextFactory {
     factory_with_live_rules(config, Arc::new(RwLock::new(Vec::new())))
 }
 
+/// Build a factory whose live `ToolAppState.permissions` base is pre-seeded
+/// with the given rules — the real-runtime shape, since the live base (not the
+/// config) is the single permission source the factory reads each batch.
+fn factory_with_base_rules(
+    config: QueryEngineConfig,
+    permissions: coco_types::LiveToolPermissionState,
+) -> ToolContextFactory {
+    ToolContextFactory {
+        app_state: Some(Arc::new(RwLock::new(ToolAppState {
+            permissions,
+            ..Default::default()
+        }))),
+        ..factory(config)
+    }
+}
+
 fn factory_with_live_rules(
     config: QueryEngineConfig,
     live_command_rules: Arc<RwLock<Vec<coco_types::PermissionRule>>>,
@@ -341,7 +357,7 @@ async fn test_factory_uses_live_permission_mode_from_app_state() {
     let mut config = test_config();
     config.permission_mode = PermissionMode::Default;
     let state = Arc::new(RwLock::new(ToolAppState::default()));
-    state.write().await.permission_mode = Some(PermissionMode::Plan);
+    state.write().await.permissions.mode = Some(PermissionMode::Plan);
     let f = ToolContextFactory {
         app_state: Some(state),
         ..factory(config)
@@ -480,12 +496,11 @@ async fn test_factory_propagates_cwd_override_from_config() {
 }
 
 #[tokio::test]
-async fn test_factory_threads_allow_rules_from_config() {
+async fn test_factory_threads_allow_rules_from_base() {
     use coco_types::PermissionBehavior;
     use coco_types::PermissionRule;
     use coco_types::PermissionRuleSource;
     use coco_types::PermissionRuleValue;
-    let mut config = test_config();
     let mut rules = std::collections::HashMap::new();
     rules.insert(
         PermissionRuleSource::UserSettings,
@@ -498,24 +513,28 @@ async fn test_factory_threads_allow_rules_from_config() {
             },
         }],
     );
-    config.allow_rules = rules.clone();
-    let ctx = factory(config).build(Default::default()).await;
+    let permissions = coco_types::LiveToolPermissionState {
+        allow_rules: rules.clone(),
+        ..Default::default()
+    };
+    let ctx = factory_with_base_rules(test_config(), permissions)
+        .build(Default::default())
+        .await;
     // PermissionRule doesn't impl PartialEq (foreign-crate type);
     // compare via JSON serialization for stable structural equality.
     assert_eq!(
         serde_json::to_string(&ctx.permission_context.allow_rules).unwrap(),
         serde_json::to_string(&rules).unwrap(),
-        "factory must install allow_rules from config"
+        "factory must install allow_rules from the live base"
     );
 }
 
 #[tokio::test]
-async fn test_factory_threads_deny_rules_from_config() {
+async fn test_factory_threads_deny_rules_from_base() {
     use coco_types::PermissionBehavior;
     use coco_types::PermissionRule;
     use coco_types::PermissionRuleSource;
     use coco_types::PermissionRuleValue;
-    let mut config = test_config();
     let mut rules = std::collections::HashMap::new();
     rules.insert(
         PermissionRuleSource::PolicySettings,
@@ -528,11 +547,275 @@ async fn test_factory_threads_deny_rules_from_config() {
             },
         }],
     );
-    config.deny_rules = rules.clone();
-    let ctx = factory(config).build(Default::default()).await;
+    let permissions = coco_types::LiveToolPermissionState {
+        deny_rules: rules.clone(),
+        ..Default::default()
+    };
+    let ctx = factory_with_base_rules(test_config(), permissions)
+        .build(Default::default())
+        .await;
     assert_eq!(
         serde_json::to_string(&ctx.permission_context.deny_rules).unwrap(),
         serde_json::to_string(&rules).unwrap(),
+    );
+}
+
+#[tokio::test]
+async fn test_factory_merges_config_live_permission_rules_into_allow_rules() {
+    // Regression for the mid-cycle "Always Allow" staleness bug: a rule
+    // pushed into the shared `live_permission_rules` overlay must surface in
+    // the built context's allow_rules — under its own source — so the
+    // in-flight engine (whose base config is a frozen snapshot) observes the
+    // approval the SAME cycle. This is what lets a fresh `Edit(...)` grant
+    // satisfy a same-cycle Read via the "edit access implies read" branch.
+    use coco_types::PermissionBehavior;
+    use coco_types::PermissionRule;
+    use coco_types::PermissionRuleSource;
+    use coco_types::PermissionRuleValue;
+    let mut config = test_config();
+    let edit_rule = PermissionRule {
+        source: PermissionRuleSource::LocalSettings,
+        behavior: PermissionBehavior::Allow,
+        value: PermissionRuleValue {
+            tool_pattern: "Edit".into(),
+            rule_content: Some("//tmp/b/**".into()),
+        },
+    };
+    config.live_permission_rules = Some(std::sync::Arc::new(tokio::sync::RwLock::new(vec![
+        edit_rule.clone(),
+    ])));
+    let ctx = factory(config).build(Default::default()).await;
+    let local = ctx
+        .permission_context
+        .allow_rules
+        .get(&PermissionRuleSource::LocalSettings)
+        .expect("overlay rule must land under its own source");
+    assert_eq!(
+        serde_json::to_string(local).unwrap(),
+        serde_json::to_string(&vec![edit_rule]).unwrap(),
+        "factory must merge config.live_permission_rules into allow_rules \
+         preserving the rule's source",
+    );
+}
+
+#[tokio::test]
+async fn test_factory_reads_live_app_state_base_and_sees_midcycle_mutation() {
+    // S2: the factory sources allow/deny/ask from the shared live
+    // `ToolAppState.permissions` base (not the frozen config), and a mutation
+    // between two `build()` calls is visible on the second — the TS
+    // read-through property that makes mid-cycle "Always Allow" take effect.
+    use coco_types::PermissionBehavior;
+    use coco_types::PermissionRule;
+    use coco_types::PermissionRuleSource;
+    use coco_types::PermissionRuleValue;
+    use coco_types::ToolAppState;
+
+    let app_state = Arc::new(RwLock::new(ToolAppState::default()));
+    let allow = PermissionRule {
+        source: PermissionRuleSource::LocalSettings,
+        behavior: PermissionBehavior::Allow,
+        value: PermissionRuleValue {
+            tool_pattern: "Edit".into(),
+            rule_content: Some("//tmp/b/**".into()),
+        },
+    };
+    app_state
+        .write()
+        .await
+        .permissions
+        .allow_rules
+        .entry(PermissionRuleSource::LocalSettings)
+        .or_default()
+        .push(allow);
+
+    let f = ToolContextFactory {
+        app_state: Some(app_state.clone()),
+        ..factory(test_config())
+    };
+    let ctx1 = f.build(Default::default()).await;
+    assert!(
+        ctx1.permission_context
+            .allow_rules
+            .contains_key(&PermissionRuleSource::LocalSettings),
+        "factory must source allow rules from the live app_state base",
+    );
+
+    // Mutate the shared base mid-cycle, then rebuild: the new deny rule must be
+    // visible without rebuilding the engine (read-through each batch).
+    app_state
+        .write()
+        .await
+        .permissions
+        .deny_rules
+        .entry(PermissionRuleSource::LocalSettings)
+        .or_default()
+        .push(PermissionRule {
+            source: PermissionRuleSource::LocalSettings,
+            behavior: PermissionBehavior::Deny,
+            value: PermissionRuleValue {
+                tool_pattern: "Read".into(),
+                rule_content: Some("//etc/**".into()),
+            },
+        });
+    let ctx2 = f.build(Default::default()).await;
+    assert!(
+        ctx2.permission_context
+            .deny_rules
+            .contains_key(&PermissionRuleSource::LocalSettings),
+        "a mid-cycle base mutation must be visible on the next build()",
+    );
+}
+
+#[tokio::test]
+async fn test_subagent_inherits_parent_deny_via_shared_base() {
+    // S3 SECURITY FIX: a subagent shares the parent's app_state Arc, so with
+    // rules in the live base it read-through-inherits the parent's DENY rules
+    // (TS createSubagentContext). Closes the confirmed read-bypass where a
+    // subagent could read a file the parent `deny Read`-ed.
+    use coco_types::PermissionBehavior;
+    use coco_types::PermissionRule;
+    use coco_types::PermissionRuleSource;
+    use coco_types::PermissionRuleValue;
+    use coco_types::ToolAppState;
+
+    let app_state = Arc::new(RwLock::new(ToolAppState::default()));
+    app_state
+        .write()
+        .await
+        .permissions
+        .deny_rules
+        .entry(PermissionRuleSource::LocalSettings)
+        .or_default()
+        .push(PermissionRule {
+            source: PermissionRuleSource::LocalSettings,
+            behavior: PermissionBehavior::Deny,
+            value: PermissionRuleValue {
+                tool_pattern: "Read".into(),
+                rule_content: Some("//proj/secrets/**".into()),
+            },
+        });
+
+    // Subagent config: permission_derivation = Some (read-through derivation),
+    // empty config base rules (the bug's original empty maps).
+    let subagent_cfg = QueryEngineConfig {
+        agent_id: Some("agent-1".into()),
+        permission_derivation: Some(crate::config::PermissionDerivation::default()),
+        ..test_config()
+    };
+    let f = ToolContextFactory {
+        app_state: Some(app_state.clone()),
+        ..factory(subagent_cfg)
+    };
+    let ctx = f.build(Default::default()).await;
+    assert!(
+        ctx.permission_context
+            .deny_rules
+            .contains_key(&PermissionRuleSource::LocalSettings),
+        "subagent must inherit the parent's deny rules via the shared live base",
+    );
+}
+
+#[tokio::test]
+async fn test_subagent_allowed_tools_replace_on_restrict() {
+    // S3 TS parity (runAgent.ts:469-479): when a subagent is restricted via
+    // allowed_tools, the derived ALLOW = parent CliArg-source only + the allowed
+    // tools as Session-source; the parent's other allow sources are dropped.
+    // deny is always still inherited.
+    use coco_types::PermissionBehavior;
+    use coco_types::PermissionRule;
+    use coco_types::PermissionRuleSource;
+    use coco_types::PermissionRuleValue;
+    use coco_types::ToolAppState;
+
+    fn rule(
+        source: PermissionRuleSource,
+        behavior: PermissionBehavior,
+        pat: &str,
+    ) -> PermissionRule {
+        PermissionRule {
+            source,
+            behavior,
+            value: PermissionRuleValue {
+                tool_pattern: pat.into(),
+                rule_content: None,
+            },
+        }
+    }
+
+    let app_state = Arc::new(RwLock::new(ToolAppState::default()));
+    {
+        let mut g = app_state.write().await;
+        g.permissions
+            .allow_rules
+            .entry(PermissionRuleSource::CliArg)
+            .or_default()
+            .push(rule(
+                PermissionRuleSource::CliArg,
+                PermissionBehavior::Allow,
+                "Glob",
+            ));
+        g.permissions
+            .allow_rules
+            .entry(PermissionRuleSource::LocalSettings)
+            .or_default()
+            .push(rule(
+                PermissionRuleSource::LocalSettings,
+                PermissionBehavior::Allow,
+                "Bash",
+            ));
+        g.permissions
+            .deny_rules
+            .entry(PermissionRuleSource::LocalSettings)
+            .or_default()
+            .push(rule(
+                PermissionRuleSource::LocalSettings,
+                PermissionBehavior::Deny,
+                "Write",
+            ));
+    }
+
+    let subagent_cfg = QueryEngineConfig {
+        agent_id: Some("agent-1".into()),
+        permission_derivation: Some(crate::config::PermissionDerivation {
+            allowed_tools_replace: Some(vec![rule(
+                PermissionRuleSource::Session,
+                PermissionBehavior::Allow,
+                "Read",
+            )]),
+            ..Default::default()
+        }),
+        ..test_config()
+    };
+    let f = ToolContextFactory {
+        app_state: Some(app_state.clone()),
+        ..factory(subagent_cfg)
+    };
+    let allow = f
+        .build(Default::default())
+        .await
+        .permission_context
+        .allow_rules;
+
+    assert!(
+        allow.contains_key(&PermissionRuleSource::CliArg),
+        "parent CliArg allow is preserved on restrict",
+    );
+    assert!(
+        allow.contains_key(&PermissionRuleSource::Session),
+        "allowed_tools injected as Session allow",
+    );
+    assert!(
+        !allow.contains_key(&PermissionRuleSource::LocalSettings),
+        "parent's other allow sources are dropped on restrict",
+    );
+    let deny = f
+        .build(Default::default())
+        .await
+        .permission_context
+        .deny_rules;
+    assert!(
+        deny.contains_key(&PermissionRuleSource::LocalSettings),
+        "deny is always inherited regardless of allowed_tools",
     );
 }
 
@@ -605,16 +888,32 @@ fn session_rule(
 #[tokio::test]
 async fn test_factory_returns_base_allow_rules_when_live_rules_empty() {
     // Zero-clone fast path: when the live store is empty, the
-    // factory must hand back the config's base allow_rules verbatim
+    // factory must hand back the live base allow_rules verbatim
     // (no Command entry inserted). This is the common case — the
     // overwhelming majority of turns have no skill-emitted rules.
-    let config = test_config();
-    let base_clone = config.allow_rules.clone();
-    let ctx = factory(config).build(Default::default()).await;
+    let mut base_rules = std::collections::HashMap::new();
+    base_rules.insert(
+        coco_types::PermissionRuleSource::UserSettings,
+        vec![coco_types::PermissionRule {
+            source: coco_types::PermissionRuleSource::UserSettings,
+            behavior: coco_types::PermissionBehavior::Allow,
+            value: coco_types::PermissionRuleValue {
+                tool_pattern: "Read".into(),
+                rule_content: None,
+            },
+        }],
+    );
+    let permissions = coco_types::LiveToolPermissionState {
+        allow_rules: base_rules.clone(),
+        ..Default::default()
+    };
+    let ctx = factory_with_base_rules(test_config(), permissions)
+        .build(Default::default())
+        .await;
     // PermissionRule doesn't impl PartialEq; compare via JSON roundtrip.
     assert_eq!(
         serde_json::to_string(&ctx.permission_context.allow_rules).unwrap(),
-        serde_json::to_string(&base_clone).unwrap(),
+        serde_json::to_string(&base_rules).unwrap(),
         "fast path must hand back base allow_rules verbatim"
     );
     // No Command source ever materialised because we never inserted one.
@@ -716,18 +1015,24 @@ async fn test_factory_preserves_base_command_rules_when_merging() {
     // (e.g. via CLI `--allow Command:Read`, though uncommon), the
     // factory must append live rules to those rather than replace
     // the base.
-    let mut config = test_config();
-    config
-        .allow_rules
-        .entry(coco_types::PermissionRuleSource::Command)
-        .or_default()
-        .push(skill_cmd_rule("Glob"));
+    let mut base_allow = std::collections::HashMap::new();
+    base_allow.insert(
+        coco_types::PermissionRuleSource::Command,
+        vec![skill_cmd_rule("Glob")],
+    );
+    let permissions = coco_types::LiveToolPermissionState {
+        allow_rules: base_allow,
+        ..Default::default()
+    };
 
     let store: Arc<RwLock<Vec<coco_types::PermissionRule>>> =
         Arc::new(RwLock::new(vec![skill_cmd_rule("Read")]));
-    let ctx = factory_with_live_rules(config, store)
-        .build(Default::default())
-        .await;
+    let ctx = ToolContextFactory {
+        live_command_rules: store,
+        ..factory_with_base_rules(test_config(), permissions)
+    }
+    .build(Default::default())
+    .await;
     let cmd_rules = ctx
         .permission_context
         .allow_rules

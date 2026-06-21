@@ -16,7 +16,6 @@ use std::future::Future;
 
 use crate::auto_mode::AutoModeDecision;
 use crate::auto_mode::classify_for_auto_mode;
-use crate::auto_mode_state::AutoModeState;
 use crate::classifier::AutoModeRules;
 use crate::classifier::ClassifyRequest;
 use crate::classifier::InputProjector;
@@ -64,7 +63,7 @@ pub async fn can_use_tool_in_auto_mode<M, F, Fut>(
     tool_name: &str,
     input: &Value,
     is_read_only: bool,
-    auto_state: &AutoModeState,
+    auto_active: bool,
     denial_tracker: &mut DenialTracker,
     messages: &[M],
     rules: &AutoModeRules,
@@ -77,8 +76,15 @@ where
     F: Fn(ClassifyRequest) -> Fut,
     Fut: Future<Output = Result<String, String>>,
 {
-    // 1. Not active → None (fallthrough to interactive)
-    if !auto_state.is_active() {
+    // 1. Not auto for THIS call → None (fallthrough to interactive). `auto_active`
+    //    is the per-call decision the caller derives from the permission
+    //    context mode (TS parity), NOT a shared session-global flag — so a
+    //    concurrent engine build can't race the classifier off for a subagent.
+    if !auto_active {
+        tracing::debug!(
+            tool_name,
+            "auto-mode classify gate inactive for this call — skipping classifier, prompt stands",
+        );
         return None;
     }
 
