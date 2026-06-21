@@ -245,6 +245,22 @@ pub async fn history_replace_and_emit(
     .await;
 }
 
+/// Whether a turn-abort reason is *steering* — the user submitted/queued new
+/// input while tools were running — rather than a hard cancel (Ctrl+C / ESC).
+///
+/// On steering, the follow-up queued user message provides conversational
+/// continuity, so the standalone [`SystemMessage::UserInterruption`] marker is
+/// redundant and suppressed at the `finalize_user_cancel` call sites. This
+/// matches the TS implementation, which skips `createUserInterruptionMessage`
+/// when `abortController.signal.reason === 'interrupt'` (`query.ts:1046`).
+///
+/// The per-tool `tool_result`s carrying `INTERRUPT_MESSAGE_FOR_TOOL_USE` are
+/// **not** affected — they are required for strict tool_use/tool_result
+/// pairing and accurately record that each in-flight tool was interrupted.
+pub fn is_steering_interrupt(reason: Option<coco_types::TurnAbortReason>) -> bool {
+    matches!(reason, Some(coco_types::TurnAbortReason::SubmitInterrupt))
+}
+
 /// Single writer for the user-cancel marker. Reads `in_flight_tool_calls`
 /// from the engine (which holds the authoritative view of running tool
 /// state at the cancel checkpoint) and pushes a typed

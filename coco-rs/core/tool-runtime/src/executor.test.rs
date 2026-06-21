@@ -383,14 +383,14 @@ async fn test_execute_with_concurrent_batch_applies_patches_in_model_order() {
             coco_types::PermissionMode::Default
         };
         unstamped_with_patch(&tool_use_id, model_index, move |state| {
-            state.permission_mode = Some(target_mode);
+            state.permissions.mode = Some(target_mode);
         })
     })
     .await;
 
     let guard = app_state.read().await;
     assert_eq!(
-        guard.permission_mode,
+        guard.permissions.mode,
         Some(coco_types::PermissionMode::Default),
         "post-batch state must reflect B (model_index 1) applied AFTER A, \
          regardless of completion order"

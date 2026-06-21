@@ -1033,3 +1033,104 @@ fn test_doubled_backoff_saturates_at_policy_max() {
         "over-cap inputs still cap",
     );
 }
+
+// ── update_session_id / templated-header rebuild gate ──────────────────────
+
+/// Build a resolved `RuntimeConfig` with one openai-compat provider whose
+/// single `X-Trace` header carries `value` — mirrors `model_factory.test.rs`'s
+/// `compat_with_header`, kept local so the rebuild-gate test owns its fixture.
+fn runtime_with_header(value: coco_config::HeaderValue) -> Arc<RuntimeConfig> {
+    use coco_config::EnvSnapshot;
+    use coco_config::PartialProviderConfig;
+    use coco_config::RoleSlots;
+    use coco_config::RuntimeOverrides;
+    use coco_config::Settings;
+    use coco_config::settings::SettingsWithSource;
+    use coco_types::ProviderApi;
+    use coco_types::ProviderModelSelection;
+    use std::collections::BTreeMap;
+    use std::collections::HashMap;
+
+    let partial = PartialProviderConfig {
+        api: Some(ProviderApi::OpenaiCompat),
+        env_key: Some("LOCAL_KEY".into()),
+        base_url: Some("http://localhost:8080/v1".into()),
+        client_options: Some(coco_config::PartialProviderClientOptions {
+            headers: Some(BTreeMap::from([("X-Trace".to_string(), value)])),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let mut providers = BTreeMap::new();
+    providers.insert("local-router".to_string(), partial);
+    let settings = Settings {
+        models: coco_config::ModelSelectionSettings {
+            main: Some(RoleSlots::new(ProviderModelSelection {
+                provider: "anthropic".into(),
+                model_id: "claude-opus-4-7".into(),
+            })),
+            ..Default::default()
+        },
+        providers,
+        ..Default::default()
+    };
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let catalogs = coco_config::CatalogPaths::empty_in(tmp.path());
+    let cfg = coco_config::build_runtime_config_with(
+        SettingsWithSource {
+            merged: settings,
+            per_source: HashMap::new(),
+            source_paths: HashMap::new(),
+        },
+        EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+        catalogs,
+        coco_config::parse_enabled_setting_sources(None),
+    )
+    .expect("runtime");
+    Arc::new(cfg)
+}
+
+#[test]
+fn any_templated_header_detects_template_vs_literal() {
+    // A `{ "template": "..." }` header → session-id swap must rebuild.
+    assert!(super::any_templated_header(&runtime_with_header(
+        coco_config::HeaderValue::templated("{\"session_id\":\"${SESSION_ID}\"}")
+    )));
+    // A plain literal header has no session-scoped dependency → no rebuild.
+    assert!(!super::any_templated_header(&runtime_with_header(
+        coco_config::HeaderValue::literal("static-value")
+    )));
+}
+
+#[test]
+fn update_session_id_swaps_header_vars_snapshot() {
+    let registry = Arc::new(
+        ModelRuntimeRegistry::new(
+            runtime_with_header(coco_config::HeaderValue::templated("${SESSION_ID}")),
+            None,
+            Arc::new(HeaderVars {
+                session_id: "sess-old".to_string(),
+                cwd: "/work".to_string(),
+                app_version: "1.2.3".to_string(),
+            }),
+        )
+        .expect("registry"),
+    );
+    assert_eq!(registry.header_vars_snapshot().session_id, "sess-old");
+
+    registry
+        .update_session_id("sess-new")
+        .expect("session id refresh");
+    let vars = registry.header_vars_snapshot();
+    assert_eq!(vars.session_id, "sess-new");
+    // Non-session fields are preserved across the swap.
+    assert_eq!(vars.cwd, "/work");
+    assert_eq!(vars.app_version, "1.2.3");
+
+    // Unchanged id is a no-op (and must not error).
+    registry
+        .update_session_id("sess-new")
+        .expect("idempotent refresh");
+    assert_eq!(registry.header_vars_snapshot().session_id, "sess-new");
+}

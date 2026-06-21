@@ -358,6 +358,20 @@ pub struct AgentSpawnRequest {
     /// boundary from `ctx.agent_id`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub invoking_agent_id: Option<String>,
+    /// Parent turn's abort signal, threaded from the `AgentTool::execute`
+    /// boundary (`ctx.abort.turn_signal()`) for in-process spawns. When the
+    /// parent turn is interrupted (e.g. user ESC) before a **foreground**
+    /// subagent has detached, the child engine is cancelled too — matching
+    /// the shared-abort semantics of the TS implementation (one
+    /// `AbortController` threaded into subagents). Without it the detached
+    /// engine task would run to completion while the parent already recorded
+    /// the `Agent(...)` tool call as interrupted, leaving the subagent panel
+    /// desynced. `None` for cross-process spawns (serde-skipped — the wire
+    /// can't carry a live token) and framework forks, which keep their own
+    /// lifecycle. Background / already-detached agents are exempt: they are
+    /// meant to outlive the turn.
+    #[serde(skip)]
+    pub parent_turn_abort: Option<crate::cancellation::TurnAbortSignal>,
 }
 
 fn default_active_shell_tool() -> ActiveShellTool {

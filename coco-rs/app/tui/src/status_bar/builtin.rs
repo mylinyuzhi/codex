@@ -16,7 +16,7 @@ use crate::transcript::cells::RenderedCell;
 /// The built-in status bar is a one-to-three-line block:
 ///
 /// 1. model · effort · tokens · cache · context · transcript counts (always)
-/// 2. permission mode (`⏵⏵ auto mode on`) · background-task pill
+/// 2. permission mode (`▸▸ auto mode on`) · background-task pill
 /// 3. working-directory basename · `git:(branch)`
 ///
 /// Lines 2 and 3 are emitted only when they have content, so the bar collapses
@@ -245,8 +245,8 @@ fn separator(spans: &mut Vec<StatusSpan>) {
     spans.push(StatusSpan::new(" | ", StatusTone::Border));
 }
 
-/// Line 2: permission mode + cycle hint (`? ask · shift+tab to cycle`,
-/// `⏵⏵ auto mode on · shift+tab to cycle`) followed by the background-task pill
+/// Line 2: permission mode + cycle hint (`⏯ ask mode on · shift+tab to cycle`,
+/// `▸▸ auto mode on · shift+tab to cycle`) followed by the background-task pill
 /// (`· 1 agent · 2 shells`). Always rendered — every mode (incl. the baseline)
 /// shows its glyph, label, and the shift+tab affordance uniformly.
 fn permission_and_tasks_line(state: &AppState) -> Vec<StatusSpan> {
@@ -281,25 +281,32 @@ fn permission_and_tasks_line(state: &AppState) -> Vec<StatusSpan> {
 }
 
 /// Symbol + localized label + tone for the current permission mode.
-/// `?` for the baseline `ask` mode, `⏸` for plan, `⏵⏵` for the auto-proceed
-/// modes. The cycle hint is appended uniformly in [`permission_and_tasks_line`].
+/// `⏯` (play/pause) for the baseline `ask` mode, `⏸` for plan, `▸▸` (fast-forward)
+/// for the auto-proceed modes. The cycle hint is appended uniformly in
+/// [`permission_and_tasks_line`].
+///
+/// Glyphs are chosen for cross-platform coverage: `⏵`/`⏵⏵` (U+23F5) lacks a
+/// glyph in most Linux monospace fonts and renders as tofu boxes, so the
+/// fast-forward look uses `▸▸` (U+25B8, Geometric Shapes — universally covered)
+/// and the play glyph uses `⏯` (U+23EF, same media-control family as `⏸`).
+///
 /// Override-mode tones match TS: auto → warning (yellow), bypass/dont-ask →
 /// error (red); the baseline stays dim.
 fn permission_mode_status(mode: PermissionMode) -> Option<(&'static str, String, StatusTone)> {
     let (symbol, key, tone) = match mode {
-        PermissionMode::Default => ("?", "permission_mode.status.default", StatusTone::Dim),
+        PermissionMode::Default => ("⏯", "permission_mode.status.default", StatusTone::Accent),
         PermissionMode::AcceptEdits => (
-            "⏵⏵",
+            "▸▸",
             "permission_mode.status.accept_edits",
             StatusTone::Accent,
         ),
         PermissionMode::Plan => ("⏸", "permission_mode.status.plan", StatusTone::Plan),
         PermissionMode::BypassPermissions => {
-            ("⏵⏵", "permission_mode.status.bypass", StatusTone::Error)
+            ("▸▸", "permission_mode.status.bypass", StatusTone::Error)
         }
-        PermissionMode::DontAsk => ("⏵⏵", "permission_mode.status.dont_ask", StatusTone::Error),
-        PermissionMode::Auto => ("⏵⏵", "permission_mode.status.auto", StatusTone::Warning),
-        PermissionMode::Bubble => ("⏵⏵", "permission_mode.status.bubble", StatusTone::Dim),
+        PermissionMode::DontAsk => ("▸▸", "permission_mode.status.dont_ask", StatusTone::Error),
+        PermissionMode::Auto => ("▸▸", "permission_mode.status.auto", StatusTone::Warning),
+        PermissionMode::Bubble => ("▸▸", "permission_mode.status.bubble", StatusTone::Dim),
     };
     Some((symbol, t!(key).to_string(), tone))
 }

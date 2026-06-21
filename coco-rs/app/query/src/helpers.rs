@@ -16,11 +16,15 @@ use coco_messages::AttachmentMessage;
 use coco_messages::LlmMessage;
 use coco_messages::Message;
 use coco_messages::MessageHistory;
+use coco_messages::UserMessage;
 use coco_messages::create_error_tool_result;
 use coco_messages::wrapping::wrap_in_system_reminder;
+use coco_system_reminder::QueueOrigin;
 use coco_system_reminder::wrap_command_text;
 use coco_types::AttachmentKind;
+use coco_types::MessageOrigin;
 use coco_types::ToolId;
+use std::sync::Arc;
 
 use crate::BudgetTracker;
 use crate::command_queue::CommandQueue;
@@ -113,7 +117,7 @@ pub async fn drain_command_queue_into_history(
     for cmd in &queued {
         crate::history_sync::history_push_and_emit(
             history,
-            queued_command_to_attachment(cmd),
+            queued_command_to_message(cmd),
             event_tx,
         )
         .await;
@@ -134,8 +138,98 @@ pub async fn drain_command_queue_into_history(
     .await;
 }
 
+/// Convert a drained [`QueuedCommand`] into the history `Message` that
+/// represents it, mirroring TS: a **human** steering message becomes a
+/// first-class [`Message::User`] carrying the **raw** text (fully visible in
+/// the transcript and counted as a user message); every other origin
+/// (coordinator / task-notification / channel) stays a model-only
+/// [`AttachmentKind::QueuedCommand`] attachment.
+///
+/// For the human case the model-facing "The user sent a new message while you
+/// were working…" framing is **not** baked here — it is applied at prompt-build
+/// time by [`wrap_steering_messages_for_api`], so the stored message stays raw.
+pub fn queued_command_to_message(cmd: &QueuedCommand) -> Message {
+    match cmd.origin {
+        None | Some(QueueOrigin::Human) => queued_command_to_user_message(cmd),
+        Some(_) => queued_command_to_attachment(cmd),
+    }
+}
+
+/// Build the raw `Message::User` for a human steering command (no framing,
+/// no `<system-reminder>` wrap). Tagged [`MessageOrigin::QueuedSteering`] so
+/// the prompt builder knows to apply the model-facing wrapper.
+pub fn queued_command_to_user_message(cmd: &QueuedCommand) -> Message {
+    let mut parts: Vec<UserContentPart> = vec![UserContentPart::text(cmd.prompt.clone())];
+    for img in &cmd.images {
+        parts.push(UserContentPart::File(FilePart::image_base64(
+            img.data_base64.clone(),
+            img.media_type.clone(),
+        )));
+    }
+    Message::User(UserMessage {
+        message: LlmMessage::user(parts),
+        uuid: uuid::Uuid::new_v4(),
+        timestamp: String::new(),
+        is_visible_in_transcript_only: false,
+        is_virtual: false,
+        is_compact_summary: false,
+        permission_mode: None,
+        origin: Some(MessageOrigin::QueuedSteering),
+        parent_tool_use_id: None,
+    })
+}
+
+/// Apply the model-facing steering wrapper to every [`MessageOrigin::QueuedSteering`]
+/// user message, returning an API-bound view. Mirrors TS, which wraps queued
+/// commands only at API-serialization time (`wrapCommandText` in the
+/// `queued_command` attachment case) while the stored message keeps the raw text.
+///
+/// CoW: only steering messages are rebuilt; every other entry keeps its `Arc`.
+/// The wrapped text is `<system-reminder>`-prefixed, so the downstream
+/// [`coco_messages::smoosh_system_reminder_into_tool_result`] folds it into the
+/// preceding tool result exactly as before.
+pub fn wrap_steering_messages_for_api(messages: &[Arc<Message>]) -> Vec<Arc<Message>> {
+    messages
+        .iter()
+        .map(|m| match m.as_ref() {
+            Message::User(u) if u.origin == Some(MessageOrigin::QueuedSteering) => {
+                let mut wrapped = u.clone();
+                wrapped.message = wrap_steering_llm_message(&u.message);
+                Arc::new(Message::User(wrapped))
+            }
+            _ => m.clone(),
+        })
+        .collect()
+}
+
+/// Wrap a raw user `LlmMessage`'s text with the human steering framing +
+/// `<system-reminder>` tags, preserving any non-text parts (e.g. pasted
+/// images) after the wrapped text.
+fn wrap_steering_llm_message(raw: &LlmMessage) -> LlmMessage {
+    let LlmMessage::User { content, .. } = raw else {
+        return raw.clone();
+    };
+    let mut text = String::new();
+    let mut others: Vec<UserContentPart> = Vec::new();
+    for part in content {
+        match part {
+            UserContentPart::Text(t) => text.push_str(&t.text),
+            other => others.push(other.clone()),
+        }
+    }
+    let framed = wrap_command_text(&text, Some(&QueueOrigin::Human));
+    let mut parts: Vec<UserContentPart> =
+        vec![UserContentPart::text(wrap_in_system_reminder(&framed))];
+    parts.extend(others);
+    LlmMessage::user(parts)
+}
+
 /// Convert a [`QueuedCommand`] drained from the queue into a model-bound
 /// `AttachmentMessage` of kind [`AttachmentKind::QueuedCommand`].
+///
+/// Used for non-human queue origins (coordinator / task-notification /
+/// channel) whose framing is model-only and which never surface as a user
+/// message. Human steering goes through [`queued_command_to_user_message`].
 ///
 /// Two-step wrapping:
 ///

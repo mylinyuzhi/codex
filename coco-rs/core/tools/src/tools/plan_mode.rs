@@ -280,7 +280,8 @@ impl Tool for EnterPlanModeTool {
             Some(h) => h
                 .read()
                 .await
-                .permission_mode
+                .permissions
+                .mode
                 .unwrap_or(ctx.permission_context.mode),
             None => ctx.permission_context.mode,
         };
@@ -797,8 +798,8 @@ impl Tool for ExitPlanModeTool {
             Some(state) => {
                 let guard = state.read().await;
                 (
-                    guard.pre_plan_mode,
-                    guard.stripped_dangerous_rules.is_some(),
+                    guard.permissions.pre_plan_mode,
+                    guard.permissions.stripped_dangerous_rules.is_some(),
                 )
             }
             None => (
@@ -899,8 +900,8 @@ impl Tool for ExitPlanModeTool {
 
         // Queue the full ExitPlanMode transition.
         let patch: coco_types::AppStatePatch = Box::new(move |state| {
-            state.permission_mode = Some(restore_mode);
-            state.pre_plan_mode = None;
+            state.permissions.mode = Some(restore_mode);
+            state.permissions.pre_plan_mode = None;
             state.has_exited_plan_mode = true;
             state.needs_plan_mode_exit_attachment = true;
             state.pending_plan_mode_exit_outcome = Some(outcome);
@@ -913,10 +914,10 @@ impl Tool for ExitPlanModeTool {
             // Dangerous-rules stash management on Auto boundary.
             // (The strip happens on Plan→Auto, restore on
             // Auto→non-Auto exit path.)
-            if restoring_to_auto && state.stripped_dangerous_rules.is_none() {
-                state.stripped_dangerous_rules = snapshotted_stripped_rules;
-            } else if !restoring_to_auto && state.stripped_dangerous_rules.is_some() {
-                state.stripped_dangerous_rules = None;
+            if restoring_to_auto && state.permissions.stripped_dangerous_rules.is_none() {
+                state.permissions.stripped_dangerous_rules = snapshotted_stripped_rules;
+            } else if !restoring_to_auto && state.permissions.stripped_dangerous_rules.is_some() {
+                state.permissions.stripped_dangerous_rules = None;
             }
             if clear_history_requested {
                 state.pending_clear_message_history = true;

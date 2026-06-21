@@ -14,6 +14,7 @@ use ratatui::widgets::Block;
 use ratatui::widgets::Borders;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
+use unicode_width::UnicodeWidthStr;
 
 use crate::i18n::t;
 use crate::state::ui::InputState;
@@ -32,6 +33,11 @@ pub(crate) struct InputRenderModel {
     pub(crate) command_palette_filter: Option<String>,
     pub(crate) is_placeholder: bool,
     pub(crate) is_streaming: bool,
+    /// Cursor's display line within `display_text` (0-based; counts hard `\n`
+    /// breaks). Drives the multi-line composer's cursor row + scroll.
+    pub(crate) cursor_row: usize,
+    /// Cursor's display column within its line (excludes the `❯ ` indicator).
+    pub(crate) cursor_col: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,6 +75,8 @@ impl InputRenderModel {
                 (format!("/{filter}"), None, false, Some(filter.to_string()))
             } else if is_empty {
                 if has_editable_queue {
+                    // Mirrors TS `usePromptInputPlaceholder`: an empty composer
+                    // with queued messages hints how to recall them.
                     (t!("input.placeholder_queued").to_string(), None, true, None)
                 } else if let Some(suggestion) = prompt_suggestion {
                     (suggestion.to_string(), None, true, None)
@@ -95,12 +103,31 @@ impl InputRenderModel {
             })
         };
 
-        let title = if is_streaming {
-            format!(" {} ", t!("input.title_queue"))
-        } else if prompt_mode != PromptMode::Normal {
+        // No queue/streaming title label: the input box stays clean while a
+        // turn runs (TS parity). The single queued-input affordance is the
+        // dimmed footer strip (`QueueStatusWidget`), shown only once something
+        // is actually queued.
+        let title = if !is_streaming && prompt_mode != PromptMode::Normal {
             format!(" {} ", t!(prompt_mode.title_i18n_key()))
         } else {
             String::new()
+        };
+
+        // Cursor's (row, col) within the displayed text — placeholder / palette
+        // states park it at the origin (their cursor is handled specially).
+        let (cursor_row, cursor_col) = if is_placeholder || command_palette_filter.is_some() {
+            (0, 0)
+        } else {
+            let cursor_byte = input
+                .textarea
+                .cursor()
+                .saturating_sub(prefix_consumed)
+                .min(display_text.len());
+            let before = &display_text[..cursor_byte];
+            let row = before.matches('\n').count();
+            let line_start = before.rfind('\n').map_or(0, |i| i + 1);
+            let col = UnicodeWidthStr::width(&before[line_start..]);
+            (row, col)
         };
 
         Self {
@@ -113,6 +140,8 @@ impl InputRenderModel {
             command_palette_filter,
             is_placeholder,
             is_streaming,
+            cursor_row,
+            cursor_col,
         }
     }
 }
@@ -216,27 +245,52 @@ impl Widget for InputWidget<'_> {
         } else {
             Style::default().fg(self.styles.text())
         };
-        let mut spans = vec![indicator];
-        if let Some(ghost) = model.inline_ghost.as_ref() {
-            let split = ghost.byte_pos.min(model.display_text.len());
-            let before = model.display_text[..split].to_string();
-            let after = model.display_text[split..].to_string();
-            spans.push(Span::styled(before, text_style));
-            spans.push(Span::styled(
-                ghost.text.clone(),
-                Style::default().fg(self.styles.dim()),
-            ));
-            spans.push(Span::styled(after, text_style));
+        let lines: Vec<Line> = if model.display_text.contains('\n') {
+            // Multi-line composer: one row per hard line break, scrolled to keep
+            // the cursor visible (mirrors TS, whose TextInput grows with content
+            // so recalled multi-message edits show on separate rows). Row 0 wears
+            // the indicator; continuation rows align under it. Inline ghost/hint
+            // are single-line affordances and are omitted here.
+            let content_rows = area.height.saturating_sub(2).max(1) as usize;
+            let segments: Vec<&str> = model.display_text.split('\n').collect();
+            let scroll = scroll_offset(model.cursor_row, segments.len(), content_rows);
+            segments
+                .iter()
+                .enumerate()
+                .skip(scroll)
+                .take(content_rows)
+                .map(|(idx, seg)| {
+                    let gutter = if idx == 0 {
+                        indicator.clone()
+                    } else {
+                        Span::raw("  ")
+                    };
+                    Line::from(vec![gutter, Span::styled((*seg).to_string(), text_style)])
+                })
+                .collect()
         } else {
-            spans.push(Span::styled(model.display_text.clone(), text_style));
-        }
-        if let Some(hint) = model.inline_hint.as_ref() {
-            spans.push(Span::styled(
-                hint.clone(),
-                Style::default().fg(self.styles.dim()),
-            ));
-        }
-        let input_line = Line::from(spans);
+            let mut spans = vec![indicator];
+            if let Some(ghost) = model.inline_ghost.as_ref() {
+                let split = ghost.byte_pos.min(model.display_text.len());
+                let before = model.display_text[..split].to_string();
+                let after = model.display_text[split..].to_string();
+                spans.push(Span::styled(before, text_style));
+                spans.push(Span::styled(
+                    ghost.text.clone(),
+                    Style::default().fg(self.styles.dim()),
+                ));
+                spans.push(Span::styled(after, text_style));
+            } else {
+                spans.push(Span::styled(model.display_text.clone(), text_style));
+            }
+            if let Some(hint) = model.inline_hint.as_ref() {
+                spans.push(Span::styled(
+                    hint.clone(),
+                    Style::default().fg(self.styles.dim()),
+                ));
+            }
+            vec![Line::from(spans)]
+        };
         let mut block = Block::default()
             .borders(Borders::TOP | Borders::BOTTOM)
             .title(model.title)
@@ -244,10 +298,19 @@ impl Widget for InputWidget<'_> {
         if let Some(view) = self.history_search {
             block = block.title_bottom(self.history_search_footer_line(view));
         }
-        let input = Paragraph::new(input_line).block(block);
-
-        input.render(area, buf);
+        Paragraph::new(lines).block(block).render(area, buf);
     }
+}
+
+/// First visible logical row so the cursor row stays within a `content_rows`
+/// window. Shared by the composer render and the cursor placement so they
+/// agree on scroll. `content_rows` is assumed ≥ 1.
+pub(crate) fn scroll_offset(cursor_row: usize, total_rows: usize, content_rows: usize) -> usize {
+    if total_rows <= content_rows {
+        return 0;
+    }
+    let max_scroll = total_rows - content_rows;
+    cursor_row.saturating_sub(content_rows - 1).min(max_scroll)
 }
 
 impl InputWidget<'_> {

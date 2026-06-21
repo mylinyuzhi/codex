@@ -62,13 +62,59 @@ fn plan_implementation_origin_renders_compact_chip_not_wall() {
 }
 
 #[test]
-fn ordinary_multiline_user_text_still_renders_chevron_rows() {
+fn multiline_user_text_renders_single_chevron_with_aligned_continuation() {
+    // A recalled multi-message edit lands as ONE user message with embedded
+    // newlines. It must read as one prompt: the `❯` appears once on the first
+    // row; continuation rows align to the content column with a 2-space gutter
+    // (mirrors TS `HighlightedThinkingText`, which renders the pointer once).
     let lines = render_user(&user_cell(
-        "line one\nline two",
-        Some(MessageOrigin::UserInput),
+        "使用中文\n详细",
+        Some(MessageOrigin::QueuedSteering),
     ));
     assert_eq!(lines.len(), 2);
-    assert!(flatten(&lines).contains('❯'));
+    let row0 = lines[0]
+        .spans
+        .iter()
+        .map(|s| s.content.as_ref())
+        .collect::<String>();
+    let row1 = lines[1]
+        .spans
+        .iter()
+        .map(|s| s.content.as_ref())
+        .collect::<String>();
+    assert_eq!(row0, "❯ 使用中文");
+    assert_eq!(row1, "  详细");
+    // Exactly one chevron across the whole message.
+    assert_eq!(flatten(&lines).matches('❯').count(), 1);
+}
+
+#[test]
+fn image_pill_extracts_well_formed_refs_only() {
+    assert_eq!(
+        super::image_pill_refs("[Image #3] what is this?"),
+        vec!["[Image #3]".to_string()]
+    );
+    assert_eq!(
+        super::image_pill_refs("a [Image #1] b [Image #2]"),
+        vec!["[Image #1]".to_string(), "[Image #2]".to_string()]
+    );
+    // Malformed pills (non-digit `N`) are ignored.
+    assert!(super::image_pill_refs("[Image #foo]").is_empty());
+    assert!(super::image_pill_refs("no images here").is_empty());
+}
+
+#[test]
+fn pasted_image_hangs_confirmation_row_under_prompt() {
+    let lines = render_user(&user_cell(
+        "[Image #3] 这个图片是什么？",
+        Some(MessageOrigin::QueuedSteering),
+    ));
+    // `❯ [Image #3] …` echo plus a hanging `⎿ [Image #3]` confirmation row.
+    assert_eq!(lines.len(), 2);
+    let row0 = flatten(&lines[..1]);
+    let row1 = flatten(&lines[1..]);
+    assert_eq!(row0, "❯ [Image #3] 这个图片是什么？");
+    assert_eq!(row1, "  ⎿ [Image #3]");
 }
 
 #[test]

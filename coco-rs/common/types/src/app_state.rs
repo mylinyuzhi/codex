@@ -15,13 +15,17 @@
 //! empty state; adding a field is a one-line edit here, not a string key
 //! coordination across three crates.
 
+use crate::AdditionalWorkingDir;
 use crate::AgentColorName;
 use crate::ExitPlanModeOutcome;
 use crate::PermissionMode;
+use crate::PermissionRuleSource;
 use crate::PermissionRulesBySource;
 use crate::RateLimitEntry;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
@@ -49,6 +53,46 @@ impl PendingPlanVerificationState {
     }
 }
 
+/// Live mirror of TS `appState.toolPermissionContext` — the single live
+/// source of truth for the permission-context BASE that
+/// `ToolContextFactory::build` snapshots each batch in one read-lock acquire
+/// (`guard.permissions.clone()`). Shared by `Arc` across the main engine and
+/// its subagents/forks, so subagents read-through the parent's live rules (TS
+/// `createSubagentContext` parity). Mutated only by the main-session apply
+/// path (`apply_permission_updates_everywhere`); subagents never write it.
+///
+/// Data only — all permission *logic* (apply/strip/merge) lives in
+/// `coco_permissions`, which `common/types` must not depend on.
+#[derive(Debug, Clone, Default)]
+pub struct LiveToolPermissionState {
+    /// `None` = uninitialized; seeded to `Some(config.permission_mode)` at
+    /// bootstrap. Readers fall back to the config mode while `None`.
+    /// TS parity: `toolPermissionContext.mode`.
+    pub mode: Option<PermissionMode>,
+    /// Mode active before entering plan mode. TS: `prePlanMode`.
+    pub pre_plan_mode: Option<PermissionMode>,
+    /// Dangerous allow rules stashed while Auto mode is active, restored on
+    /// exit. TS: `strippedDangerousRules`.
+    pub stripped_dangerous_rules: Option<PermissionRulesBySource>,
+    /// Session allow/deny/ask rules. TS: `alwaysAllowRules` / `alwaysDenyRules`
+    /// / `alwaysAskRules`.
+    pub allow_rules: PermissionRulesBySource,
+    pub deny_rules: PermissionRulesBySource,
+    pub ask_rules: PermissionRulesBySource,
+    /// Read-scope working dirs beyond cwd. TS: `additionalWorkingDirectories`.
+    pub additional_dirs: HashMap<String, AdditionalWorkingDir>,
+    /// Source-specific roots for path-scoped file rules. TS:
+    /// `rootPathForSource`.
+    pub permission_rule_source_roots: HashMap<PermissionRuleSource, PathBuf>,
+}
+
+impl LiveToolPermissionState {
+    /// Resolve the effective mode, falling back when uninitialized.
+    pub fn mode_or(&self, fallback: PermissionMode) -> PermissionMode {
+        self.mode.unwrap_or(fallback)
+    }
+}
+
 /// Cross-turn shared state carried on `ToolUseContext.app_state`.
 ///
 /// Grouped by lifecycle:
@@ -68,36 +112,11 @@ impl PendingPlanVerificationState {
 /// aren't comparable. Tests compare fields individually.
 #[derive(Debug, Clone, Default)]
 pub struct ToolAppState {
-    // ── Live permission-mode state (TS appState.toolPermissionContext) ──
-    /// The current live permission mode. `None` means "not yet
-    /// initialized from any source"; callers (engine `with_app_state`,
-    /// tests) seed this to `Some(config.permission_mode)` at session
-    /// bootstrap. After bootstrap, every write (EnterPlanMode exec,
-    /// ExitPlanMode exec, Shift+Tab handler) stores `Some(X)` — the
-    /// Option sentinel only distinguishes uninitialized state from a
-    /// deliberately-Default setting. Readers:
-    /// `unwrap_or(config.permission_mode)` or similar fallback.
-    ///
-    /// TS parity: `appState.toolPermissionContext.mode` — TS initializes
-    /// it at store-create time, we match with explicit seeding.
-    pub permission_mode: Option<PermissionMode>,
-
-    /// Mode active before entering plan mode. Set by
-    /// `EnterPlanModeTool::execute` when the engine transitions
-    /// into Plan; consumed by `ExitPlanModeTool::execute` to restore
-    /// the prior mode.
-    ///
-    /// TS parity: `appState.toolPermissionContext.prePlanMode`.
-    pub pre_plan_mode: Option<PermissionMode>,
-
-    /// Dangerous permission rules stashed when the classifier (Auto
-    /// mode) is active. Set by `transition_context_with_auto` /
-    /// `strip_dangerous_rules`, restored on auto-mode exit. Carried
-    /// on shared state (not the per-batch ctx) so an Auto→Plan→Default
-    /// transition can find the stash when Plan exits back to Default.
-    ///
-    /// TS parity: `appState.toolPermissionContext.strippedDangerousRules`.
-    pub stripped_dangerous_rules: Option<PermissionRulesBySource>,
+    /// Live permission context base (mode, pre_plan, stripped, allow/deny/ask
+    /// rules, additional_dirs, source_roots). The single live source of truth
+    /// that `ToolContextFactory::build` snapshots each batch. TS parity:
+    /// `appState.toolPermissionContext`. See [`LiveToolPermissionState`].
+    pub permissions: LiveToolPermissionState,
 
     // ── Plan-mode latches (one-shot signaling) ──
     /// Set by `ExitPlanModeTool` on success; read + cleared by the

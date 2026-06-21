@@ -505,10 +505,20 @@ impl QueryEngine {
                 // execution started for the current turn. See
                 // `engine-tui-unified-transcript-plan.md` §7.1 /
                 // `history_sync::finalize_user_cancel`.
-                crate::history_sync::finalize_user_cancel(
-                    history, /*in_flight_tool_calls*/ false, &event_tx,
-                )
-                .await;
+                //
+                // Steering exception: on a submit-interrupt the queued user
+                // message provides continuity, so skip the redundant standalone
+                // marker (TS `query.ts:1046` parity). See `is_steering_interrupt`.
+                if crate::history_sync::is_steering_interrupt(self.turn_abort.reason()) {
+                    tracing::debug!(
+                        "finalize_user_cancel: skipped standalone marker (submit-interrupt steering)"
+                    );
+                } else {
+                    crate::history_sync::finalize_user_cancel(
+                        history, /*in_flight_tool_calls*/ false, &event_tx,
+                    )
+                    .await;
+                }
                 // NOTE: we do NOT emit `TurnEnded(Interrupted)` from the
                 // engine. The runner layer (`tui_runner` / `sdk_runner`)
                 // owns the cancel-reason source of truth — a TUI

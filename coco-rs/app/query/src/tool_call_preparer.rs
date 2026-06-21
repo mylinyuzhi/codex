@@ -439,10 +439,18 @@ async fn resolve_permission_decision<M: std::borrow::Borrow<Message>>(
     // doing so rewrites it to `Allow`, the permission bridge never fires, and the
     // interactive overlay is silently dropped (the model just sees the questions
     // echoed back). Skip the overlay here so the `Ask` reaches the bridge.
+    // Auto-mode classifier gate — TS parity (`permissions.ts:520`): the
+    // decision to run the classifier reads the PER-CALL permission context
+    // mode, never a shared session-global flag. Primary path is `mode == Auto`;
+    // `mode == Plan` bridges to the classifier only when the narrowly-scoped
+    // auto flag is set (mirrors TS `mode === 'plan' && isAutoModeActive()`).
+    // Because each subagent carries its own `permission_context.mode`, a
+    // concurrent engine build can no longer race the classifier off.
+    let auto_classify = should_auto_classify(ctx.permission_context.mode, auto_mode_state);
     if matches!(decision, PermissionDecision::Ask { .. })
         && !tool.requires_user_interaction()
-        && let (Some(state), Some(tracker)) = (auto_mode_state, chosen_tracker.as_ref())
-        && state.is_active()
+        && auto_classify
+        && let Some(tracker) = chosen_tracker.as_ref()
     {
         let tool_id = tool.id();
         let shell_cwd = shell_analysis_cwd(&tool_id, ctx).await;
@@ -471,12 +479,21 @@ async fn resolve_permission_decision<M: std::borrow::Borrow<Message>>(
             additional_dirs: &additional_dirs,
             avoid_permission_prompts: ctx.avoid_permission_prompts,
         };
+        // The classifier IS being consulted (per-call mode is Auto / Plan-bridge
+        // + tracker present). agent_id rides the enclosing span, so a subagent's
+        // calls are attributable. The matching "result" line says what happened.
+        tracing::debug!(
+            tool = %tool_call.tool_name,
+            mode = ?ctx.permission_context.mode,
+            is_read_only,
+            "auto-mode classifier override: entering classify",
+        );
         let mut tracker_guard = tracker.lock().await;
         let classifier_decision = try_classify_in_auto_mode(
             &tool_call.tool_name,
             effective_input,
             is_read_only,
-            state,
+            auto_classify,
             &mut tracker_guard,
             history_messages,
             model_runtimes,
@@ -486,27 +503,33 @@ async fn resolve_permission_decision<M: std::borrow::Borrow<Message>>(
         )
         .await;
         drop(tracker_guard);
+        // `none` ⇒ classifier declined to decide and the interactive prompt
+        // stands; otherwise the classifier produced this allow/deny/ask verdict.
+        tracing::debug!(
+            tool = %tool_call.tool_name,
+            classifier_outcome = classifier_decision
+                .as_ref()
+                .map_or("none(prompt_stands)", decision_label),
+            "auto-mode classifier override: result",
+        );
         if let Some(d) = classifier_decision {
             decision = d;
         }
     } else if matches!(decision, PermissionDecision::Ask { .. })
         && !tool.requires_user_interaction()
     {
-        // The decision is an Ask that auto-mode COULD have classified, but the
-        // override block was skipped. Record exactly why so a stray prompt in
-        // an Auto session (esp. a subagent, which shares the parent's
-        // `AutoModeState` via `wire_engine`) is diagnosable from the log rather
-        // than guessed at: `auto_mode_active=false` ⇒ the shared flag was
-        // inactive at eval; `has_auto_mode_state=false` ⇒ this engine was never
-        // wired (build path bypassed `wire_engine`).
+        // An Ask that auto-mode could have classified was left as a prompt.
+        // Log the per-call mode + wiring so a stray Auto-mode prompt is
+        // diagnosable: a non-Auto/Plan `mode` is correct; otherwise a missing
+        // tracker or unwired engine is the cause. Default module target so the
+        // line is captured under the standard `coco=debug` filter.
         tracing::debug!(
-            target: "coco_query::permission",
             tool = %tool_call.tool_name,
+            mode = ?ctx.permission_context.mode,
+            auto_classify,
             has_auto_mode_state = auto_mode_state.is_some(),
-            auto_mode_active = auto_mode_state.is_some_and(|s| s.is_active()),
             has_tracker = chosen_tracker.is_some(),
-            requires_user_interaction = tool.requires_user_interaction(),
-            "auto-mode override skipped on Ask — surfacing interactive prompt",
+            "auto-mode classifier not run on Ask — surfacing interactive prompt",
         );
     }
 
@@ -689,6 +712,37 @@ async fn shell_analysis_cwd(tool_id: &ToolId, ctx: &ToolUseContext) -> Option<St
     }
 }
 
+/// Whether the auto-mode classifier should run for THIS tool call.
+///
+/// TS parity (`permissions.ts:520`): the gate is driven by the per-call
+/// permission context `mode`, never a shared session-global flag. Primary path
+/// is `Auto`; `Plan` bridges to the classifier only when the narrowly-scoped
+/// auto flag is set (mirrors `mode === 'plan' && isAutoModeActive()`). Because
+/// each subagent carries its own `permission_context.mode`, a concurrent engine
+/// build mutating the shared `AutoModeState` can no longer race the classifier
+/// off for an unrelated tool call.
+fn should_auto_classify(
+    mode: coco_types::PermissionMode,
+    auto_mode_state: Option<&Arc<coco_permissions::AutoModeState>>,
+) -> bool {
+    match mode {
+        coco_types::PermissionMode::Auto => true,
+        coco_types::PermissionMode::Plan => auto_mode_state.is_some_and(|s| s.is_active()),
+        _ => false,
+    }
+}
+
+/// Short tag for a `PermissionDecision`, for the `classifier_outcome` log
+/// field (the canonical one in `coco_permissions::evaluate` is private).
+fn decision_label(decision: &PermissionDecision) -> &'static str {
+    match decision {
+        PermissionDecision::Allow { .. } => "allow",
+        PermissionDecision::Deny { .. } => "deny",
+        PermissionDecision::Ask { .. } => "ask",
+        PermissionDecision::Abort { .. } => "abort",
+    }
+}
+
 fn dynamic_read_only(
     tool: &dyn DynTool,
     tool_id: &ToolId,
@@ -703,16 +757,30 @@ fn dynamic_read_only(
 }
 
 fn bash_dynamic_read_only(command: &str, cwd: &str) -> bool {
+    // Surface *why* a Bash command was judged not-read-only — without this the
+    // only signal is `dynamic_read_only=false` at the eval site, which can't
+    // distinguish a multi-cwd change, a git-escape, or a statically-unprovable
+    // command (a `$var`/`[ test ]`/`for` loop trips the conservative static
+    // gate even when semantically read-only). Cap the preview to keep the log
+    // line bounded.
+    let not_read_only = |reason: &'static str| {
+        let preview: String = command.chars().take(120).collect();
+        tracing::debug!(reason, command_preview = %preview, "bash not auto-read-only");
+        false
+    };
     if command.is_empty() {
-        return false;
+        return not_read_only("empty_command");
     }
     if coco_shell::check_multiple_cwd_changes(command, cwd).is_some() {
-        return false;
+        return not_read_only("multi_cwd_change");
     }
     if coco_shell::has_git_escape_pattern_in_cwd(command, cwd) {
-        return false;
+        return not_read_only("git_escape_pattern");
     }
-    coco_shell::read_only::is_read_only_command(command)
+    if coco_shell::read_only::is_read_only_command(command) {
+        return true;
+    }
+    not_read_only("static_not_read_only")
 }
 
 async fn dynamic_concurrency_safe(
@@ -766,7 +834,7 @@ async fn try_classify_in_auto_mode<M: std::borrow::Borrow<Message>>(
     tool_name: &str,
     input: &Value,
     is_read_only: bool,
-    state: &coco_permissions::AutoModeState,
+    auto_active: bool,
     tracker: &mut coco_permissions::DenialTracker,
     messages: &[M],
     model_runtimes: &Arc<ModelRuntimeRegistry>,
@@ -896,7 +964,7 @@ async fn try_classify_in_auto_mode<M: std::borrow::Borrow<Message>>(
         tool_name,
         input,
         is_read_only,
-        state,
+        auto_active,
         tracker,
         messages,
         auto_mode_rules,

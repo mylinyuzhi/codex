@@ -3,6 +3,7 @@
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::style::Color;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::Block;
@@ -105,12 +106,7 @@ pub(crate) fn interactive_viewport_desired_height(
     });
     let activity = turn_activity_view(state, width);
     let activity_rows = inline_activity_height(&activity, max_height, width);
-    let queue_rows: u16 =
-        if crate::widgets::QueueStatusWidget::should_display(&state.session.queued_commands) {
-            1
-        } else {
-            0
-        };
+    let queue_rows: u16 = crate::widgets::QueueStatusWidget::height(&state.session.queued_commands);
     // Mirror render_live_viewport's reservations so the sizing pass and the
     // paint pass agree on viewport height (these were previously omitted here).
     let status_indicator_rows: u16 = if show_status_indicator(state) { 1 } else { 0 };
@@ -157,10 +153,23 @@ fn input_height_for_state(state: &AppState) -> u16 {
         state.ui.interaction.active_prompt,
         Some(PanePromptState::Question(_))
     ) {
-        0
-    } else {
-        3.min(constants::MAX_INPUT_HEIGHT as u16)
+        return 0;
     }
+    // Grow the composer with its hard line breaks (mirrors TS, whose TextInput
+    // expands with content) so recalled multi-message edits and multi-line input
+    // show on separate rows. Capped at MAX_INPUT_HEIGHT content rows (then the
+    // composer scrolls). +2 for the top/bottom borders.
+    let max_content = (constants::MAX_INPUT_HEIGHT as usize)
+        .saturating_sub(2)
+        .max(1);
+    let line_count = state
+        .ui
+        .input
+        .text()
+        .split('\n')
+        .count()
+        .clamp(1, max_content);
+    line_count as u16 + 2
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -249,12 +258,7 @@ fn render_live_viewport(
     let input_height = input_height_for_state(state);
     let activity = turn_activity_view(state, area.width);
     let activity_rows = inline_activity_height(&activity, area.height, area.width);
-    let queue_rows: u16 =
-        if crate::widgets::QueueStatusWidget::should_display(&state.session.queued_commands) {
-            1
-        } else {
-            0
-        };
+    let queue_rows: u16 = crate::widgets::QueueStatusWidget::height(&state.session.queued_commands);
     let stash_rows: u16 =
         if crate::widgets::StashNotice::should_display(state.ui.stashed_input.as_ref()) {
             1
@@ -338,6 +342,13 @@ fn render_live_viewport(
         // clock subtracts paused time (permission-prompt blocks). The
         // turn-start anchor is on the running-turn record itself —
         // no Option<Instant> threading required.
+        // Owned here so the borrow outlives the `StatusIndicatorView`
+        // (`verb: &'a str`). Empty unless the user just hit Esc/Ctrl+C.
+        let interrupting_verb = state
+            .ui
+            .ephemeral
+            .is_interrupting()
+            .then(|| crate::i18n::t!("status.interrupting").to_string());
         let view = if state.ui.ephemeral.turn_active() {
             let elapsed_ms = state.ui.ephemeral.elapsed_ms(std::time::Instant::now());
             let effort = state.session.thinking_effort;
@@ -359,7 +370,10 @@ fn render_live_viewport(
                 .map(|a| a.total_tokens)
                 .sum();
             coco_tui_ui::widgets::StatusIndicatorView {
-                verb: state.ui.ephemeral.current_verb().unwrap_or("Working"),
+                verb: interrupting_verb
+                    .as_deref()
+                    .or_else(|| state.ui.ephemeral.current_verb())
+                    .unwrap_or("Working"),
                 elapsed_ms,
                 // Input doesn't stream, so there's no live estimate (unlike
                 // output). Surface the known prompt-token count from the
@@ -552,7 +566,7 @@ fn render_input(frame: &mut SurfaceFrame<'_>, state: &AppState, area: Rect, styl
         .focused(is_focused)
         .streaming(state.is_streaming())
         .prompt_suggestion(state.session.prompt_suggestions.last().map(String::as_str))
-        .has_editable_queue(!state.session.queued_commands.is_empty())
+        .has_editable_queue(state.session.queued_commands.iter().any(|q| q.editable))
         .command_palette_filter(None)
         .history_search(history_search);
 
@@ -699,16 +713,13 @@ fn render_interaction_prompt(
             state.session.permission_mode,
             styles,
         );
-        let lines = compact_prompt_lines(lines, area.height.saturating_sub(2) as usize);
-        frame.render_widget(Clear, box_area);
-        frame.render_widget(
-            Paragraph::new(lines).wrap(Wrap { trim: false }).block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(title)
-                    .border_style(Style::default().fg(border_color)),
-            ),
+        render_permission_box(
+            frame,
             box_area,
+            title,
+            lines,
+            border_color,
+            state.ui.interaction.permission_scroll,
         );
         return;
     }
@@ -731,13 +742,75 @@ fn render_interaction_prompt(
     );
 }
 
-fn compact_prompt_lines(lines: Vec<Line<'static>>, max_lines: usize) -> Vec<Line<'static>> {
-    compact_sequence(
-        lines,
-        max_lines,
-        |line| line.spans.iter().all(|span| span.content.trim().is_empty()),
-        || Line::from("..."),
-    )
+/// Render a permission prompt box whose command/detail body scrolls (offset
+/// `scroll`, clamped here against the wrapped body height) while the trailing
+/// action rows stay pinned to the bottom and always visible. Mirrors codex-rs'
+/// approval overlay (scrollable content + fixed actions) instead of collapsing
+/// the middle of a long command with an ellipsis.
+fn render_permission_box(
+    frame: &mut SurfaceFrame<'_>,
+    box_area: Rect,
+    title: String,
+    lines: Vec<Line<'static>>,
+    border_color: Color,
+    scroll: u16,
+) {
+    let (body, actions) = split_body_and_actions(lines);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color));
+    let inner = block.inner(box_area);
+    let inner_w = inner.width;
+
+    // Reserve rows for the actions at the bottom, always keeping >=1 row for
+    // the body so a tall action list can't hide the command entirely.
+    let action_h = (actions.len() as u16).min(inner.height.saturating_sub(1));
+    let body_h = inner.height.saturating_sub(action_h);
+
+    let body_total = wrapped_lines_height(&body, inner_w);
+    let max_scroll = body_total.saturating_sub(body_h);
+    let scroll = scroll.min(max_scroll);
+
+    // Advertise the scroll affordance only when the body actually overflows.
+    let title = if max_scroll > 0 {
+        format!("{} — PgUp/PgDn ⇅", title.trim_end())
+    } else {
+        title
+    };
+
+    frame.render_widget(Clear, box_area);
+    frame.render_widget(block.title(title), box_area);
+
+    if body_h > 0 {
+        frame.render_widget(
+            Paragraph::new(body)
+                .wrap(Wrap { trim: false })
+                .scroll((scroll, 0)),
+            Rect::new(inner.x, inner.y, inner_w, body_h),
+        );
+    }
+    if action_h > 0 {
+        frame.render_widget(
+            Paragraph::new(actions).wrap(Wrap { trim: false }),
+            Rect::new(inner.x, inner.y + body_h, inner_w, action_h),
+        );
+    }
+}
+
+/// Split styled prompt lines into `(body, actions)` at the LAST blank
+/// separator. The trailing block (decision rows + hint) is pinned; the leading
+/// block (command / detail) scrolls. With no blank separator everything is body.
+fn split_body_and_actions(lines: Vec<Line<'static>>) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
+    let is_blank =
+        |line: &Line<'static>| line.spans.iter().all(|span| span.content.trim().is_empty());
+    match lines.iter().rposition(is_blank) {
+        // Keep the blank separator as the body's trailing row so a prompt that
+        // fits renders identically to the pre-scroll single-paragraph layout
+        // (body flows from the top, actions sit directly below).
+        Some(idx) if idx + 1 < lines.len() => (lines[..=idx].to_vec(), lines[idx + 1..].to_vec()),
+        _ => (lines, Vec::new()),
+    }
 }
 
 /// Shrink `items` to fit `max_lines`, shared by the styled (`Line`) and plain

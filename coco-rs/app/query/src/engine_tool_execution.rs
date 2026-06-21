@@ -58,7 +58,7 @@ impl QueryEngine {
     ) -> ToolExecutionBranch {
         if streaming_executed {
             if let (Some(state), Some(ctx)) = (self.app_state.as_ref(), streaming_ctx.as_ref()) {
-                let permission_mode_after_tools = state.read().await.permission_mode;
+                let permission_mode_after_tools = state.read().await.permissions.mode;
                 if permission_mode_after_tools != Some(ctx.permission_context.mode)
                     && let Some(mode) = permission_mode_after_tools
                 {
@@ -151,7 +151,7 @@ impl QueryEngine {
             .await;
 
         let permission_mode_before_tools = match self.app_state.as_ref() {
-            Some(state) => state.read().await.permission_mode,
+            Some(state) => state.read().await.permissions.mode,
             None => None,
         };
 
@@ -181,7 +181,7 @@ impl QueryEngine {
         .await;
 
         if let Some(state) = self.app_state.as_ref() {
-            let permission_mode_after_tools = state.read().await.permission_mode;
+            let permission_mode_after_tools = state.read().await.permissions.mode;
             if permission_mode_after_tools != permission_mode_before_tools
                 && let Some(mode) = permission_mode_after_tools
             {

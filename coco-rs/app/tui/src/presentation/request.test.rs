@@ -140,7 +140,7 @@ fn permission_content_hints_approve_deny_only_shortcuts() {
 }
 
 #[test]
-fn permission_content_hints_session_only_shortcuts() {
+fn permission_content_hints_add_directories_session_and_local() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let mut state = permission_prompt(PermissionDetail::Generic {
@@ -158,8 +158,10 @@ fn permission_content_hints_session_only_shortcuts() {
         UiStyles::new(&theme),
     );
 
-    assert!(body.contains("2/a · Yes, allow Edit for this session"));
-    assert!(body.contains("1-3 or Y/A/N shortcuts"), "body: {body}");
+    // The dir suggestion now drives both session and local rows → 4 rows.
+    assert!(body.contains("2/s · Yes, allow Edit for this session"));
+    assert!(body.contains("3/a · Yes, always allow Edit locally"));
+    assert!(body.contains("1-4 or Y/S/A/N shortcuts"), "body: {body}");
 }
 
 #[test]

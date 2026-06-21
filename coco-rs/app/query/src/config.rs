@@ -18,7 +18,6 @@ use coco_types::Features;
 use coco_types::PermissionMode;
 use coco_types::PermissionRule;
 use coco_types::PermissionRuleSource;
-use coco_types::PermissionRulesBySource;
 use coco_types::PromptCacheConfig;
 use coco_types::ThinkingLevel;
 use coco_types::TokenUsage;
@@ -73,6 +72,29 @@ pub enum ContinueReason {
     TokenBudgetContinuation,
     /// Context collapse drain retry.
     CollapseDrainRetry { committed: i32 },
+}
+
+/// Per-engine permission derivation — the Rust analog of TS
+/// `createSubagentContext` + `agentGetAppState`. Applied in
+/// `ToolContextFactory::build` on top of the shared live base (read-through
+/// from the parent's `ToolAppState`), producing the engine's
+/// `ToolPermissionContext` without ever mutating the shared base.
+///
+/// `deny`/`ask`/`mode` are inherited from the base read-through (TS parity).
+/// This struct only carries the per-engine *deltas*.
+#[derive(Debug, Clone, Default)]
+pub struct PermissionDerivation {
+    /// TS `allowedTools` replace-on-restrict. When `Some`, the derived allow
+    /// map keeps ONLY the parent's `CliArg`-source rules plus these (as
+    /// `Session`-source), dropping the parent's other allow sources. `None`
+    /// inherits the parent's full allow set. Mirrors `runAgent.ts:469-479`.
+    pub allowed_tools_replace: Option<Vec<PermissionRule>>,
+    /// Optional per-agent mode override (agent-definition `permissionMode`).
+    /// Does not override parent `Bypass`/`AcceptEdits`/`Auto`.
+    pub mode_override: Option<PermissionMode>,
+    /// Read-scope dirs layered on top of the inherited base (parent cwd bridge
+    /// for worktree-isolated subagents + explicit inherited dirs).
+    pub extra_additional_dirs: std::collections::HashMap<String, coco_types::AdditionalWorkingDir>,
 }
 
 /// Configuration for the query engine.
@@ -159,19 +181,6 @@ pub struct QueryEngineConfig {
     pub session_id: String,
     /// Project root directory for hook orchestration context.
     pub project_dir: Option<std::path::PathBuf>,
-    /// Session-scoped permission rules loaded from settings.json
-    /// (user / project / policy layers). Populated by the CLI
-    /// layer at bootstrap; `ToolContextFactory` threads them into
-    /// every `ToolUseContext.permission_context.{allow_rules,
-    /// deny_rules, ask_rules}` so the evaluator sees the full
-    /// permission rule set.
-    ///
-    /// Default-empty maps preserve the pre-wiring behavior where
-    /// mode-based auto-allow (Plan / Accept / Bypass) was the only
-    /// effective permission driver.
-    pub allow_rules: PermissionRulesBySource,
-    pub deny_rules: PermissionRulesBySource,
-    pub ask_rules: PermissionRulesBySource,
     /// Optional live permission rules read on every tool-context build.
     /// The leader can send `team_permission_update` while a teammate is
     /// mid-turn, and the next tool permission check sees the new
@@ -187,13 +196,17 @@ pub struct QueryEngineConfig {
     /// at original cwd.
     pub permission_rule_source_roots:
         std::collections::HashMap<PermissionRuleSource, std::path::PathBuf>,
-    /// Per-session working-directory allowlist, augmenting the cwd.
-    /// Populated by the `/add-dir <path>` slash command via the
-    /// runtime's `session_additional_dirs` and threaded into every
-    /// `ToolUseContext.permission_context.additional_dirs` so file/shell
-    /// tools see the wider scope without persisting to settings.json.
-    pub session_additional_dirs:
-        std::collections::HashMap<String, coco_types::AdditionalWorkingDir>,
+    /// Per-engine isolated rules to pre-seed into this engine's
+    /// `live_command_rules` at construction (Command-source additions a
+    /// subagent/skill carries that must NOT leak into the shared app_state
+    /// base). Empty for the main session. See [`PermissionDerivation`].
+    pub initial_command_rules: Vec<PermissionRule>,
+    /// Per-engine permission derivation applied on top of the shared live
+    /// base in `ToolContextFactory::build`. `None` = main session (identity).
+    /// `Some` = subagent/fork/teammate: the Rust analog of TS
+    /// `createSubagentContext`/`agentGetAppState` (read-through the parent base
+    /// + `allowedTools` replace-on-restrict + extra read dirs + mode override).
+    pub permission_derivation: Option<PermissionDerivation>,
     /// Working directory override for this session's tool calls.
     ///
     /// When `Some(path)`, [`ToolContextFactory`](crate::tool_context::ToolContextFactory)
@@ -393,13 +406,11 @@ impl Default for QueryEngineConfig {
             fast_mode: false,
             session_id: String::new(),
             project_dir: None,
-            allow_rules: Default::default(),
-            deny_rules: Default::default(),
-            ask_rules: Default::default(),
             live_permission_rules: None,
             live_permission_mode: None,
             permission_rule_source_roots: Default::default(),
-            session_additional_dirs: Default::default(),
+            initial_command_rules: Vec::new(),
+            permission_derivation: None,
             cwd_override: None,
             plans_directory: None,
             agent_id: None,

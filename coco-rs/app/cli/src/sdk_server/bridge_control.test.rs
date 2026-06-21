@@ -81,7 +81,7 @@ async fn bridge_handler_accepts_bypass_when_capability_on() {
     // app_state propagation — engine's live source of truth.
     let app_state = session.app_state.read().await;
     assert_eq!(
-        app_state.permission_mode,
+        app_state.permissions.mode,
         Some(coco_types::PermissionMode::BypassPermissions),
     );
 }
@@ -113,7 +113,7 @@ async fn bridge_handler_enter_plan_applies_plan_transition_state() {
     {
         let slot = state.session.read().await;
         let session = slot.as_ref().unwrap();
-        session.app_state.write().await.permission_mode =
+        session.app_state.write().await.permissions.mode =
             Some(coco_types::PermissionMode::AcceptEdits);
     }
 
@@ -129,11 +129,11 @@ async fn bridge_handler_enter_plan_applies_plan_transition_state() {
     let session = slot.as_ref().unwrap();
     let app_state = session.app_state.read().await;
     assert_eq!(
-        app_state.permission_mode,
+        app_state.permissions.mode,
         Some(coco_types::PermissionMode::Plan),
     );
     assert_eq!(
-        app_state.pre_plan_mode,
+        app_state.permissions.pre_plan_mode,
         Some(coco_types::PermissionMode::AcceptEdits),
     );
     assert!(app_state.plan_mode_entry_ms.is_some());

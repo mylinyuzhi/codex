@@ -836,6 +836,13 @@ pub enum MessageOrigin {
     /// but the TUI renders it as a compact chip instead of echoing the
     /// whole plan as a `❯` input wall.
     PlanImplementation,
+    /// User text typed while a turn was in flight (steering), drained from
+    /// the command queue at a turn boundary. Mirrors TS: the message body is
+    /// the **raw** user text (fully visible + counted in the transcript);
+    /// the model-facing "The user sent a new message while you were working…"
+    /// framing is applied only at prompt-build time (`app/query`), never
+    /// stored on the message. See `coco_query::helpers::wrap_steering_messages_for_api`.
+    QueuedSteering,
 }
 
 /// Direction hint for partial compaction.

@@ -1073,7 +1073,7 @@ impl QueryEngine {
         } else {
             coco_types::ToolAppState::default()
         };
-        let in_plan_mode = app_state_snapshot.permission_mode
+        let in_plan_mode = app_state_snapshot.permissions.mode
             == Some(coco_types::PermissionMode::Plan)
             || (self.app_state.is_none()
                 && self.config.permission_mode == coco_types::PermissionMode::Plan);
@@ -1281,7 +1281,7 @@ impl QueryEngine {
             } else {
                 coco_types::ToolAppState::default()
             };
-            let in_plan_mode = app_state_snapshot.permission_mode
+            let in_plan_mode = app_state_snapshot.permissions.mode
                 == Some(coco_types::PermissionMode::Plan)
                 || (self.app_state.is_none()
                     && self.config.permission_mode == coco_types::PermissionMode::Plan);

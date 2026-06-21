@@ -1,6 +1,7 @@
 use super::*;
 use crate::generator::GeneratorContext;
 use coco_config::SystemReminderConfig;
+use coco_types::LiveToolPermissionState;
 use coco_types::PermissionMode;
 use coco_types::TaskListStatus;
 use coco_types::TaskRecord;
@@ -18,7 +19,10 @@ fn cfg() -> SystemReminderConfig {
 fn sets_is_plan_mode_from_live_permission_mode() {
     let c = cfg();
     let app = ToolAppState {
-        permission_mode: Some(PermissionMode::Plan),
+        permissions: LiveToolPermissionState {
+            mode: Some(PermissionMode::Plan),
+            ..Default::default()
+        },
         ..Default::default()
     };
 
@@ -37,7 +41,10 @@ fn sets_is_plan_mode_from_live_permission_mode() {
 fn sets_is_auto_mode_from_live_permission_mode() {
     let c = cfg();
     let app = ToolAppState {
-        permission_mode: Some(PermissionMode::Auto),
+        permissions: LiveToolPermissionState {
+            mode: Some(PermissionMode::Auto),
+            ..Default::default()
+        },
         ..Default::default()
     };
 
@@ -58,7 +65,10 @@ fn plan_mode_with_active_auto_classifier_sets_is_auto_mode() {
     // even though the live mode is `Plan`.
     let c = cfg();
     let app = ToolAppState {
-        permission_mode: Some(PermissionMode::Plan),
+        permissions: LiveToolPermissionState {
+            mode: Some(PermissionMode::Plan),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let ctx = apply_app_state(
@@ -79,7 +89,10 @@ fn plan_mode_with_active_auto_classifier_sets_is_auto_mode() {
 fn plan_mode_without_classifier_does_not_set_is_auto_mode() {
     let c = cfg();
     let app = ToolAppState {
-        permission_mode: Some(PermissionMode::Plan),
+        permissions: LiveToolPermissionState {
+            mode: Some(PermissionMode::Plan),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let ctx = apply_app_state(
@@ -201,7 +214,10 @@ fn apply_helpers_are_composable() {
         }],
     );
     let app = ToolAppState {
-        permission_mode: Some(PermissionMode::Plan),
+        permissions: LiveToolPermissionState {
+            mode: Some(PermissionMode::Plan),
+            ..Default::default()
+        },
         has_exited_plan_mode: true,
         todos_by_agent: todos_map,
         ..Default::default()

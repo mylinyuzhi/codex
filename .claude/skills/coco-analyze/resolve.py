@@ -209,7 +209,13 @@ def triage_wire(wire_dir: str) -> list[str]:
     providers = sorted({e.get("provider") for e in entries if e.get("provider")})
     models = sorted({e.get("model") for e in entries if e.get("model")})
     out.append(f"- providers: {', '.join(providers)} | models: {', '.join(models)} | requests: {len(entries)}")
-    bad = [e for e in entries if e.get("outcome") not in (None, "ok") or (e.get("status") not in (None, 200))]
+    def _is_bad(e) -> bool:
+        if e.get("outcome") not in (None, "ok"):
+            return True
+        st = e.get("status")
+        return st is not None and not (200 <= st < 300)
+
+    bad = [e for e in entries if _is_bad(e)]
     if bad:
         out.append(f"- ⚠ {len(bad)} non-ok request(s):")
         for e in bad[-10:]:
@@ -542,7 +548,7 @@ def emit_report(pid, info: dict, perf: bool = False):
 def main(argv: list[str]) -> int:
     args = argv[1:]
     if "--list" in args:
-        rows = pidfiles_for_cwd(os.getcwd()) if False else all_pidfiles()
+        rows = all_pidfiles()
         rows.sort(key=lambda d: d.get("started_at", 0), reverse=True)
         print("# known coco-rs sessions\n")
         for pf in rows:

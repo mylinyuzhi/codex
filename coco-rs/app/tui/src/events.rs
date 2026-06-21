@@ -270,6 +270,12 @@ pub enum TuiCommand {
     SurfaceJumpEnd,
     /// Confirm selection in state.
     SurfaceConfirm,
+    /// Scroll the active permission prompt's command/detail body up one page
+    /// (`PageUp`). The action rows stay pinned; only the scrollable body moves.
+    PermissionScrollUp,
+    /// Scroll the active permission prompt's command/detail body down one page
+    /// (`PageDown`).
+    PermissionScrollDown,
     /// CopyPicker-only shortcut: write the focused selection to the
     /// fallback temp file without touching the clipboard. Bound to `w`.
     CopyPickerWriteToFile,

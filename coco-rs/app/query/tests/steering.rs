@@ -6,15 +6,16 @@
 //!    and enqueues a [`coco_query::QueuedCommand`] **while the engine is
 //!    mid-turn** (the mock LLM is parked inside an artificial delay so
 //!    we can race against the turn).
-//! 2. The engine drains the queue at end-of-turn into history as a
-//!    `Message::Attachment` of kind `QueuedCommand`. The body must:
-//!    - Be wrapped in `<system-reminder>…</system-reminder>` (TS
-//!      `wrapMessagesInSystemReminder`).
-//!    - Carry the origin-specific framing prose ("The user sent a new
-//!      message while you were working:" — TS `wrapCommandText`).
-//! 3. The next turn's API call sees the wrapped queued message in its
-//!    prompt — verifying that the content actually reaches the model
-//!    (the headline UX promise).
+//! 2. The engine drains the queue at end-of-turn into history as a RAW
+//!    `Message::User` tagged `MessageOrigin::QueuedSteering` (mirrors TS:
+//!    the steered message IS a user message, stored as the user's plain
+//!    text — no `<system-reminder>`, no framing — so it is fully visible in
+//!    the transcript and counted as a user message).
+//! 3. The next turn's API call sees the message **wrapped** in its prompt —
+//!    `<system-reminder>` + the "The user sent a new message while you were
+//!    working:" framing (TS `wrapCommandText`) — proving the wrapper is an
+//!    API-serialization concern applied at prompt-build, not stored, and
+//!    that the content actually reaches the model (the headline UX promise).
 //! 4. Lifecycle events (`CommandDequeued{id}` per item +
 //!    `QueueStateChanged{queued: 0}` summary) flow through `event_tx`
 //!    so the TUI / SDK consumer can update its display.
@@ -317,49 +318,54 @@ async fn e2e_steering_drains_into_history_and_reaches_next_turn() {
         result.turns,
     );
 
-    // ── 2. History contains an Attachment of kind QueuedCommand with
-    // the system-reminder wrap and the origin-specific framing prose.
-    let queued_attachments: Vec<_> = result
+    // ── 2. History stores the steered message as a RAW user message
+    // (`MessageOrigin::QueuedSteering`), NOT a wrapped attachment. Mirrors TS:
+    // the transcript shows the user's plain text; the model-facing framing is
+    // applied only at prompt-build time (asserted in section 3).
+    let steering_users: Vec<_> = result
         .final_messages
         .iter()
         .filter_map(|m| match m.as_ref() {
-            coco_messages::Message::Attachment(att)
-                if att.kind == AttachmentKind::QueuedCommand =>
+            coco_messages::Message::User(u)
+                if u.origin == Some(coco_messages::MessageOrigin::QueuedSteering) =>
             {
-                Some(att)
+                Some(u)
             }
             _ => None,
         })
         .collect();
     assert_eq!(
-        queued_attachments.len(),
+        steering_users.len(),
         1,
-        "expected exactly one drained queued_command attachment in history; \
-         found {}",
-        queued_attachments.len()
+        "expected exactly one drained steering user message in history; found {}",
+        steering_users.len()
     );
-    let body = queued_attachments[0].as_text_for_display();
-    assert!(
-        body.contains("<system-reminder>"),
-        "drained queued message must be wrapped in <system-reminder> \
-         (TS wrapMessagesInSystemReminder); body was: {body}"
-    );
-    assert!(
-        body.contains("</system-reminder>"),
-        "drained queued message must close the <system-reminder> tag; body was: {body}"
-    );
-    assert!(
-        body.contains("The user sent a new message while you were working:"),
-        "drained queued message must carry origin-specific framing prose \
-         (TS wrapCommandText case 'human'); body was: {body}"
-    );
+    let body = extract_all_text(&steering_users[0].message);
     assert!(
         body.contains(STEERING_MARKER),
-        "drained queued message must contain the literal user prompt; body was: {body}"
+        "stored steering message must carry the raw user text; body was: {body}"
+    );
+    assert!(
+        !body.contains("<system-reminder>"),
+        "stored steering message must be RAW — no <system-reminder> wrap in \
+         history (the wrap is an API-serialization concern); body was: {body}"
+    );
+    assert!(
+        !body.contains("The user sent a new message while you were working:"),
+        "stored steering message must NOT carry the model-facing framing in \
+         history; body was: {body}"
+    );
+    assert!(
+        !result.final_messages.iter().any(|m| matches!(
+            m.as_ref(),
+            coco_messages::Message::Attachment(att) if att.kind == AttachmentKind::QueuedCommand
+        )),
+        "human steering must no longer land as a QueuedCommand attachment in history"
     );
 
     // ── 3. The next turn's API call saw the wrapped queued content in
-    // its prompt — proving the content actually reached the model.
+    // its prompt — proving the wrapper is applied at prompt-build and the
+    // content actually reached the model.
     let (prompt_count, second_prompt_text) = {
         let prompts = captured.lock().unwrap();
         let count = prompts.len();
@@ -381,7 +387,12 @@ async fn e2e_steering_drains_into_history_and_reaches_next_turn() {
     assert!(
         second_prompt_text.contains("<system-reminder>"),
         "second turn's prompt must contain the <system-reminder> wrap \
-         around the queued attachment; got prompt: {second_prompt_text}"
+         around the steered message; got prompt: {second_prompt_text}"
+    );
+    assert!(
+        second_prompt_text.contains("The user sent a new message while you were working:"),
+        "second turn's prompt must carry the model-facing steering framing \
+         (applied at prompt-build, not stored); got prompt: {second_prompt_text}"
     );
 
     // ── 4. Lifecycle events fired exactly once each: one
@@ -488,22 +499,29 @@ async fn e2e_steering_origin_framing_per_kind() {
         .map(|m| coco_messages::wrapping::extract_text_from_message(m))
         .collect();
 
-    // Every body wraps the framing in <system-reminder>.
-    for (idx, body) in bodies.iter().enumerate() {
+    // Human steering (body[0]) is stored RAW — no framing, no wrap (it is a
+    // plain user message; the wrapper is applied only at prompt-build).
+    assert!(
+        !bodies[0].contains("<system-reminder>"),
+        "Human steering must be stored raw, not system-reminder wrapped; got: {}",
+        bodies[0]
+    );
+    assert!(
+        !bodies[0].contains("The user sent a new message while you were working:"),
+        "Human steering must not carry the model-facing framing in history; got: {}",
+        bodies[0]
+    );
+
+    // Non-human origins (coordinator / task-notification / channel) remain
+    // model-only attachments, wrapped in <system-reminder> with their framing.
+    for (idx, body) in bodies.iter().enumerate().skip(1) {
         assert!(
             body.contains("<system-reminder>"),
-            "body[{idx}] must be system-reminder wrapped; got: {body}"
+            "non-human body[{idx}] must be system-reminder wrapped; got: {body}"
         );
     }
 
-    // Per-origin framing prose. Each must appear exactly once across
-    // the four drained items, in the same priority-ordered sequence
-    // the queue surfaced them in.
-    assert!(
-        bodies[0].contains("The user sent a new message while you were working:"),
-        "Human origin prose missing from body[0]: {}",
-        bodies[0]
-    );
+    // Per-origin framing prose for the non-human items, in priority order.
     assert!(
         bodies[1].contains("The coordinator sent a message while you were working:"),
         "Coordinator origin prose missing from body[1]: {}",

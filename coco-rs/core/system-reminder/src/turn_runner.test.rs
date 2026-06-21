@@ -4,6 +4,7 @@ use coco_config::SystemReminderConfig;
 use coco_context::Phase4Variant;
 use coco_context::PlanWorkflow;
 use coco_messages::MessageHistory;
+use coco_types::LiveToolPermissionState;
 use coco_types::PermissionMode;
 use coco_types::ToolAppState;
 use coco_types::ToolName;
@@ -92,7 +93,10 @@ async fn no_generators_produces_empty() {
 async fn default_registry_fires_plan_reminder_in_plan_mode() {
     let config = SystemReminderConfig::default();
     let app_state = ToolAppState {
-        permission_mode: Some(PermissionMode::Plan),
+        permissions: LiveToolPermissionState {
+            mode: Some(PermissionMode::Plan),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let history = MessageHistory::default();

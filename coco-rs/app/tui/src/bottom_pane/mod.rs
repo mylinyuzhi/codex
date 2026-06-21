@@ -59,6 +59,11 @@ pub(crate) fn confirmation_map_key(state: &AppState, key: KeyEvent) -> Option<Tu
         KeyCode::BackTab => Some(TuiCommand::SurfacePrev),
         KeyCode::Up | KeyCode::Char('k') => Some(TuiCommand::SurfacePrev),
         KeyCode::Down | KeyCode::Char('j') => Some(TuiCommand::SurfaceNext),
+        // PageUp/PageDown scroll the (possibly long) command/detail body while
+        // the action rows stay pinned — Up/Down remain reserved for navigating
+        // the action/choice list above.
+        KeyCode::PageUp => Some(TuiCommand::PermissionScrollUp),
+        KeyCode::PageDown => Some(TuiCommand::PermissionScrollDown),
         KeyCode::Enter => Some(TuiCommand::SurfaceConfirm),
         KeyCode::Esc => Some(TuiCommand::Cancel),
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {

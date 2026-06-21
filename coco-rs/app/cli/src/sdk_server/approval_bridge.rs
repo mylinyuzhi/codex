@@ -128,20 +128,42 @@ impl ToolPermissionBridge for SdkPermissionBridge {
             JsonRpcMessage::Response(r) => {
                 let parsed: ApprovalResolveParams = serde_json::from_value(r.result)
                     .map_err(|e| format!("invalid approval response: {e}"))?;
-                let decision = match parsed.decision {
-                    ApprovalDecision::Allow => ToolPermissionDecision::Approved,
-                    ApprovalDecision::Deny => ToolPermissionDecision::Rejected,
+                let approved = matches!(parsed.decision, ApprovalDecision::Allow);
+                let decision = if approved {
+                    ToolPermissionDecision::Approved
+                } else {
+                    ToolPermissionDecision::Rejected
+                };
+                // Apply any rule the SDK client authorized ("always allow")
+                // through the SAME unified entry the TUI dialog uses (base
+                // config + live overlay + disk). The live overlay write is
+                // what gives in-cycle parity with TUI: the approved rule takes
+                // effect for the remaining tool calls of THIS cycle, not just
+                // the next build. `applied_updates` echoes it for audit.
+                let applied_updates = match (approved, parsed.permission_update) {
+                    (true, Some(update)) => {
+                        match self.state.session_runtime.read().await.clone() {
+                            Some(runtime) => {
+                                runtime
+                                    .apply_permission_updates_everywhere(std::slice::from_ref(
+                                        &update,
+                                    ))
+                                    .await;
+                            }
+                            None => warn!(
+                                request_id = %request.id,
+                                "SDK approval carried permission_update but session_runtime \
+                                 is not installed; rule not applied"
+                            ),
+                        }
+                        vec![update]
+                    }
+                    _ => Vec::new(),
                 };
                 Ok(ToolPermissionResolution {
                     decision,
                     feedback: parsed.feedback,
-                    // SDK clients do not currently surface "always
-                    // allow → save to settings" via `approval/resolve`.
-                    // When the protocol grows a `permission_updates`
-                    // field the consumer in `tui_runner` already
-                    // applies + persists the same shape, so wiring it
-                    // here is a one-line addition.
-                    applied_updates: Vec::new(),
+                    applied_updates,
                     // The protocol carries updated input on
                     // `ApprovalResolveParams`; SDK clients ship
                     // `AskUserQuestion` answers (and any other pre-tool

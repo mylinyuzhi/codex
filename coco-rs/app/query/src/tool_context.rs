@@ -212,26 +212,99 @@ impl ToolContextFactory {
     /// the prior batch's `ExitPlanModeTool` / `EnterPlanModeTool` patches
     /// become visible here without a config reload.
     pub(crate) async fn build(&self, overrides: ToolContextOverrides) -> ToolUseContext {
-        let (mut live_mode, live_pre_plan, live_stripped, live_discovered_tool_names) =
-            match self.app_state.as_ref() {
-                Some(state) => {
-                    let guard = state.read().await;
-                    (
-                        guard.permission_mode.unwrap_or(self.config.permission_mode),
-                        guard.pre_plan_mode,
-                        guard.stripped_dangerous_rules.clone(),
-                        std::sync::Arc::new(guard.discovered_tool_names.clone()),
-                    )
-                }
-                None => (
-                    self.config.permission_mode,
-                    None,
-                    None,
-                    std::sync::Arc::new(std::collections::HashSet::new()),
-                ),
-            };
+        // Snapshot the WHOLE live permission base (mode + pre_plan + stripped +
+        // allow/deny/ask + additional_dirs + source_roots) in ONE read-lock
+        // acquire, plus the discovered-tool names. Lock discipline: clone out,
+        // drop the guard before any `await`. `ToolAppState` is the single live
+        // source of truth (TS `appState.toolPermissionContext`); subagents share
+        // the parent's Arc so they read-through the parent's live rules.
+        //
+        // Fallback (no app_state): test/legacy engines derive the base from the
+        // config snapshot. (S6 removes the config rule fields once every engine
+        // carries an app_state.)
+        let (mut base, live_discovered_tool_names) = match self.app_state.as_ref() {
+            Some(state) => {
+                let guard = state.read().await;
+                (
+                    guard.permissions.clone(),
+                    std::sync::Arc::new(guard.discovered_tool_names.clone()),
+                )
+            }
+            None => (
+                coco_types::LiveToolPermissionState {
+                    mode: Some(self.config.permission_mode),
+                    permission_rule_source_roots: self.config.permission_rule_source_roots.clone(),
+                    ..Default::default()
+                },
+                std::sync::Arc::new(std::collections::HashSet::new()),
+            ),
+        };
+        let mut live_mode = base.mode.unwrap_or(self.config.permission_mode);
+        let live_pre_plan = base.pre_plan_mode;
+        let live_stripped = base.stripped_dangerous_rules.clone();
         if let Some(mode) = self.config.live_permission_mode.as_ref() {
             live_mode = *mode.read().await;
+        }
+
+        // Per-engine permission derivation (subagent / fork / teammate): the
+        // Rust analog of TS `createSubagentContext` + `agentGetAppState`. Reads
+        // through the shared base (deny/ask already inherited above) and layers
+        // the per-engine deltas WITHOUT mutating the shared app_state. `None`
+        // for the main session (identity).
+        if let Some(deriv) = self.config.permission_derivation.as_ref() {
+            // Agent-definition mode override, but never widen past a parent
+            // Bypass/AcceptEdits/Auto (TS `runAgent.ts:421-427`).
+            if let Some(om) = deriv.mode_override
+                && !matches!(
+                    live_mode,
+                    coco_types::PermissionMode::BypassPermissions
+                        | coco_types::PermissionMode::AcceptEdits
+                        | coco_types::PermissionMode::Auto
+                )
+            {
+                live_mode = om;
+            }
+            // `allowedTools` replace-on-restrict: keep only the parent's
+            // CliArg-source allow + the explicit allowed tools as Session-source
+            // allow, dropping the parent's other allow sources. deny/ask remain
+            // fully inherited (TS `runAgent.ts:469-479`).
+            if let Some(replace) = deriv.allowed_tools_replace.as_ref() {
+                let cli_arg = base.allow_rules.remove(&PermissionRuleSource::CliArg);
+                base.allow_rules.clear();
+                if let Some(rules) = cli_arg {
+                    base.allow_rules.insert(PermissionRuleSource::CliArg, rules);
+                }
+                if !replace.is_empty() {
+                    base.allow_rules
+                        .entry(PermissionRuleSource::Session)
+                        .or_default()
+                        .extend(replace.iter().cloned());
+                }
+            }
+            // Extra read-scope dirs (parent cwd bridge + inherited dirs).
+            for (k, v) in &deriv.extra_additional_dirs {
+                base.additional_dirs.insert(k.clone(), v.clone());
+            }
+
+            // Verification: a subagent/fork shares the parent app_state Arc, so
+            // `base` (snapshotted above) already carries the parent's
+            // deny/ask/allow rules read-through — the derivation never strips
+            // them. Log the inherited counts so the 85232fa4 fix (subagents
+            // inherit parent deny/ask, closing the read-bypass) is observable.
+            let deny_count: usize = base.deny_rules.values().map(Vec::len).sum();
+            let ask_count: usize = base.ask_rules.values().map(Vec::len).sum();
+            let allow_count: usize = base.allow_rules.values().map(Vec::len).sum();
+            tracing::debug!(
+                target: "coco_query::tool_context",
+                agent_id = ?self.config.agent_id,
+                inherited_deny_rules = deny_count,
+                inherited_ask_rules = ask_count,
+                inherited_allow_rules = allow_count,
+                inherited_additional_dirs = base.additional_dirs.len(),
+                mode = ?live_mode,
+                "tool_context: subagent permission derivation — inherited parent \
+                 deny/ask/allow from shared app_state base",
+            );
         }
 
         // Plan-mode paths resolve unconditionally: fall back to the global
@@ -278,16 +351,15 @@ impl ToolContextFactory {
                 // sink. Stay silent here — info logs in
                 // `engine_live_rules` already mark the meaningful
                 // state transition (rules being added).
-                self.config.allow_rules.clone()
+                base.allow_rules.clone()
             } else {
                 let live_count = live.len();
-                let base_command_count = self
-                    .config
+                let base_command_count = base
                     .allow_rules
                     .get(&PermissionRuleSource::Command)
                     .map(Vec::len)
                     .unwrap_or(0);
-                let mut merged = self.config.allow_rules.clone();
+                let mut merged = base.allow_rules.clone();
                 merged
                     .entry(PermissionRuleSource::Command)
                     .or_default()
@@ -327,13 +399,43 @@ impl ToolContextFactory {
                 /*is_ant_user*/ false,
             );
         }
-        let mut deny_rules = self.config.deny_rules.clone();
+        // Diagnostic: snapshot of the file-read/edit allow rules visible to
+        // THIS batch's permission context, sourced from the live
+        // `ToolAppState.permissions` base (read-through each batch). Grep this
+        // line to confirm an `Edit(...)`/`Read(...)` rule the user just approved
+        // is present for a same-cycle Read. Enable with
+        // `COCO_LOG=coco_query::tool_context=debug`.
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            let file_allow_rules: Vec<String> = allow_rules
+                .iter()
+                .flat_map(|(source, rules)| {
+                    rules.iter().filter_map(move |r| {
+                        let pattern = r.value.tool_pattern.as_str();
+                        (pattern == coco_types::ToolName::Edit.as_str()
+                            || pattern == coco_types::ToolName::Read.as_str())
+                        .then(|| {
+                            format!(
+                                "{source:?}:{pattern}({})",
+                                r.value.rule_content.as_deref().unwrap_or("*")
+                            )
+                        })
+                    })
+                })
+                .collect();
+            tracing::debug!(
+                session_id = %self.config.session_id,
+                file_allow_rules = ?file_allow_rules,
+                "tool_context: file read/edit allow-rule snapshot for this batch \
+                 (frozen at engine build; mid-cycle approvals land on the next build)",
+            );
+        }
+        let mut deny_rules = base.deny_rules.clone();
         merge_rules_by_behavior(
             &mut deny_rules,
             &live_permission_rules,
             PermissionBehavior::Deny,
         );
-        let mut ask_rules = self.config.ask_rules.clone();
+        let mut ask_rules = base.ask_rules.clone();
         merge_rules_by_behavior(
             &mut ask_rules,
             &live_permission_rules,
@@ -398,11 +500,10 @@ impl ToolContextFactory {
                 .unwrap_or_else(|| Arc::new(Vec::new())),
             permission_context: ToolPermissionContext {
                 mode: live_mode,
-                // Per-session additional dirs from `/add-dir <path>`,
-                // threaded via QueryEngineConfig. Empty by default;
-                // populated by the runtime's session_additional_dirs
-                // map when the user widens the allowlist mid-session.
-                additional_dirs: self.config.session_additional_dirs.clone(),
+                // Per-session additional dirs (`/add-dir <path>` + inherited
+                // read scope) read live from the shared base, so mid-session
+                // widening is visible without an engine rebuild.
+                additional_dirs: base.additional_dirs.clone(),
                 // Permission rules from settings.json (user /
                 // project / policy) merged with the per-engine live
                 // Command-source rules emitted by skills earlier this
@@ -416,7 +517,7 @@ impl ToolContextFactory {
                 pre_plan_mode: live_pre_plan,
                 stripped_dangerous_rules: live_stripped,
                 session_plan_file,
-                permission_rule_source_roots: self.config.permission_rule_source_roots.clone(),
+                permission_rule_source_roots: base.permission_rule_source_roots.clone(),
             },
             tool_use_id: None,
             user_message_id: overrides.user_message_id,
