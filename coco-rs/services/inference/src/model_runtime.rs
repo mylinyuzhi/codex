@@ -663,8 +663,11 @@ pub struct ModelRuntimeRegistry {
     /// Session-scoped header-template variables (`${SESSION_ID}`, …), shared
     /// by every client this registry builds and surviving `RuntimeConfig`
     /// hot-reloads. `empty()` for prebuilt registries that don't expand
-    /// templated headers.
-    header_vars: Arc<HeaderVars>,
+    /// templated headers. Wrapped in a `RwLock` so a `/clear` / `/resume`
+    /// session-id regen can swap it in place (via [`Self::update_session_id`])
+    /// and rebuild clients, instead of leaving every client baked with the old
+    /// id.
+    header_vars: std::sync::RwLock<Arc<HeaderVars>>,
     role_runtimes: std::sync::RwLock<HashMap<ModelRole, Arc<std::sync::Mutex<ModelRuntime>>>>,
     role_overrides: std::sync::RwLock<HashMap<ModelRole, ModelSpec>>,
     explicit_runtimes:
@@ -796,7 +799,7 @@ impl ModelRuntimeRegistry {
         Ok(Self {
             runtime_config: std::sync::RwLock::new(Some(runtime_config)),
             resolver,
-            header_vars,
+            header_vars: std::sync::RwLock::new(header_vars),
             role_runtimes: std::sync::RwLock::new(role_runtimes),
             role_overrides: std::sync::RwLock::new(HashMap::new()),
             explicit_runtimes: std::sync::RwLock::new(HashMap::new()),
@@ -813,7 +816,7 @@ impl ModelRuntimeRegistry {
         Self {
             runtime_config: std::sync::RwLock::new(None),
             resolver: None,
-            header_vars: Arc::new(HeaderVars::empty()),
+            header_vars: std::sync::RwLock::new(Arc::new(HeaderVars::empty())),
             role_runtimes: std::sync::RwLock::new(
                 runtimes
                     .into_iter()
@@ -1104,7 +1107,7 @@ impl ModelRuntimeRegistry {
             primary,
             retry,
             self.resolver.as_ref(),
-            Some(self.header_vars.as_ref()),
+            Some(self.header_vars_snapshot().as_ref()),
         )?));
         rw_write(&self.role_runtimes).insert(role, runtime.clone());
         Ok(runtime)
@@ -1132,7 +1135,7 @@ impl ModelRuntimeRegistry {
             &spec,
             retry,
             self.resolver.as_ref(),
-            Some(self.header_vars.as_ref()),
+            Some(self.header_vars_snapshot().as_ref()),
         )?;
         let runtime = Arc::new(std::sync::Mutex::new(ModelRuntime::new(client, Vec::new())));
         rw_write(&self.explicit_runtimes).insert(selection, runtime.clone());
@@ -1187,7 +1190,7 @@ impl ModelRuntimeRegistry {
             spec.clone(),
             retry,
             self.resolver.as_ref(),
-            Some(self.header_vars.as_ref()),
+            Some(self.header_vars_snapshot().as_ref()),
         )?;
         rw_write(&self.role_overrides).insert(role, spec.clone());
         if let Some(old) = mutex_lock(&self.recovery_tasks).remove(&ModelRuntimeSource::Role(role))
@@ -1201,6 +1204,46 @@ impl ModelRuntimeRegistry {
         }];
         self.emit_events(&events);
         Ok(events)
+    }
+
+    /// Snapshot the session-scoped header vars for a single client build.
+    /// Cloning the `Arc` releases the lock immediately, so an in-flight
+    /// `update_session_id` swap can't tear a build that has already started.
+    fn header_vars_snapshot(&self) -> Arc<HeaderVars> {
+        rw_read(&self.header_vars).clone()
+    }
+
+    /// Refresh the session-scoped header vars after a `/clear` or `/resume`
+    /// regenerates the session id, then rebuild every client so templated
+    /// headers (`${SESSION_ID}`, …) re-expand against the new value.
+    ///
+    /// Headers are baked into each provider client at build time, so swapping
+    /// `header_vars` alone is not enough — the already-built clients keep the
+    /// stale id until rebuilt. We reuse [`Self::reconcile`], but only when a
+    /// configured provider actually carries a templated header; otherwise the
+    /// rebuilt header maps would be byte-identical and the rebuild would just
+    /// churn cache-break detectors and recovery tasks for nothing.
+    ///
+    /// No-op for prebuilt registries (no `RuntimeConfig`) and when the id is
+    /// unchanged.
+    pub fn update_session_id(self: &Arc<Self>, new_session_id: &str) -> Result<(), InferenceError> {
+        {
+            let mut slot = rw_write(&self.header_vars);
+            if slot.session_id == new_session_id {
+                return Ok(());
+            }
+            let prev = slot.clone();
+            *slot = Arc::new(HeaderVars {
+                session_id: new_session_id.to_string(),
+                cwd: prev.cwd.clone(),
+                app_version: prev.app_version.clone(),
+            });
+        }
+        let cfg = rw_read(&self.runtime_config).clone();
+        match cfg {
+            Some(cfg) if any_templated_header(&cfg) => self.reconcile(cfg),
+            _ => Ok(()),
+        }
     }
 
     pub fn reconcile(
@@ -1231,7 +1274,7 @@ impl ModelRuntimeRegistry {
                     primary,
                     retry.clone(),
                     self.resolver.as_ref(),
-                    Some(self.header_vars.as_ref()),
+                    Some(self.header_vars_snapshot().as_ref()),
                 )?;
                 rebuilt.insert(role, Arc::new(std::sync::Mutex::new(runtime)));
             }
@@ -1248,7 +1291,7 @@ impl ModelRuntimeRegistry {
                 &spec,
                 retry.clone(),
                 self.resolver.as_ref(),
-                Some(self.header_vars.as_ref()),
+                Some(self.header_vars_snapshot().as_ref()),
             )?;
             rebuilt_explicit.insert(
                 selection,
@@ -1664,6 +1707,18 @@ fn communication_outcome_from_error(error: &InferenceError) -> ModelCommunicatio
             _ => ModelCommunicationOutcome::Failure,
         },
     }
+}
+
+/// Whether any configured provider carries a templated header value
+/// (`{ "template": "..." }`). Literal-only header maps don't depend on the
+/// session-scoped vars, so a session-id swap need not rebuild their clients.
+fn any_templated_header(cfg: &RuntimeConfig) -> bool {
+    cfg.providers.values().any(|p| {
+        p.client_options
+            .headers
+            .values()
+            .any(coco_config::HeaderValue::is_templated)
+    })
 }
 
 fn rw_read<T>(lock: &std::sync::RwLock<T>) -> RwLockReadGuard<'_, T> {

@@ -3218,6 +3218,14 @@ impl SessionRuntime {
         {
             *g = new_session_id.to_string();
         }
+        // Refresh `${SESSION_ID}` (and other session-scoped header-template
+        // vars) so templated provider headers re-expand against the new id and
+        // the affected clients rebuild. Without this, the model-runtime
+        // registry keeps the bootstrap id baked into every client and a
+        // `/clear` / `/resume` regen sends a stale session id to the gateway.
+        if let Err(e) = self.model_runtimes.update_session_id(new_session_id) {
+            warn!(error = %e, "failed to refresh model-runtime header vars after session-id change");
+        }
     }
 
     /// Clear cache-break tracking on every registry-owned runtime client.
