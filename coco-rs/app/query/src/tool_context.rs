@@ -327,6 +327,38 @@ impl ToolContextFactory {
                 /*is_ant_user*/ false,
             );
         }
+        // Diagnostic: snapshot of the file-read/edit allow rules visible to
+        // THIS batch's permission context. `self.config` is a frozen clone
+        // taken at engine build (engine is rebuilt per user message), so a
+        // mid-cycle "Always Allow" that mutates the shared `engine_config`
+        // is NOT reflected here until the next engine build. Grep this line
+        // to see whether an `Edit(...)`/`Read(...)` rule the user just
+        // approved is actually present when a later same-cycle Read is
+        // evaluated. Enable with `COCO_LOG=coco_query::tool_context=debug`.
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            let file_allow_rules: Vec<String> = allow_rules
+                .iter()
+                .flat_map(|(source, rules)| {
+                    rules.iter().filter_map(move |r| {
+                        let pattern = r.value.tool_pattern.as_str();
+                        (pattern == coco_types::ToolName::Edit.as_str()
+                            || pattern == coco_types::ToolName::Read.as_str())
+                        .then(|| {
+                            format!(
+                                "{source:?}:{pattern}({})",
+                                r.value.rule_content.as_deref().unwrap_or("*")
+                            )
+                        })
+                    })
+                })
+                .collect();
+            tracing::debug!(
+                session_id = %self.config.session_id,
+                file_allow_rules = ?file_allow_rules,
+                "tool_context: file read/edit allow-rule snapshot for this batch \
+                 (frozen at engine build; mid-cycle approvals land on the next build)",
+            );
+        }
         let mut deny_rules = self.config.deny_rules.clone();
         merge_rules_by_behavior(
             &mut deny_rules,

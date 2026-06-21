@@ -610,6 +610,22 @@ pub struct SessionRuntime {
     /// `None` until the first engine is built; the inner `Option` is `None`
     /// until the first turn finalises (or after `/clear`).
     last_engine_cache_handle: Arc<RwLock<Option<CacheParamsHandle>>>,
+    /// Live permission-rule overlay shared, by `Arc`, with every main-session
+    /// engine built by [`Self::build_engine_with_turn_abort`] (injected onto
+    /// `QueryEngineConfig.live_permission_rules`, which `ToolContextFactory`
+    /// re-reads each batch).
+    ///
+    /// The engine's base config is a frozen snapshot per user message, so a
+    /// rule the user approves mid-cycle ("Always Allow") can't reach the
+    /// in-flight engine via the rebuilt base config — it only lands there on
+    /// the NEXT build. Pushing the approved rule into this overlay makes it
+    /// visible to the remaining tool calls of the CURRENT cycle (e.g. an
+    /// `Edit(...)` grant then satisfies a same-cycle Read via the "edit access
+    /// implies read" branch). Each build reconciles the overlay against the
+    /// rebuilt base config, draining rules that have since graduated into it
+    /// (TUI approvals are also written to the base config + disk), while
+    /// retaining live team-rule updates that never land in base.
+    live_permission_rules: Arc<RwLock<Vec<coco_types::PermissionRule>>>,
     /// Session-scoped abort token for the in-flight prompt-suggestion
     /// fork. When a new suggestion fork starts, we cancel the previous
     /// one so users rapidly cycling `/clear` don't accumulate fork tasks
@@ -1436,6 +1452,7 @@ impl SessionRuntime {
             skill_bash_cell: Arc::new(std::sync::RwLock::new(None)),
             fork_dispatcher: Arc::new(RwLock::new(None)),
             last_engine_cache_handle: Arc::new(RwLock::new(None)),
+            live_permission_rules: Arc::new(RwLock::new(Vec::new())),
             current_suggestion_abort: Arc::new(tokio::sync::Mutex::new(None)),
             task_runtime: Arc::new(RwLock::new(None)),
             task_list: Arc::new(RwLock::new(None)),
@@ -2085,8 +2102,155 @@ impl SessionRuntime {
             .await
     }
 
+    /// The shared live permission-rule overlay (see field docs). Callers push
+    /// mid-cycle approvals / team-rule updates here; every main-session engine
+    /// reads it each tool batch.
+    pub fn live_permission_rules(&self) -> Arc<RwLock<Vec<coco_types::PermissionRule>>> {
+        self.live_permission_rules.clone()
+    }
+
+    /// Append rules to the live overlay so the in-flight engine observes them
+    /// for the rest of the current user-message cycle. Skips rules already
+    /// present (string-normalized) to avoid within-cycle duplication.
+    pub async fn extend_live_permission_rules(
+        &self,
+        rules: impl IntoIterator<Item = coco_types::PermissionRule>,
+    ) {
+        let mut overlay = self.live_permission_rules.write().await;
+        let mut present: std::collections::HashSet<String> = overlay
+            .iter()
+            .map(|r| coco_permissions::rule_value_to_string(&r.value))
+            .collect();
+        for rule in rules {
+            if present.insert(coco_permissions::rule_value_to_string(&rule.value)) {
+                overlay.push(rule);
+            }
+        }
+    }
+
+    /// Inject the live permission-rule overlay onto a main-session engine
+    /// config, and drain rules the (rebuilt) base config now carries so a
+    /// graduated approval isn't matched twice in the merged context. Team-rule
+    /// updates never land in base config, so they're retained across builds.
+    ///
+    /// Called from every main-session build path (TUI `build_engine_with_turn_abort`
+    /// and SDK/headless `build_engine_from_config_with_persistence`) so the
+    /// in-cycle approval mechanism is uniform across transports. NOT called for
+    /// subagents/forks — they keep their own isolated config-cloned rules.
+    async fn prepare_live_permission_overlay(&self, config: &mut QueryEngineConfig) {
+        let base: std::collections::HashSet<String> = config
+            .allow_rules
+            .values()
+            .chain(config.deny_rules.values())
+            .chain(config.ask_rules.values())
+            .flatten()
+            .map(|r| coco_permissions::rule_value_to_string(&r.value))
+            .collect();
+        {
+            let mut overlay = self.live_permission_rules.write().await;
+            overlay.retain(|r| !base.contains(&coco_permissions::rule_value_to_string(&r.value)));
+        }
+        config.live_permission_rules = Some(self.live_permission_rules.clone());
+    }
+
+    /// Single source of truth for applying user-approved permission updates,
+    /// shared by every transport (TUI dialog, SDK approval reply, headless
+    /// permission-prompt tool). Lands the rules in all three places they must
+    /// reach so in-cycle and cross-cycle behavior stays aligned:
+    ///
+    /// 1. the SHARED `engine_config` — so the NEXT engine build (and subagent
+    ///    spawns that clone the config) inherit them;
+    /// 2. the live overlay — so the IN-FLIGHT engine observes them THIS cycle
+    ///    (the frozen per-message snapshot can't otherwise see a mid-cycle
+    ///    approval — e.g. an `Edit(...)` grant then satisfies a same-cycle Read
+    ///    via the "edit access implies read" branch);
+    /// 3. disk, for destinations that persist (User/Project/Local).
+    ///
+    /// This is coco-rs's analog of TS `applyPermissionUpdate` +
+    /// `setToolPermissionContext`.
+    pub async fn apply_permission_updates_everywhere(
+        &self,
+        updates: &[coco_types::PermissionUpdate],
+    ) {
+        if updates.is_empty() {
+            return;
+        }
+        // 1. Base config (next build + subagent inheritance). Route through the
+        // typed apply helper so audit/persistence consumers see one shape.
+        let updates_owned = updates.to_vec();
+        self.update_engine_config(move |cfg| {
+            let ctx = coco_types::ToolPermissionContext {
+                mode: cfg.permission_mode,
+                additional_dirs: cfg.session_additional_dirs.clone(),
+                allow_rules: cfg.allow_rules.clone(),
+                deny_rules: cfg.deny_rules.clone(),
+                ask_rules: cfg.ask_rules.clone(),
+                bypass_available: cfg.bypass_permissions_available,
+                pre_plan_mode: None,
+                stripped_dangerous_rules: None,
+                session_plan_file: None,
+                permission_rule_source_roots: cfg.permission_rule_source_roots.clone(),
+            };
+            let updated = coco_permissions::apply_permission_updates(ctx, &updates_owned);
+            cfg.allow_rules = updated.allow_rules;
+            cfg.deny_rules = updated.deny_rules;
+            cfg.ask_rules = updated.ask_rules;
+            cfg.session_additional_dirs = updated.additional_dirs;
+            cfg.permission_mode = updated.mode;
+        })
+        .await;
+        // 2. Live overlay (in-flight cycle, every transport).
+        self.extend_live_permission_rules(
+            coco_permissions::permission_updates::extract_rules(updates)
+                .into_iter()
+                .cloned(),
+        )
+        .await;
+        // 3. Persist destinations that wire to a settings.json layer.
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let store = coco_permissions::SettingsPermissionStore::new(cwd);
+        use coco_permissions::permissions_store::PermissionStore;
+        for update in updates {
+            let Some(dest) = update.destination() else {
+                continue;
+            };
+            if !coco_permissions::permission_updates::supports_persistence(dest) {
+                continue;
+            }
+            if let Err(e) = store.persist_update(update) {
+                tracing::warn!(error = %e, "failed to persist permission update");
+            }
+        }
+        let applied: Vec<String> = updates
+            .iter()
+            .filter_map(|u| match u {
+                coco_types::PermissionUpdate::AddRules { rules, destination } => Some(
+                    rules
+                        .iter()
+                        .map(|r| {
+                            format!(
+                                "{destination:?}:{}({})",
+                                r.value.tool_pattern,
+                                r.value.rule_content.as_deref().unwrap_or("*")
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(","),
+                ),
+                _ => None,
+            })
+            .collect();
+        tracing::info!(
+            applied = ?applied,
+            "permission updates applied: engine_config (next build) + live overlay \
+             (current in-flight cycle) + disk persist",
+        );
+    }
+
     pub async fn build_engine_with_turn_abort(&self, turn_abort: TurnAbortSignal) -> QueryEngine {
-        let engine_config = self.current_engine_config().await;
+        let mut engine_config = self.current_engine_config().await;
+        self.prepare_live_permission_overlay(&mut engine_config)
+            .await;
         let engine = QueryEngine::new_with_turn_abort(
             engine_config,
             self.model_runtimes.clone(),
@@ -2288,6 +2452,25 @@ impl SessionRuntime {
         app_state_override: Option<Arc<RwLock<ToolAppState>>>,
         persistence: EnginePersistenceMode,
     ) -> QueryEngine {
+        // Top-level SDK/headless session engines get the same live overlay as
+        // the TUI main engine so a mid-cycle approval takes effect this cycle.
+        // Gated to the main session (`MainSession` + no `agent_id`): subagents
+        // and forks keep their own isolated config-cloned rules — they must not
+        // share or reconcile the main session's overlay.
+        //
+        // `config` is owned and local — the `mut` is confined to this block so
+        // the rest of the function sees an immutable binding. The only shared
+        // state touched is the overlay Arc, serialized by its `RwLock` inside
+        // the helper; there is no cross-task sharing of `config` itself.
+        let config = if matches!(persistence, EnginePersistenceMode::MainSession)
+            && config.agent_id.is_none()
+        {
+            let mut config = config;
+            self.prepare_live_permission_overlay(&mut config).await;
+            config
+        } else {
+            config
+        };
         // Fork isolation for the file-read dedup cache: when a fork sets
         // `clone_file_read_state` (default true for every framework fork),
         // give the child a *deep clone* of the parent's `FileReadState`

@@ -537,6 +537,44 @@ async fn test_factory_threads_deny_rules_from_config() {
 }
 
 #[tokio::test]
+async fn test_factory_merges_config_live_permission_rules_into_allow_rules() {
+    // Regression for the mid-cycle "Always Allow" staleness bug: a rule
+    // pushed into the shared `live_permission_rules` overlay must surface in
+    // the built context's allow_rules — under its own source — so the
+    // in-flight engine (whose base config is a frozen snapshot) observes the
+    // approval the SAME cycle. This is what lets a fresh `Edit(...)` grant
+    // satisfy a same-cycle Read via the "edit access implies read" branch.
+    use coco_types::PermissionBehavior;
+    use coco_types::PermissionRule;
+    use coco_types::PermissionRuleSource;
+    use coco_types::PermissionRuleValue;
+    let mut config = test_config();
+    let edit_rule = PermissionRule {
+        source: PermissionRuleSource::LocalSettings,
+        behavior: PermissionBehavior::Allow,
+        value: PermissionRuleValue {
+            tool_pattern: "Edit".into(),
+            rule_content: Some("//tmp/b/**".into()),
+        },
+    };
+    config.live_permission_rules = Some(std::sync::Arc::new(tokio::sync::RwLock::new(vec![
+        edit_rule.clone(),
+    ])));
+    let ctx = factory(config).build(Default::default()).await;
+    let local = ctx
+        .permission_context
+        .allow_rules
+        .get(&PermissionRuleSource::LocalSettings)
+        .expect("overlay rule must land under its own source");
+    assert_eq!(
+        serde_json::to_string(local).unwrap(),
+        serde_json::to_string(&vec![edit_rule]).unwrap(),
+        "factory must merge config.live_permission_rules into allow_rules \
+         preserving the rule's source",
+    );
+}
+
+#[tokio::test]
 async fn test_factory_cwd_override_none_when_config_unset() {
     // Baseline: no override in config → no override on context.
     // Guards against a stray default slipping in.

@@ -447,19 +447,16 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
             Some(identity) => {
                 // Seed this teammate's live permission rules from the team's
                 // allowed paths (gap 8) so it inherits the team's write fences
-                // without prompting. The same `Arc` is shared with the pump so
-                // a leader `TeamPermissionUpdate` extends it live — the
+                // without prompting. Seed into the session's shared overlay Arc
+                // (the same Arc `build_engine` injects onto every engine and the
+                // pump extends live on a leader `TeamPermissionUpdate`) — the
                 // cross-process analog of the in-process `TeammateControlState`.
-                let live_rules = std::sync::Arc::new(tokio::sync::RwLock::new(
+                let live_rules = runtime.live_permission_rules();
+                live_rules.write().await.extend(
                     coco_coordinator::runner_loop::load_team_allowed_path_rules(
                         &identity.team_name,
                     ),
-                ));
-                runtime
-                    .update_engine_config(|cfg| {
-                        cfg.live_permission_rules = Some(live_rules.clone())
-                    })
-                    .await;
+                );
                 // Cross-process teammate: pump this teammate's mailbox into
                 // TUI turns. `command_tx` is cloned BEFORE `App::new` consumes
                 // it below; the pump injects `SubmitInput` and serializes on
@@ -1829,75 +1826,12 @@ async fn run_agent_driver(
                 // Order: apply before resolving bridge so subsequent same-tool
                 // calls within the turn pick up the rule.
                 if pending_entry.is_some() && approved && !permission_updates.is_empty() {
-                    let updates_for_apply = permission_updates.clone();
+                    // Unified apply: base config (next build) + live overlay
+                    // (in-flight cycle) + disk persist. Same entry SDK/headless
+                    // use, so in-cycle behavior is identical across transports.
                     runtime
-                        .update_engine_config(move |cfg| {
-                            // Build a transient `ToolPermissionContext`
-                            // view over the engine config's rule maps,
-                            // run the typed apply helper, write the
-                            // mutated maps back. `apply_permission_updates`
-                            // is the single source of truth for rule
-                            // never edit the maps inline so audit logs
-                            // and persistence consumers see one shape.
-                            let ctx = coco_types::ToolPermissionContext {
-                                mode: cfg.permission_mode,
-                                additional_dirs: cfg.session_additional_dirs.clone(),
-                                allow_rules: cfg.allow_rules.clone(),
-                                deny_rules: cfg.deny_rules.clone(),
-                                ask_rules: cfg.ask_rules.clone(),
-                                bypass_available: cfg.bypass_permissions_available,
-                                pre_plan_mode: None,
-                                stripped_dangerous_rules: None,
-                                session_plan_file: None,
-                                permission_rule_source_roots: cfg
-                                    .permission_rule_source_roots
-                                    .clone(),
-                            };
-                            let updated =
-                                coco_permissions::apply_permission_updates(ctx, &updates_for_apply);
-                            cfg.allow_rules = updated.allow_rules;
-                            cfg.deny_rules = updated.deny_rules;
-                            cfg.ask_rules = updated.ask_rules;
-                            cfg.session_additional_dirs = updated.additional_dirs;
-                            // Mode updates are normally driven by the
-                            // `/permission-mode` slash command path,
-                            // not the dialog. But if a future caller
-                            // bundles `SetMode` into the same update
-                            // batch, honor it on the engine_config so
-                            // subsequent turns see the change.
-                            cfg.permission_mode = updated.mode;
-                        })
+                        .apply_permission_updates_everywhere(&permission_updates)
                         .await;
-
-                    // Persist updates whose destination wires to a
-                    // settings.json layer (User / Project / Local).
-                    // Session / CliArg / Command destinations are
-                    // in-memory only — session/CliArg/Command destinations
-                    // are not persisted.
-                    //
-                    // The inline dialog's "don't ask again" now emits a
-                    // `LocalSettings` update, so this persists the rule to
-                    // `.coco/settings.local.json` (cross-session). The
-                    // future `/permissions` rule-editor overlay reuses this
-                    // same loop for `Project` / `User` destinations. The
-                    // store is constructed cheaply per-call (just holds cwd
-                    // + optional flag-settings path) so we don't need to
-                    // thread an `Arc<PermissionStore>` through SessionRuntime.
-                    let cwd =
-                        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                    let store = coco_permissions::SettingsPermissionStore::new(cwd);
-                    use coco_permissions::permissions_store::PermissionStore;
-                    for update in &permission_updates {
-                        let Some(dest) = update.destination() else {
-                            continue;
-                        };
-                        if !coco_permissions::permission_updates::supports_persistence(dest) {
-                            continue;
-                        }
-                        if let Err(e) = store.persist_update(update) {
-                            warn!(error = %e, "failed to persist permission update");
-                        }
-                    }
 
                     // `command_permissions` carries command-scoped allowed
                     // tools. Do not encode deny/ask/reset events as

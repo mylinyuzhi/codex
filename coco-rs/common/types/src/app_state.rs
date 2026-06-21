@@ -99,6 +99,21 @@ pub struct ToolAppState {
     /// TS parity: `appState.toolPermissionContext.strippedDangerousRules`.
     pub stripped_dangerous_rules: Option<PermissionRulesBySource>,
 
+    /// Live permission rules for the **main session** (allow / deny / ask),
+    /// the global-mutable analog of TS `appState.toolPermissionContext`'s
+    /// rule lists. Seeded from settings at bootstrap, mutated in place by
+    /// `apply_permission_updates_everywhere` on approval, and read live by
+    /// `ToolContextFactory::build` each batch — so a mid-cycle "Always Allow"
+    /// is visible to the rest of the cycle without an engine rebuild.
+    ///
+    /// `None` means "this app_state does not own the session rules" — the
+    /// factory then falls back to the config snapshot. Subagents/forks keep
+    /// their own config-cloned rules (TS `createSubagentContext` parity) and
+    /// leave these `None`, even though they share the main `app_state` Arc.
+    pub allow_rules: Option<PermissionRulesBySource>,
+    pub deny_rules: Option<PermissionRulesBySource>,
+    pub ask_rules: Option<PermissionRulesBySource>,
+
     // ── Plan-mode latches (one-shot signaling) ──
     /// Set by `ExitPlanModeTool` on success; read + cleared by the
     /// plan-mode reminder on the first following turn to emit the
