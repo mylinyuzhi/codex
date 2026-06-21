@@ -64,6 +64,16 @@ fn seed_prefix_input(
     {
         return None;
     }
+    // Directory-boundary asks (out-of-dir bash write/redirect) carry an
+    // AddDirectories suggestion, not a command rule. An editable command prefix
+    // can't unblock them (the path gate runs before allow rules), so don't offer
+    // one — let the AddDirectories suggestion drive the session/local rows.
+    if permission_suggestions
+        .iter()
+        .any(|u| matches!(u, coco_types::PermissionUpdate::AddDirectories { .. }))
+    {
+        return None;
+    }
     let command = original_input?.get("command")?.as_str()?;
     let value = coco_permissions::shell_rules::editable_prefix_from_suggestions_or_command(
         command,

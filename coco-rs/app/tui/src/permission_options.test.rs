@@ -148,7 +148,11 @@ fn session_allow_plan_keeps_core_accept_edits_suggestion() {
 }
 
 #[test]
-fn add_directories_suggestion_is_session_only() {
+fn add_directories_suggestion_offers_session_and_local() {
+    // An out-of-dir write Ask carries an AddDirectories suggestion. Both the
+    // session and local rows mirror it (to their respective destinations) so the
+    // dialog offers 4 rows — adding the working dir is the only update that
+    // unblocks the path gate.
     let p = prompt(
         "Edit",
         None,
@@ -168,7 +172,12 @@ fn add_directories_suggestion_is_session_only() {
             if directories == &vec!["/tmp/project".to_string()]
                 && *destination == coco_types::PermissionUpdateDestination::Session
     ));
-    assert!(local.is_empty());
+    assert!(matches!(
+        local.as_slice(),
+        [coco_types::PermissionUpdate::AddDirectories { directories, destination }]
+            if directories == &vec!["/tmp/project".to_string()]
+                && *destination == coco_types::PermissionUpdateDestination::LocalSettings
+    ));
 }
 
 #[test]

@@ -285,6 +285,26 @@ impl ToolContextFactory {
             for (k, v) in &deriv.extra_additional_dirs {
                 base.additional_dirs.insert(k.clone(), v.clone());
             }
+
+            // Verification: a subagent/fork shares the parent app_state Arc, so
+            // `base` (snapshotted above) already carries the parent's
+            // deny/ask/allow rules read-through — the derivation never strips
+            // them. Log the inherited counts so the 85232fa4 fix (subagents
+            // inherit parent deny/ask, closing the read-bypass) is observable.
+            let deny_count: usize = base.deny_rules.values().map(Vec::len).sum();
+            let ask_count: usize = base.ask_rules.values().map(Vec::len).sum();
+            let allow_count: usize = base.allow_rules.values().map(Vec::len).sum();
+            tracing::debug!(
+                target: "coco_query::tool_context",
+                agent_id = ?self.config.agent_id,
+                inherited_deny_rules = deny_count,
+                inherited_ask_rules = ask_count,
+                inherited_allow_rules = allow_count,
+                inherited_additional_dirs = base.additional_dirs.len(),
+                mode = ?live_mode,
+                "tool_context: subagent permission derivation — inherited parent \
+                 deny/ask/allow from shared app_state base",
+            );
         }
 
         // Plan-mode paths resolve unconditionally: fall back to the global

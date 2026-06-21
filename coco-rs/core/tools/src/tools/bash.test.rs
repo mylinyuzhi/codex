@@ -1641,6 +1641,23 @@ async fn test_bash_out_of_tree_write_forces_ask() {
         "out-of-tree write must force Ask: {result:?}"
     );
 
+    // The Ask must carry an AddDirectories suggestion for the target's parent
+    // dir — the only update that unblocks the path gate (it runs before allow
+    // rules). This is what lets the TUI render the session/local "always allow"
+    // rows instead of collapsing to approve-once/deny. Mirrors TS addDirectories.
+    let coco_types::ToolCheckResult::Ask { suggestions, .. } = &result else {
+        panic!("expected Ask, got {result:?}");
+    };
+    assert!(
+        matches!(
+            suggestions.as_slice(),
+            [coco_types::PermissionUpdate::AddDirectories { directories, destination }]
+                if directories == &vec!["/opt/coco-oob-test".to_string()]
+                    && *destination == coco_types::PermissionUpdateDestination::Session
+        ),
+        "out-of-tree write Ask must suggest adding the target's parent dir: {suggestions:?}"
+    );
+
     // Negative control: an in-tree read-only command is not gated.
     let benign =
         <BashTool as DynTool>::check_permissions(&BashTool, &json!({"command": "ls -la"}), &ctx)
