@@ -812,6 +812,13 @@ impl App {
                 // background composer instead of the question input.
                 if crate::update::route_question_free_text_paste(&mut self.state, &text) {
                     // consumed by the question free-text input
+                } else if crate::modal_pane::add_directory::route_paste(&mut self.state, &text) {
+                    // consumed by the `/add-dir` overlay input; paste otherwise
+                    // bypasses modal interception and leaks to the main composer.
+                } else if crate::modal_pane::permissions_editor::route_paste(&mut self.state, &text)
+                {
+                    // consumed by the `/permissions` add-rule form; same modal
+                    // bypass as `/add-dir` above.
                 } else if let Some((bytes, mime)) = crate::update::sniff_image_path_paste(&text) {
                     // Drag-and-drop of an image file onto the terminal pastes
                     // its path — attach the image (with bytes; a bytes-less

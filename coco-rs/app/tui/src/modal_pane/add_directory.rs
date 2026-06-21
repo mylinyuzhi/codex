@@ -78,6 +78,24 @@ pub(crate) async fn intercept(
     }
 }
 
+/// Route a bracketed paste into the `/add-dir` overlay input. Paste travels a
+/// separate event path (`TuiEvent::Paste`) that bypasses keybinding/modal
+/// interception, so without this the clipboard text leaks into the main
+/// composer hidden behind the modal. Mirrors `question_free_text_paste`: only
+/// consumes when our modal is active, strips control chars (the path stays on
+/// one physical line, same as `insert_char`), and clears any stale error.
+/// Returns `true` if consumed.
+pub(crate) fn route_paste(state: &mut AppState, text: &str) -> bool {
+    let Some(s) = add_state_mut(state) else {
+        return false;
+    };
+    s.error = None;
+    for c in text.chars().filter(|c| !c.is_control()) {
+        s.input.insert_char(c);
+    }
+    true
+}
+
 fn add_state_mut(state: &mut AppState) -> Option<&mut AddDirectoryState> {
     match state.ui.modal.as_mut() {
         Some(ModalState::AddDirectory(s)) => Some(s),
