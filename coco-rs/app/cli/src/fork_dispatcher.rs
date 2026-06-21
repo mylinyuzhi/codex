@@ -76,10 +76,12 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
         let runtime_config = self.runtime.runtime_config.as_ref();
         let parent_engine_config = self.runtime.current_engine_config().await;
 
-        // Forks inherit the parent's settings-driven permission rules;
-        // re-resolve from the same layered settings the parent uses.
-        let (allow_rules, deny_rules, ask_rules) =
-            crate::permission_rule_loader::typed_permission_rules(&runtime_config.settings);
+        // Forks inherit the parent's settings-driven permission rules via the
+        // SHARED `ToolAppState.permissions` base (read-through each batch —
+        // `build_fork_engine_from_config` passes `None`, so the engine shares
+        // `runtime.app_state`). The config no longer carries the rule maps, so
+        // there is nothing to re-resolve here; only the source roots stay on
+        // the config for leading-`/` pattern resolution.
         let permission_rule_source_roots =
             crate::permission_rule_loader::permission_rule_source_roots(
                 &runtime_config.settings,
@@ -92,9 +94,6 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
         let engine_config = QueryEngineConfig {
             model_id: cache.model_id.clone(),
             permission_mode: coco_types::PermissionMode::Default,
-            allow_rules,
-            deny_rules,
-            ask_rules,
             permission_rule_source_roots,
             context_window: agent_config.context_window.unwrap_or(200_000),
             max_output_tokens: agent_config.max_output_tokens.unwrap_or(16_384),

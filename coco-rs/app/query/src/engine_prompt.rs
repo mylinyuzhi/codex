@@ -432,17 +432,18 @@ impl QueryEngine {
         };
 
         let permission_mode = app_state
-            .permission_mode
+            .permissions
+            .mode
             .unwrap_or(self.config.permission_mode);
         let permission_context = coco_types::ToolPermissionContext {
             mode: permission_mode,
-            additional_dirs: self.config.session_additional_dirs.clone(),
+            additional_dirs: app_state.permissions.additional_dirs.clone(),
             allow_rules: std::collections::HashMap::new(),
             deny_rules: std::collections::HashMap::new(),
             ask_rules: std::collections::HashMap::new(),
             bypass_available: self.config.bypass_permissions_available,
-            pre_plan_mode: app_state.pre_plan_mode,
-            stripped_dangerous_rules: app_state.stripped_dangerous_rules.clone(),
+            pre_plan_mode: app_state.permissions.pre_plan_mode,
+            stripped_dangerous_rules: app_state.permissions.stripped_dangerous_rules.clone(),
             session_plan_file: None,
             permission_rule_source_roots: self.config.permission_rule_source_roots.clone(),
         };

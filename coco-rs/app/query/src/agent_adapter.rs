@@ -77,7 +77,37 @@ impl AgentQueryEngine for QueryEngineAdapter {
         let permission_mode = config.permission_mode;
         let model_selection = config.model_selection.clone();
         let engine_model_id = model_selection.display_model_id().unwrap_or_default();
-        let initial_rule_maps = build_initial_rule_maps(&config.extra_permission_rules);
+        // Per-engine ISOLATED additions (fork-mode skill `allowed-tools`,
+        // Command-source). Seeded into the engine's `live_command_rules`; they
+        // never touch the shared app_state base (TS no-op setAppState parity).
+        let initial_command_rules = config.extra_permission_rules.clone();
+        // TS `createSubagentContext` + `agentGetAppState` derivation: the
+        // subagent read-through-inherits the parent's shared base (deny/ask/
+        // allow/mode), and this layers the per-engine deltas on top.
+        let permission_derivation = crate::config::PermissionDerivation {
+            // `allowed_tools` is the registry VISIBILITY filter (→ `tool_filter`
+            // below), NOT a permission-allow source. TS only does allowedTools
+            // replace-on-restrict for the SEPARATE SDK `allowedTools` permission
+            // param (`runAgent.ts:469-479`); the ordinary AgentTool `tools:`
+            // frontmatter only narrows visibility. Deriving allow rules from it
+            // both over-permits (auto-allows the listed tools) and under-permits
+            // (drops the parent's non-CliArg allow sources). So leave this `None`
+            // here — the subagent inherits the parent's full allow read-through,
+            // and the tool filter handles restriction. (Reserved for a future
+            // dedicated SDK-allowedTools field on `AgentQueryConfig`.)
+            allowed_tools_replace: None,
+            // Agent-definition `permissionMode` override (already resolved against
+            // parent precedence by `resolve_subagent_mode` at the AgentTool
+            // layer). The factory applies it unless the parent's live mode is
+            // Bypass/AcceptEdits/Auto (TS `runAgent.ts:421-427`). Without this the
+            // resolved mode is lost (base.mode = parent's live mode wins).
+            mode_override: Some(permission_mode),
+            // Parent cwd bridge + inherited read dirs (worktree-isolated child
+            // reads the parent project). Layered on the inherited base dirs.
+            extra_additional_dirs: inherited_read_dirs_to_additional_dirs(
+                &config.inherited_read_dirs,
+            ),
+        };
 
         let engine_config = QueryEngineConfig {
             // A subagent uses its own configured turn cap, or runs
@@ -166,25 +196,16 @@ impl AgentQueryEngine for QueryEngineAdapter {
             fast_mode: false,
             session_id: identity.session_id.clone(),
             project_dir: None,
-            // Subagent rule maps start empty, then we fold in any
-            // `extra_permission_rules` the caller (today: fork-mode
-            // `SkillTool` forwarding skill frontmatter `allowed-tools`,
-            // plus teammate control updates) wants pre-populated.
-            allow_rules: initial_rule_maps.allow_rules,
-            deny_rules: initial_rule_maps.deny_rules,
-            ask_rules: initial_rule_maps.ask_rules,
+            // Subagent base rules come from the shared parent `app_state`
+            // (read-through, the factory reads it each batch — TS
+            // `createSubagentContext` parity). Per-engine isolated additions flow
+            // through `initial_command_rules`, and the read-through deltas
+            // (allowedTools replace + extra dirs) through `permission_derivation`.
             live_permission_rules: config.live_permission_rules.clone(),
             live_permission_mode: config.live_permission_mode.clone(),
             permission_rule_source_roots: Default::default(),
-            // Parent's read-scope dirs (TS subagent cwd +
-            // additionalWorkingDirectories parity): fold them into the child's
-            // permission `additional_dirs` so reads of the parent project are
-            // in-scope even though the child executes in an isolated worktree
-            // cwd. `read_permission`'s `in_working_dirs` branch then allows
-            // them without a prompt.
-            session_additional_dirs: inherited_read_dirs_to_additional_dirs(
-                &config.inherited_read_dirs,
-            ),
+            initial_command_rules,
+            permission_derivation: Some(permission_derivation),
             // Propagate the subagent's cwd_override (set by worktree
             // isolation or explicit `cwd:` input) so the child
             // engine's ToolContextFactory installs it onto every
@@ -414,14 +435,6 @@ impl AgentQueryEngine for QueryEngineAdapter {
     }
 }
 
-#[derive(Default)]
-struct InitialRuleMaps {
-    allow_rules: coco_types::PermissionRulesBySource,
-    deny_rules: coco_types::PermissionRulesBySource,
-    ask_rules: coco_types::PermissionRulesBySource,
-}
-
-/// Build the initial permission-rule maps for a fork-spawned subagent.
 /// Convert a subagent's inherited read-scope dirs (the parent cwd +
 /// `additional_dirs`) into the `session_additional_dirs` map the engine folds
 /// into `ToolPermissionContext.additional_dirs`. This is what lets an
@@ -441,28 +454,6 @@ fn inherited_read_dirs_to_additional_dirs(
             )
         })
         .collect()
-}
-
-fn build_initial_rule_maps(extra: &[coco_types::PermissionRule]) -> InitialRuleMaps {
-    let mut maps = InitialRuleMaps::default();
-    for rule in extra {
-        let map = match rule.behavior {
-            coco_types::PermissionBehavior::Allow => &mut maps.allow_rules,
-            coco_types::PermissionBehavior::Deny => &mut maps.deny_rules,
-            coco_types::PermissionBehavior::Ask => &mut maps.ask_rules,
-        };
-        map.entry(rule.source).or_default().push(rule.clone());
-    }
-    if !extra.is_empty() {
-        tracing::info!(
-            extra = extra.len(),
-            allow_sources = ?maps.allow_rules.keys().collect::<Vec<_>>(),
-            deny_sources = ?maps.deny_rules.keys().collect::<Vec<_>>(),
-            ask_sources = ?maps.ask_rules.keys().collect::<Vec<_>>(),
-            "agent_adapter: built initial permission rules for subagent"
-        );
-    }
-    maps
 }
 
 #[cfg(test)]

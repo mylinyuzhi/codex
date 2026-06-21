@@ -6,6 +6,7 @@ use coco_tool_runtime::DynTool;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::ValidationResult;
 use coco_types::AgentId;
+use coco_types::LiveToolPermissionState;
 use coco_types::PermissionMode;
 use coco_types::ToolAppState;
 use coco_types::ToolDisplayData;
@@ -81,7 +82,10 @@ async fn enter_plan_mode_stashes_previous_mode() {
     use std::sync::Arc;
     use tokio::sync::RwLock;
     let app_state = Arc::new(RwLock::new(ToolAppState {
-        permission_mode: Some(PermissionMode::AcceptEdits),
+        permissions: LiveToolPermissionState {
+            mode: Some(PermissionMode::AcceptEdits),
+            ..Default::default()
+        },
         ..Default::default()
     }));
     let mut ctx = ctx_with_mode(PermissionMode::AcceptEdits);
@@ -90,8 +94,11 @@ async fn enter_plan_mode_stashes_previous_mode() {
         .await
         .unwrap();
     let guard = app_state.read().await;
-    assert_eq!(guard.permission_mode, Some(PermissionMode::Plan));
-    assert_eq!(guard.pre_plan_mode, Some(PermissionMode::AcceptEdits));
+    assert_eq!(guard.permissions.mode, Some(PermissionMode::Plan));
+    assert_eq!(
+        guard.permissions.pre_plan_mode,
+        Some(PermissionMode::AcceptEdits)
+    );
 }
 
 #[tokio::test]
@@ -102,8 +109,11 @@ async fn enter_plan_mode_idempotent_does_not_stash_self() {
     use std::sync::Arc;
     use tokio::sync::RwLock;
     let app_state = Arc::new(RwLock::new(ToolAppState {
-        permission_mode: Some(PermissionMode::Plan),
-        pre_plan_mode: Some(PermissionMode::AcceptEdits),
+        permissions: LiveToolPermissionState {
+            mode: Some(PermissionMode::Plan),
+            pre_plan_mode: Some(PermissionMode::AcceptEdits),
+            ..Default::default()
+        },
         plan_mode_entry_ms: Some(42),
         ..Default::default()
     }));
@@ -113,7 +123,10 @@ async fn enter_plan_mode_idempotent_does_not_stash_self() {
         .await
         .unwrap();
     let guard = app_state.read().await;
-    assert_eq!(guard.pre_plan_mode, Some(PermissionMode::AcceptEdits));
+    assert_eq!(
+        guard.permissions.pre_plan_mode,
+        Some(PermissionMode::AcceptEdits)
+    );
     assert_eq!(guard.plan_mode_entry_ms, Some(42));
 }
 
@@ -360,7 +373,7 @@ async fn exit_plan_mode_ignores_stale_choice_json() {
     .unwrap();
     let guard = app_state.read().await;
     assert!(!guard.pending_clear_message_history);
-    assert_eq!(guard.permission_mode, Some(PermissionMode::Default));
+    assert_eq!(guard.permissions.mode, Some(PermissionMode::Default));
 }
 
 #[tokio::test]
@@ -387,7 +400,7 @@ async fn exit_plan_mode_ts_manual_choice_sets_default_mode() {
     .await
     .unwrap();
     let guard = app_state.read().await;
-    assert_eq!(guard.permission_mode, Some(PermissionMode::Default));
+    assert_eq!(guard.permissions.mode, Some(PermissionMode::Default));
     assert!(!guard.pending_clear_message_history);
 }
 
@@ -416,7 +429,7 @@ async fn exit_plan_mode_ts_elevated_choice_accepts_edits_without_bypass_gate() {
     .await
     .unwrap();
     let guard = app_state.read().await;
-    assert_eq!(guard.permission_mode, Some(PermissionMode::AcceptEdits));
+    assert_eq!(guard.permissions.mode, Some(PermissionMode::AcceptEdits));
     assert!(!guard.pending_clear_message_history);
 }
 
@@ -446,7 +459,7 @@ async fn exit_plan_mode_ts_elevated_choice_uses_bypass_when_available() {
     .unwrap();
     let guard = app_state.read().await;
     assert_eq!(
-        guard.permission_mode,
+        guard.permissions.mode,
         Some(PermissionMode::BypassPermissions)
     );
     assert!(!guard.pending_clear_message_history);
@@ -476,7 +489,7 @@ async fn exit_plan_mode_ts_clear_context_choice_sets_mode_and_pending_flag() {
     .await
     .unwrap();
     let guard = app_state.read().await;
-    assert_eq!(guard.permission_mode, Some(PermissionMode::AcceptEdits));
+    assert_eq!(guard.permissions.mode, Some(PermissionMode::AcceptEdits));
     assert!(guard.pending_clear_message_history);
 }
 
@@ -488,9 +501,12 @@ fn plan_mode_app_state(
     stripped: Option<coco_types::PermissionRulesBySource>,
 ) -> std::sync::Arc<tokio::sync::RwLock<ToolAppState>> {
     std::sync::Arc::new(tokio::sync::RwLock::new(ToolAppState {
-        permission_mode: Some(PermissionMode::Plan),
-        pre_plan_mode: pre_plan,
-        stripped_dangerous_rules: stripped,
+        permissions: LiveToolPermissionState {
+            mode: Some(PermissionMode::Plan),
+            pre_plan_mode: pre_plan,
+            stripped_dangerous_rules: stripped,
+            ..Default::default()
+        },
         plan_mode_entry_ms: Some(1),
         ..Default::default()
     }))
@@ -519,8 +535,8 @@ async fn exit_plan_mode_restores_previous_mode() {
     .await
     .unwrap();
     let guard = app_state.read().await;
-    assert_eq!(guard.permission_mode, Some(PermissionMode::AcceptEdits));
-    assert_eq!(guard.pre_plan_mode, None);
+    assert_eq!(guard.permissions.mode, Some(PermissionMode::AcceptEdits));
+    assert_eq!(guard.permissions.pre_plan_mode, None);
 }
 
 #[tokio::test]
@@ -546,7 +562,7 @@ async fn exit_plan_mode_restores_default_when_no_stash() {
     .await
     .unwrap();
     assert_eq!(
-        app_state.read().await.permission_mode,
+        app_state.read().await.permissions.mode,
         Some(PermissionMode::Default)
     );
 }
@@ -589,9 +605,9 @@ async fn exit_plan_mode_restoring_to_auto_strips_dangerous_rules() {
     .await
     .unwrap();
     let guard = app_state.read().await;
-    assert_eq!(guard.permission_mode, Some(PermissionMode::Auto));
+    assert_eq!(guard.permissions.mode, Some(PermissionMode::Auto));
     assert!(
-        guard.stripped_dangerous_rules.is_some(),
+        guard.permissions.stripped_dangerous_rules.is_some(),
         "dangerous rules must be stashed on Plan→Auto exit"
     );
 }
@@ -637,9 +653,9 @@ async fn exit_plan_mode_restoring_to_default_clears_stripped_rules() {
     .await
     .unwrap();
     let guard = app_state.read().await;
-    assert_eq!(guard.permission_mode, Some(PermissionMode::Default));
+    assert_eq!(guard.permissions.mode, Some(PermissionMode::Default));
     assert!(
-        guard.stripped_dangerous_rules.is_none(),
+        guard.permissions.stripped_dangerous_rules.is_none(),
         "stripped rules must be cleared on non-Auto exit"
     );
 }
@@ -700,8 +716,11 @@ async fn exit_plan_mode_from_auto_with_no_restore_target_fires_auto_exit_flag() 
     // shared store is the source of truth
     // (`appState.toolPermissionContext.strippedDangerousRules`).
     let app_state = Arc::new(RwLock::new(ToolAppState {
-        permission_mode: Some(PermissionMode::Plan),
-        stripped_dangerous_rules: Some(coco_types::PermissionRulesBySource::default()),
+        permissions: LiveToolPermissionState {
+            mode: Some(PermissionMode::Plan),
+            stripped_dangerous_rules: Some(coco_types::PermissionRulesBySource::default()),
+            ..Default::default()
+        },
         plan_mode_entry_ms: Some(1),
         ..Default::default()
     }));
@@ -995,7 +1014,7 @@ async fn exit_plan_mode_no_plan_notice_is_not_saved_as_plan() {
     assert_eq!(display.file_path, None);
 
     let guard = app_state.read().await;
-    assert_eq!(guard.permission_mode, Some(PermissionMode::Default));
+    assert_eq!(guard.permissions.mode, Some(PermissionMode::Default));
     assert!(!guard.pending_clear_message_history);
     assert_eq!(guard.pending_plan_implementation_message, None);
     assert!(guard.pending_plan_verification.is_none());

@@ -78,8 +78,10 @@ impl SdkBridgeControlHandler {
         // lock order consistent with the SDK handler.
         let app_state = session.app_state.clone();
         drop(slot);
-        let live_allow_rules =
-            crate::live_permission_mode::live_allow_rules_from_sdk_state(&self.state).await;
+        // Strip provenance from THIS session's live base (the per-SessionHandle
+        // base the engine runs against) — the same base `apply_to_app_state`
+        // writes, so strip/restore stay coherent.
+        let live_allow_rules = app_state.read().await.permissions.allow_rules.clone();
         let change = crate::live_permission_mode::apply_to_app_state(
             &app_state,
             coco_types::PermissionMode::Default,

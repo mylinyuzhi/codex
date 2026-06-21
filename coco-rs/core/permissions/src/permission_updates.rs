@@ -137,6 +137,38 @@ pub fn apply_permission_updates(
     updates.iter().fold(context, apply_permission_update)
 }
 
+/// Apply updates directly to the live permission base
+/// ([`coco_types::LiveToolPermissionState`] = `ToolAppState.permissions`).
+///
+/// Builds a transient [`ToolPermissionContext`] view over the live base, folds
+/// the updates through the single typed [`apply_permission_updates`] helper, and
+/// writes the mutated rule maps / additional dirs / mode back. This is the Rust
+/// analog of TS `setToolPermissionContext(applyPermissionUpdate(ctx, update))`
+/// — the one mutation path for the main session's shared live rules.
+pub fn apply_permission_updates_to_live(
+    live: &mut coco_types::LiveToolPermissionState,
+    updates: &[PermissionUpdate],
+) {
+    let ctx = ToolPermissionContext {
+        mode: live.mode.unwrap_or(coco_types::PermissionMode::Default),
+        additional_dirs: live.additional_dirs.clone(),
+        allow_rules: live.allow_rules.clone(),
+        deny_rules: live.deny_rules.clone(),
+        ask_rules: live.ask_rules.clone(),
+        bypass_available: false,
+        pre_plan_mode: live.pre_plan_mode,
+        stripped_dangerous_rules: live.stripped_dangerous_rules.clone(),
+        session_plan_file: None,
+        permission_rule_source_roots: live.permission_rule_source_roots.clone(),
+    };
+    let updated = apply_permission_updates(ctx, updates);
+    live.allow_rules = updated.allow_rules;
+    live.deny_rules = updated.deny_rules;
+    live.ask_rules = updated.ask_rules;
+    live.additional_dirs = updated.additional_dirs;
+    live.mode = Some(updated.mode);
+}
+
 /// Whether a destination supports persistence to disk.
 pub fn supports_persistence(dest: PermissionUpdateDestination) -> bool {
     matches!(

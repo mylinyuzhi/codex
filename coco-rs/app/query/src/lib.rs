@@ -77,6 +77,7 @@ pub use command_queue::QueuePriority;
 pub use command_queue::QueuedCommand;
 pub use command_queue::QueuedImage;
 pub use config::ContinueReason;
+pub use config::PermissionDerivation;
 pub use config::QueryEngineConfig;
 pub use config::QueryResult;
 pub use config::SessionBootstrap;

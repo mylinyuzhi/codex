@@ -130,10 +130,7 @@ impl TurnRunner for QueryEngineRunner {
                 model_id: handoff.model.clone(),
                 permission_mode,
                 context_window: 200_000,
-                allow_rules,
-                deny_rules,
-                ask_rules,
-                permission_rule_source_roots,
+                permission_rule_source_roots: permission_rule_source_roots.clone(),
                 max_output_tokens,
                 // Request `max_turns` wins, else settings `loop.max_turns`,
                 // else unbounded.
@@ -171,10 +168,6 @@ impl TurnRunner for QueryEngineRunner {
                 // stored engine config so SDK turns honour the flag the
                 // session was started with.
                 include_hook_events: current_engine_config.include_hook_events,
-                // Inherit the session working-dir allowlist (seeded at build
-                // from --add-dir + settings additionalDirectories, plus any
-                // runtime /add-dir) so per-turn SDK rebuilds don't drop it (P17).
-                session_additional_dirs: current_engine_config.session_additional_dirs,
                 ..Default::default()
             };
 
@@ -186,6 +179,26 @@ impl TurnRunner for QueryEngineRunner {
             // observers' app_state pointer aligned with the engine's —
             // critical so post-compact resets reach the actual flags
             // the engine reads, not a sibling runtime copy.
+            // Seed the live permission base on the SDK session's app_state
+            // (the engine below uses it via app_state_override) from this
+            // turn's loaded rule maps, so the factory reads live rules + mode.
+            // The rules + dirs live ONLY on the live base now. Preserve the
+            // session working-dir allowlist already on the live base (seeded at
+            // build from --add-dir + settings additionalDirectories, plus any
+            // runtime /add-dir) so per-turn SDK rebuilds don't drop it (P17).
+            {
+                let mut guard = handoff.app_state.write().await;
+                let additional_dirs = guard.permissions.additional_dirs.clone();
+                guard.permissions = crate::session_runtime::live_permissions(
+                    permission_mode,
+                    allow_rules,
+                    deny_rules,
+                    ask_rules,
+                    additional_dirs,
+                    permission_rule_source_roots,
+                );
+            }
+
             let engine = runtime
                 .build_engine_from_config(config, cancel, Some(handoff.app_state.clone()))
                 .await;

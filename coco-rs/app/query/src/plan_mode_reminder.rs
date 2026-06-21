@@ -106,7 +106,8 @@ impl PlanModeReminder {
             Some(state) => state
                 .read()
                 .await
-                .permission_mode
+                .permissions
+                .mode
                 .unwrap_or(self.fallback_permission_mode),
             None => self.fallback_permission_mode,
         }

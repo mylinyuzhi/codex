@@ -198,7 +198,7 @@ async fn end_to_end_single_run() {
     // `appState.toolPermissionContext.mode` to restoreMode.
     let guard = app_state.read().await;
     assert_eq!(
-        guard.permission_mode,
+        guard.permissions.mode,
         Some(PermissionMode::Default),
         "ExitPlanMode.execute must write restore_mode to \
          app_state.permission_mode — TS parity with setAppState"
@@ -555,12 +555,12 @@ async fn model_driven_enter_plan_mode_flips_reminder_on_next_turn() {
     // app_state reflects the tool's mode transition.
     let guard = app_state.read().await;
     assert_eq!(
-        guard.permission_mode,
+        guard.permissions.mode,
         Some(PermissionMode::Plan),
         "EnterPlanMode.execute must flip app_state.permission_mode to Plan"
     );
     assert_eq!(
-        guard.pre_plan_mode,
+        guard.permissions.pre_plan_mode,
         Some(PermissionMode::Default),
         "prior mode must be stashed for later ExitPlanMode to restore"
     );
@@ -600,7 +600,7 @@ async fn model_driven_enter_plan_mode_swaps_to_plan_role_client_same_run() {
         "post-EnterPlanMode iteration must use the Plan-role client"
     );
     assert_eq!(
-        app_state.read().await.permission_mode,
+        app_state.read().await.permissions.mode,
         Some(PermissionMode::Plan),
     );
 }
@@ -678,7 +678,7 @@ async fn model_driven_exit_plan_mode_stops_reminder_on_next_turn() {
 
     // app_state reflects the live mode change.
     assert_eq!(
-        app_state.read().await.permission_mode,
+        app_state.read().await.permissions.mode,
         Some(PermissionMode::Default),
     );
 }

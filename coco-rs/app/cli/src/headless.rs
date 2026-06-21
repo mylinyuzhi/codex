@@ -933,13 +933,10 @@ pub async fn run_chat_with_options(
     config.session_id = session_id.clone();
     config.permission_mode = permission_mode;
     config.bypass_permissions_available = bypass_permissions_available;
-    config.allow_rules = allow_rules;
-    config.deny_rules = deny_rules;
-    config.ask_rules = ask_rules;
-    config.permission_rule_source_roots = permission_rule_source_roots;
+    config.permission_rule_source_roots = permission_rule_source_roots.clone();
     // Seed --add-dir + settings additionalDirectories into the session
-    // working-dir allowlist.
-    config.session_additional_dirs = crate::permission_rule_loader::seed_session_additional_dirs(
+    // working-dir allowlist. Lives ONLY on the live base now.
+    let session_additional_dirs = crate::permission_rule_loader::seed_session_additional_dirs(
         cli,
         &runtime_config.settings,
         &cwd,
@@ -962,6 +959,19 @@ pub async fn run_chat_with_options(
         streaming_tools = config.streaming_tool_execution,
         plan_mode = ?config.plan_mode_settings,
         "engine config built"
+    );
+
+    // Seed the live permission base from the headless-loaded rule maps (the
+    // runtime's bootstrap seed used the un-overridden base). The engine built
+    // below shares this `app_state` (app_state_override = None). The rules +
+    // dirs live ONLY on the live base now — the config no longer carries them.
+    runtime.app_state.write().await.permissions = crate::session_runtime::live_permissions(
+        permission_mode,
+        allow_rules,
+        deny_rules,
+        ask_rules,
+        session_additional_dirs,
+        permission_rule_source_roots,
     );
 
     let engine = runtime.build_engine_from_config(config, cancel, None).await;

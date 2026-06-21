@@ -83,6 +83,7 @@ pub use mode_transition::resolve_subagent_mode;
 pub use mode_transition::transition_context_with_auto;
 pub use permission_updates::apply_permission_update;
 pub use permission_updates::apply_permission_updates;
+pub use permission_updates::apply_permission_updates_to_live;
 pub use permissions_store::PermissionRulesByBehavior;
 pub use permissions_store::PermissionStore;
 pub use rule_compiler::RuleMatchResult;

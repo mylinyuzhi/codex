@@ -10,9 +10,9 @@ fn default_is_all_zero() {
     // pending approval. Drivers rely on Default() matching the "empty
     // JSON object" behavior the old serde_json representation had.
     let s = ToolAppState::default();
-    assert_eq!(s.permission_mode, None);
-    assert_eq!(s.pre_plan_mode, None);
-    assert!(s.stripped_dangerous_rules.is_none());
+    assert_eq!(s.permissions.mode, None);
+    assert_eq!(s.permissions.pre_plan_mode, None);
+    assert!(s.permissions.stripped_dangerous_rules.is_none());
     assert!(!s.has_exited_plan_mode);
     assert!(!s.needs_plan_mode_exit_attachment);
     assert_eq!(s.pending_plan_mode_exit_outcome, None);

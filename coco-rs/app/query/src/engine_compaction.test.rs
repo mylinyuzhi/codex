@@ -287,7 +287,10 @@ async fn plan_mode_snapshot_omits_always_loaded_exit_plan_mode() {
     let registry = coco_tool_runtime::ToolRegistry::new();
     registry.register(Arc::new(coco_tools::ExitPlanModeTool));
     let app_state = Arc::new(RwLock::new(ToolAppState {
-        permission_mode: Some(coco_types::PermissionMode::Plan),
+        permissions: coco_types::LiveToolPermissionState {
+            mode: Some(coco_types::PermissionMode::Plan),
+            ..Default::default()
+        },
         ..ToolAppState::default()
     }));
     let engine = new_engine_with_tools(Arc::new(CapturingModel::default()), Arc::new(registry))

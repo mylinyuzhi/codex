@@ -55,7 +55,8 @@ impl QueryEngine {
             Some(state) => state
                 .read()
                 .await
-                .permission_mode
+                .permissions
+                .mode
                 .unwrap_or(self.config.permission_mode),
             None => self.config.permission_mode,
         };
