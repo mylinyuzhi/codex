@@ -74,6 +74,15 @@ pub(super) fn try_render(
                 }
                 lines.push(chat_line);
             }
+            // Hang a `⎿ [Image #N]` confirmation row under the prompt for each
+            // pasted image, so an attachment that lives only as an inline
+            // placeholder still reads as a distinct, attached artifact.
+            for pill in image_pill_refs(text) {
+                lines.push(Line::from(vec![
+                    Span::raw("  ⎿ ").fg(w.styles.dim()),
+                    Span::raw(pill).fg(w.styles.dim()),
+                ]));
+            }
             Some(())
         }
         CellKind::Attachment => {
@@ -167,6 +176,24 @@ pub(super) fn try_render(
         }
         _ => None,
     }
+}
+
+/// Extract every `[Image #N]` placeholder (in order) from a user prompt so the
+/// renderer can hang a `⎿ [Image #N]` confirmation row under the `❯` text. Only
+/// well-formed pills (a non-empty all-digit `N`) match, so literal user text
+/// like `[Image #foo]` is ignored.
+fn image_pill_refs(text: &str) -> Vec<String> {
+    let mut refs = Vec::new();
+    for (start, _) in text.match_indices("[Image #") {
+        let rest = &text[start..];
+        if let Some(close) = rest.find(']') {
+            let num = &rest["[Image #".len()..close];
+            if !num.is_empty() && num.bytes().all(|b| b.is_ascii_digit()) {
+                refs.push(rest[..=close].to_string());
+            }
+        }
+    }
+    refs
 }
 
 /// Extract the plan-file basename from the clear-context implement message

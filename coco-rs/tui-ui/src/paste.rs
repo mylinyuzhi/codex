@@ -30,7 +30,10 @@ pub struct ImageData {
 /// Resolved input after expanding paste pills.
 #[derive(Debug, Clone)]
 pub struct ResolvedInput {
-    /// Text with paste pills expanded (text pills → content, image pills → removed).
+    /// Text with paste pills resolved: text pills expand to their content,
+    /// image pills are kept inline as `[Image #N]` (the raw bytes ship
+    /// separately in `images`). Mirrors TS `expandPastedTextRefs`, which
+    /// skips image refs so the placeholder survives into the message text.
     pub text: String,
     /// Image data extracted from image pills.
     pub images: Vec<ImageData>,
@@ -115,20 +118,20 @@ impl PasteManager {
 
     /// Resolve paste pills, separating text expansions from image data.
     ///
-    /// Text pills are expanded inline. Image pills are removed from text and
-    /// their data is returned separately for API content-block assembly.
+    /// Text pills are expanded inline. Image pills are kept inline as their
+    /// `[Image #N]` placeholder (so the transcript can echo `❯ [Image #N] …`
+    /// and hang a `⎿ [Image #N]` confirmation row), while their raw bytes are
+    /// returned separately for API content-block assembly. Mirrors TS
+    /// `expandPastedTextRefs`, which expands text refs but leaves image refs in
+    /// place.
     pub fn resolve_structured(&self, input: &str) -> ResolvedInput {
         let mut text = input.to_string();
         let mut images = Vec::new();
 
         for entry in &self.entries {
             if entry.is_image {
-                // Remove image pill and any single adjacent space.
-                // Avoids split_whitespace() which destroys code indentation/formatting.
-                text = text.replace(&format!("{} ", &entry.pill), "");
-                text = text.replace(&format!(" {}", &entry.pill), "");
-                text = text.replace(&entry.pill, "");
-                // Collect image data if available
+                // Keep the `[Image #N]` placeholder inline; only collect the
+                // bytes for the separate image content block.
                 if let (Some(bytes), Some(mime)) = (&entry.image_bytes, &entry.image_mime) {
                     images.push(ImageData {
                         bytes: bytes.clone(),

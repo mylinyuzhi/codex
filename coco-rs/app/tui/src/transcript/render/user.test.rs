@@ -89,6 +89,35 @@ fn multiline_user_text_renders_single_chevron_with_aligned_continuation() {
 }
 
 #[test]
+fn image_pill_extracts_well_formed_refs_only() {
+    assert_eq!(
+        super::image_pill_refs("[Image #3] what is this?"),
+        vec!["[Image #3]".to_string()]
+    );
+    assert_eq!(
+        super::image_pill_refs("a [Image #1] b [Image #2]"),
+        vec!["[Image #1]".to_string(), "[Image #2]".to_string()]
+    );
+    // Malformed pills (non-digit `N`) are ignored.
+    assert!(super::image_pill_refs("[Image #foo]").is_empty());
+    assert!(super::image_pill_refs("no images here").is_empty());
+}
+
+#[test]
+fn pasted_image_hangs_confirmation_row_under_prompt() {
+    let lines = render_user(&user_cell(
+        "[Image #3] 这个图片是什么？",
+        Some(MessageOrigin::QueuedSteering),
+    ));
+    // `❯ [Image #3] …` echo plus a hanging `⎿ [Image #3]` confirmation row.
+    assert_eq!(lines.len(), 2);
+    let row0 = flatten(&lines[..1]);
+    let row1 = flatten(&lines[1..]);
+    assert_eq!(row0, "❯ [Image #3] 这个图片是什么？");
+    assert_eq!(row1, "  ⎿ [Image #3]");
+}
+
+#[test]
 fn plan_implementation_chip_file_extracts_basename() {
     assert_eq!(
         super::plan_implementation_chip_file("foo\n\nPlan file path: /a/b/c.md"),

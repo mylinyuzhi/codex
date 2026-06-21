@@ -104,7 +104,9 @@ fn queued_command_edit_ready_restores_prompt_and_image_pill() {
         .ui
         .paste_manager
         .resolve_structured(state.ui.input.text());
-    assert_eq!(resolved.text, "look at this");
+    // The `[Image #N]` placeholder is preserved inline (so the transcript can
+    // echo it); the bytes are extracted into the separate image block.
+    assert_eq!(resolved.text, "look at this [Image #1]");
     assert_eq!(resolved.images.len(), 1);
     assert_eq!(resolved.images[0].bytes, b"img");
 }
